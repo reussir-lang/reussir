@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-getrandom.workspace = true
-palc.workspace = true
+libfuzzer-sys.workspace = true
+mutatis.workspace = true
 
 [lib]
-crate-type = ["dylib", "lib"]
+crate-type = ["lib"]

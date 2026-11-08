@@ -176,6 +176,8 @@ libc = "0.2"
 # ratatui's word wrapping).
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ratatui-textarea = "0.9"
+libfuzzer-sys = "0.4"
+mutatis = { version = "0.5.4", features = ["std"] }
 
 [profile.release]
 lto = "thin"

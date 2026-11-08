@@ -1,4 +1,8 @@
-//! Spec-aware input generation and mutation for `reussir-fuzzer`.
+//! Spec-aware input generation and mutation powered by [`mutatis`].
+
+use mutatis::{
+    Candidates, Context, Generate, Mutate, Result as MutatisResult, Session, mutators as m,
+};
 
 use crate::spec::{Charset, FloatWidth, IntWidth, SuiteSpec, ValueSpec};
 
@@ -9,143 +13,505 @@ const ALPHA_ASCII: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 const DIGITS_ASCII: &[u8] = b"0123456789";
 const IDENT_ASCII: &[u8] = b"_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// Deterministic Xoshiro256++ pseudo-random number generator.
-#[derive(Clone, Debug)]
-pub struct Rng {
-    state: [u64; 4],
+/// Structured runtime fuzz value corresponding to a [`ValueSpec`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum FuzzValue {
+    Unit,
+    Bool(bool),
+    Int(IntWidth, i64),
+    UInt(IntWidth, u64),
+    Float(FloatWidth, f64),
+    Char(char),
+    String(String),
+    Array(Vec<FuzzValue>),
+    Tuple(Vec<FuzzValue>),
 }
 
-impl Rng {
-    /// Seeds a generator from a 64-bit integer using SplitMix64.
-    pub fn from_seed(seed: u64) -> Self {
-        let mut sm = seed;
-        let mut next_sm = || {
-            sm = sm.wrapping_add(0x9e3779b97f4a7c15);
-            let mut z = sm;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-            z ^ (z >> 31)
-        };
-        Self {
-            state: [next_sm(), next_sm(), next_sm(), next_sm()],
-        }
+/// Decoded suite-level fuzz input pairing a case selector with its structured payload.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SuiteInput {
+    pub case_idx: usize,
+    pub payload: FuzzValue,
+}
+
+impl FuzzValue {
+    /// Serializes this structured value into the binary wire format expected by
+    /// Reussir's `Domain<T>` decoders.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.encode_into(&mut out);
+        out
     }
 
-    /// Seeds a generator from OS entropy, returning the chosen 64-bit seed and generator.
-    pub fn from_entropy() -> (u64, Self) {
-        let mut buf = [0u8; 8];
-        let seed = if getrandom::fill(&mut buf).is_ok() {
-            u64::from_le_bytes(buf)
+    /// Appends the binary wire encoding of `self` to `out`.
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Unit => {}
+            Self::Bool(b) => out.push(u8::from(*b)),
+            Self::Int(width, value) => write_int_le(out, *width, *value),
+            Self::UInt(width, value) => write_uint_le(out, *width, *value),
+            Self::Float(FloatWidth::F32, value) => {
+                out.extend_from_slice(&(*value as f32).to_bits().to_le_bytes());
+            }
+            Self::Float(FloatWidth::F64, value) => {
+                out.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
+            Self::Char(ch) => {
+                out.extend_from_slice(&(*ch as u32).to_le_bytes());
+            }
+            Self::String(s) => {
+                let bytes = s.as_bytes();
+                out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                out.extend_from_slice(bytes);
+            }
+            Self::Array(items) => {
+                out.extend_from_slice(&(items.len() as u64).to_le_bytes());
+                for item in items {
+                    item.encode_into(out);
+                }
+            }
+            Self::Tuple(items) => {
+                for item in items {
+                    item.encode_into(out);
+                }
+            }
+        }
+    }
+}
+
+impl SuiteInput {
+    /// Encodes this suite input (8-byte little-endian case selector followed by
+    /// the encoded payload) into a byte vector.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16);
+        self.encode_into(&mut out);
+        out
+    }
+
+    /// Appends the binary wire encoding of this suite input to `out`.
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.case_idx as u64).to_le_bytes());
+        self.payload.encode_into(out);
+    }
+}
+
+/// [`mutatis`] mutator and generator for characters in a [`Charset`].
+#[derive(Clone, Copy, Debug)]
+pub struct CharsetMutator(pub Charset);
+
+impl Mutate<char> for CharsetMutator {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut char) -> MutatisResult<()> {
+        match self.0 {
+            Charset::Ascii => m::ascii_char().mutate(c, value),
+            Charset::AsciiPrintable => m::mrange(' '..='~').mutate(c, value),
+            Charset::Digits => m::mrange('0'..='9').mutate(c, value),
+            Charset::Alpha => {
+                if c.shrink() {
+                    if *value > 'a' {
+                        m::mrange('A'..='Z')
+                            .or(m::mrange('a'..='z'))
+                            .mutate(c, value)
+                    } else if *value > 'A' {
+                        m::mrange('A'..='Z').mutate(c, value)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    m::mrange('A'..='Z')
+                        .or(m::mrange('a'..='z'))
+                        .mutate(c, value)
+                }
+            }
+            Charset::Alphanumeric => {
+                if c.shrink() {
+                    if *value > 'a' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .or(m::mrange('a'..='z'))
+                            .mutate(c, value)
+                    } else if *value > 'A' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .mutate(c, value)
+                    } else if *value > '0' {
+                        m::mrange('0'..='9').mutate(c, value)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    m::mrange('0'..='9')
+                        .or(m::mrange('A'..='Z'))
+                        .or(m::mrange('a'..='z'))
+                        .mutate(c, value)
+                }
+            }
+            Charset::Identifier => {
+                if c.shrink() {
+                    if *value > 'a' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .or(m::just('_'))
+                            .or(m::mrange('a'..='z'))
+                            .mutate(c, value)
+                    } else if *value > '_' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .or(m::just('_'))
+                            .mutate(c, value)
+                    } else if *value > 'A' {
+                        m::mrange('0'..='9')
+                            .or(m::mrange('A'..='Z'))
+                            .mutate(c, value)
+                    } else if *value > '0' {
+                        m::mrange('0'..='9').mutate(c, value)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    m::mrange('0'..='9')
+                        .or(m::mrange('A'..='Z'))
+                        .or(m::mrange('a'..='z'))
+                        .or(m::just('_'))
+                        .mutate(c, value)
+                }
+            }
+            Charset::Utf8 => m::char().mutate(c, value),
+        }
+    }
+}
+
+impl Generate<char> for CharsetMutator {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<char> {
+        match self.0 {
+            Charset::Ascii => m::ascii_char().generate(ctx),
+            Charset::AsciiPrintable => m::mrange(' '..='~').generate(ctx),
+            Charset::Digits => m::mrange('0'..='9').generate(ctx),
+            Charset::Alpha => m::mrange('A'..='Z').or(m::mrange('a'..='z')).generate(ctx),
+            Charset::Alphanumeric => m::mrange('0'..='9')
+                .or(m::mrange('A'..='Z'))
+                .or(m::mrange('a'..='z'))
+                .generate(ctx),
+            Charset::Identifier => m::mrange('0'..='9')
+                .or(m::mrange('A'..='Z'))
+                .or(m::mrange('a'..='z'))
+                .or(m::just('_'))
+                .generate(ctx),
+            Charset::Utf8 => m::char().generate(ctx),
+        }
+    }
+}
+
+/// [`mutatis`] mutator and generator for a [`ValueSpec`].
+#[derive(Clone, Copy, Debug)]
+pub struct SpecMutator<'a>(pub &'a ValueSpec);
+
+impl Mutate<FuzzValue> for SpecMutator<'_> {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut FuzzValue) -> MutatisResult<()> {
+        match (self.0, value) {
+            (ValueSpec::Unit, FuzzValue::Unit) => Ok(()),
+            (ValueSpec::Bool, FuzzValue::Bool(b)) => m::bool().mutate(c, b),
+            (ValueSpec::Int { width, min, max }, FuzzValue::Int(w, v)) => {
+                *w = *width;
+                let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
+                m::mrange(lo..=hi).mutate(c, v)
+            }
+            (ValueSpec::UInt { width, min, max }, FuzzValue::UInt(w, v)) => {
+                *w = *width;
+                let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
+                m::mrange(lo..=hi).mutate(c, v)
+            }
+            (
+                ValueSpec::Float {
+                    width,
+                    min,
+                    max,
+                    allow_nan,
+                    allow_inf,
+                },
+                FuzzValue::Float(w, v),
+            ) => {
+                *w = *width;
+                let (lo, hi) = if *min <= *max {
+                    (*min, *max)
+                } else {
+                    (*max, *min)
+                };
+                let nan = *allow_nan;
+                let inf = *allow_inf;
+                match width {
+                    FloatWidth::F32 => {
+                        let mut cur = *v as f32;
+                        let mut mutator = m::f32()
+                            .or(m::just(lo as f32))
+                            .or(m::just(hi as f32))
+                            .map(|_ctx, x| {
+                                *x = constrain_f64(*x as f64, lo, hi, nan, inf) as f32;
+                                Ok(())
+                            });
+                        let res = mutator.mutate(c, &mut cur);
+                        *v = cur as f64;
+                        res
+                    }
+                    FloatWidth::F64 => {
+                        let mut mutator =
+                            m::f64().or(m::just(lo)).or(m::just(hi)).map(|_ctx, x| {
+                                *x = constrain_f64(*x, lo, hi, nan, inf);
+                                Ok(())
+                            });
+                        mutator.mutate(c, v)
+                    }
+                }
+            }
+            (ValueSpec::Char(charset), FuzzValue::Char(ch)) => {
+                CharsetMutator(*charset).mutate(c, ch)
+            }
+            (
+                ValueSpec::String {
+                    charset,
+                    min_len,
+                    max_len,
+                },
+                FuzzValue::String(s),
+            ) => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let cs = *charset;
+                if c.shrink() && s.chars().count() <= lo {
+                    if !s.is_empty() {
+                        c.mutation(|ctx| {
+                            let mut chars: Vec<char> = s.chars().collect();
+                            let idx = m::mrange(0..=chars.len() - 1).generate(ctx)?;
+                            chars[idx] = CharsetMutator(cs).generate(ctx)?;
+                            *s = chars.into_iter().collect();
+                            Ok(())
+                        })?;
+                    }
+                    Ok(())
+                } else {
+                    let mut mutator = m::string(CharsetMutator(cs))
+                        .map(|ctx, val| constrain_string_len(ctx, val, cs, lo, hi));
+                    mutator.mutate(c, s)
+                }
+            }
+            (
+                ValueSpec::Array {
+                    elem,
+                    min_len,
+                    max_len,
+                },
+                FuzzValue::Array(items),
+            ) => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                if c.shrink() && items.len() <= lo {
+                    let mut elem_mut = SpecMutator(elem);
+                    for item in items.iter_mut() {
+                        elem_mut.mutate(c, item)?;
+                    }
+                    Ok(())
+                } else {
+                    let mut mutator = m::vec(SpecMutator(elem))
+                        .map(|ctx, vec| constrain_vec_len(ctx, vec, elem, lo, hi));
+                    mutator.mutate(c, items)
+                }
+            }
+            (ValueSpec::Tuple(specs), FuzzValue::Tuple(values)) => {
+                if specs.len() != values.len() {
+                    let spec = self.0;
+                    return c.mutation(|ctx| {
+                        *values = match SpecMutator(spec).generate(ctx)? {
+                            FuzzValue::Tuple(v) => v,
+                            _ => Vec::new(),
+                        };
+                        Ok(())
+                    });
+                }
+                for (spec, item) in specs.iter().zip(values.iter_mut()) {
+                    SpecMutator(spec).mutate(c, item)?;
+                }
+                Ok(())
+            }
+            (spec, mismatched) => c.mutation(|ctx| {
+                *mismatched = SpecMutator(spec).generate(ctx)?;
+                Ok(())
+            }),
+        }
+    }
+}
+
+impl Generate<FuzzValue> for SpecMutator<'_> {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<FuzzValue> {
+        match self.0 {
+            ValueSpec::Unit => Ok(FuzzValue::Unit),
+            ValueSpec::Bool => Ok(FuzzValue::Bool(m::bool().generate(ctx)?)),
+            ValueSpec::Int { width, min, max } => {
+                let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
+                Ok(FuzzValue::Int(*width, m::mrange(lo..=hi).generate(ctx)?))
+            }
+            ValueSpec::UInt { width, min, max } => {
+                let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
+                Ok(FuzzValue::UInt(*width, m::mrange(lo..=hi).generate(ctx)?))
+            }
+            ValueSpec::Float {
+                width,
+                min,
+                max,
+                allow_nan,
+                allow_inf,
+            } => {
+                let (lo, hi) = if *min <= *max {
+                    (*min, *max)
+                } else {
+                    (*max, *min)
+                };
+                let raw = match width {
+                    FloatWidth::F32 => m::f32().generate(ctx)? as f64,
+                    FloatWidth::F64 => m::f64().generate(ctx)?,
+                };
+                let v = constrain_f64(raw, lo, hi, *allow_nan, *allow_inf);
+                Ok(FuzzValue::Float(*width, v))
+            }
+            ValueSpec::Char(charset) => {
+                Ok(FuzzValue::Char(CharsetMutator(*charset).generate(ctx)?))
+            }
+            ValueSpec::String {
+                charset,
+                min_len,
+                max_len,
+            } => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let len = m::mrange(lo..=hi).generate(ctx)?;
+                let mut s = String::with_capacity(len);
+                let mut char_gen = CharsetMutator(*charset);
+                for _ in 0..len {
+                    s.push(char_gen.generate(ctx)?);
+                }
+                Ok(FuzzValue::String(s))
+            }
+            ValueSpec::Array {
+                elem,
+                min_len,
+                max_len,
+            } => {
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let len = m::mrange(lo..=hi).generate(ctx)?;
+                let mut items = Vec::with_capacity(len);
+                let mut elem_gen = SpecMutator(elem);
+                for _ in 0..len {
+                    items.push(elem_gen.generate(ctx)?);
+                }
+                Ok(FuzzValue::Array(items))
+            }
+            ValueSpec::Tuple(specs) => {
+                let mut items = Vec::with_capacity(specs.len());
+                for spec in specs {
+                    items.push(SpecMutator(spec).generate(ctx)?);
+                }
+                Ok(FuzzValue::Tuple(items))
+            }
+        }
+    }
+}
+
+/// [`mutatis`] mutator and generator for a [`SuiteSpec`].
+#[derive(Clone, Copy, Debug)]
+pub struct SuiteMutator<'a>(pub &'a SuiteSpec);
+
+impl Mutate<SuiteInput> for SuiteMutator<'_> {
+    fn mutate(&mut self, c: &mut Candidates<'_>, value: &mut SuiteInput) -> MutatisResult<()> {
+        if self.0.cases.is_empty() {
+            return Ok(());
+        }
+        let max_idx = self.0.cases.len() - 1;
+        if value.case_idx > max_idx {
+            value.case_idx %= self.0.cases.len();
+        }
+        let case_spec = &self.0.cases[value.case_idx].input;
+        SpecMutator(case_spec).mutate(c, &mut value.payload)?;
+
+        if !c.shrink() && max_idx > 0 {
+            let suite = self.0;
+            c.mutation(|ctx| {
+                let next_idx = m::mrange(0..=max_idx).generate(ctx)?;
+                value.case_idx = next_idx;
+                value.payload = SpecMutator(&suite.cases[next_idx].input).generate(ctx)?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Generate<SuiteInput> for SuiteMutator<'_> {
+    fn generate(&mut self, ctx: &mut Context) -> MutatisResult<SuiteInput> {
+        if self.0.cases.is_empty() {
+            return Ok(SuiteInput {
+                case_idx: 0,
+                payload: FuzzValue::Unit,
+            });
+        }
+        let non_unit: Vec<usize> = self
+            .0
+            .cases
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, c)| (!c.input.is_unit()).then_some(idx))
+            .collect();
+        let case_idx = if non_unit.is_empty() {
+            m::mrange(0..=self.0.cases.len() - 1).generate(ctx)?
         } else {
-            0x853c49e6748fea9b
+            let pick = m::mrange(0..=non_unit.len() - 1).generate(ctx)?;
+            non_unit[pick]
         };
-        (seed, Self::from_seed(seed))
-    }
-
-    /// Generates the next 64-bit random value.
-    pub fn next_u64(&mut self) -> u64 {
-        let result = self.state[0]
-            .wrapping_add(self.state[3])
-            .rotate_left(23)
-            .wrapping_add(self.state[0]);
-        let t = self.state[1] << 17;
-        self.state[2] ^= self.state[0];
-        self.state[3] ^= self.state[1];
-        self.state[1] ^= self.state[2];
-        self.state[0] ^= self.state[3];
-        self.state[2] ^= t;
-        self.state[3] = self.state[3].rotate_left(45);
-        result
-    }
-
-    /// Generates a uniform value in `min..=max`.
-    pub fn gen_range_u64(&mut self, min: u64, max: u64) -> u64 {
-        project_u64(self.next_u64(), min, max)
-    }
-
-    /// Generates a signed integer in `min..=max`, with bias toward boundary and
-    /// small values (`min`, `max`, `0`, `-1`, `1`).
-    pub fn sample_i64(&mut self, min: i64, max: i64) -> i64 {
-        if min >= max {
-            return min;
-        }
-        match self.next_u64() & 15 {
-            0 => min,
-            1 => max,
-            2 if min <= 0 && max >= 0 => 0,
-            3 if min <= 1 && max >= 1 => 1,
-            4 if min <= -1 && max >= -1 => -1,
-            _ => project_i64(self.next_u64() as i64, min, max),
-        }
-    }
-
-    /// Generates an unsigned integer in `min..=max`, with bias toward boundary
-    /// values (`min`, `max`, `0`, `1`).
-    pub fn sample_u64(&mut self, min: u64, max: u64) -> u64 {
-        if min >= max {
-            return min;
-        }
-        match self.next_u64() & 15 {
-            0 => min,
-            1 => max,
-            2 if min <= 1 && max >= 1 => 1,
-            _ => project_u64(self.next_u64(), min, max),
-        }
-    }
-
-    /// Generates an `f64` in `min..=max`, honoring `allow_nan` and `allow_inf`.
-    pub fn sample_f64(&mut self, min: f64, max: f64, allow_nan: bool, allow_inf: bool) -> f64 {
-        let tag = self.next_u64() & 31;
-        if allow_nan && tag == 0 {
-            f64::NAN
-        } else if allow_inf && tag == 1 {
-            f64::INFINITY
-        } else if allow_inf && tag == 2 {
-            f64::NEG_INFINITY
-        } else if tag == 3 {
-            min
-        } else if tag == 4 {
-            max
-        } else if tag == 5 && min <= 0.0 && max >= 0.0 {
-            0.0
-        } else if tag == 6 && min <= -0.0 && max >= -0.0 {
-            -0.0
-        } else if tag == 7 && min <= 1.0 && max >= 1.0 {
-            1.0
-        } else if tag == 8 && min <= -1.0 && max >= -1.0 {
-            -1.0
-        } else {
-            interpolate_f64(self.next_u64(), min, max)
-        }
-    }
-
-    /// Samples a Unicode scalar value in `charset`.
-    pub fn sample_char_u32(&mut self, charset: Charset) -> u32 {
-        let raw = self.next_u64();
-        project_char_u32(raw, charset)
+        let payload = SpecMutator(&self.0.cases[case_idx].input).generate(ctx)?;
+        Ok(SuiteInput { case_idx, payload })
     }
 }
 
 impl ValueSpec {
-    /// Generates a fresh random byte buffer conforming to this [`ValueSpec`].
-    pub fn generate(&self, rng: &mut Rng) -> Vec<u8> {
-        let mut out = Vec::new();
-        self.write_random(rng, &mut out);
-        out
+    /// Generates a fresh random byte buffer conforming to this [`ValueSpec`] using [`mutatis`].
+    pub fn generate(&self, session: &mut Session) -> Vec<u8> {
+        let mut mutator = SpecMutator(self);
+        match session.generate_with(&mut mutator) {
+            Ok(val) => val.to_bytes(),
+            Err(_) => Vec::new(),
+        }
     }
 
-    /// Appends a random value conforming to this [`ValueSpec`] into `out`.
-    pub fn write_random(&self, rng: &mut Rng, out: &mut Vec<u8>) {
+    /// Mutates a payload buffer in place according to this [`ValueSpec`] using [`mutatis`].
+    pub fn mutate(&self, buf: &mut Vec<u8>, session: &mut Session) {
+        let mut cursor = buf.as_slice();
+        let mut mutator = SpecMutator(self);
+        let mut val = match self.decode_value(&mut cursor) {
+            Some(v) => v,
+            None => match session.generate_with(&mut mutator) {
+                Ok(v) => v,
+                Err(_) => return,
+            },
+        };
+        let _ = session.mutate_with(&mut mutator, &mut val);
+        buf.clear();
+        val.encode_into(buf);
+    }
+
+    /// Decodes a structured [`FuzzValue`] from `cursor`, projecting any raw bytes
+    /// into this specification's domain bounds.
+    pub fn decode_value(&self, cursor: &mut &[u8]) -> Option<FuzzValue> {
         match self {
-            Self::Unit => {}
-            Self::Bool => out.push((rng.next_u64() & 1) as u8),
+            Self::Unit => Some(FuzzValue::Unit),
+            Self::Bool => {
+                let b = take_bytes(cursor, 1)?[0];
+                Some(FuzzValue::Bool((b & 1) != 0))
+            }
             Self::Int { width, min, max } => {
-                let value = rng.sample_i64(*min, *max);
-                write_int_le(out, *width, value);
+                let bytes = take_bytes(cursor, width.byte_len())?;
+                let raw = read_int_le(bytes, *width);
+                let (lo, hi) = clamped_signed_bounds(*width, *min, *max);
+                Some(FuzzValue::Int(*width, project_i64(raw, lo, hi)))
             }
             Self::UInt { width, min, max } => {
-                let value = rng.sample_u64(*min, *max);
-                write_uint_le(out, *width, value);
+                let bytes = take_bytes(cursor, width.byte_len())?;
+                let raw = read_uint_le(bytes, *width);
+                let (lo, hi) = clamped_unsigned_bounds(*width, *min, *max);
+                Some(FuzzValue::UInt(*width, project_u64(raw, lo, hi)))
             }
             Self::Float {
                 width,
@@ -154,280 +520,332 @@ impl ValueSpec {
                 allow_nan,
                 allow_inf,
             } => {
-                let value = rng.sample_f64(*min, *max, *allow_nan, *allow_inf);
+                let (lo, hi) = if *min <= *max {
+                    (*min, *max)
+                } else {
+                    (*max, *min)
+                };
                 match width {
                     FloatWidth::F32 => {
-                        out.extend_from_slice(&(value as f32).to_bits().to_le_bytes())
+                        let bytes = take_bytes(cursor, 4)?;
+                        let raw =
+                            f32::from_bits(u32::from_le_bytes(bytes.try_into().unwrap())) as f64;
+                        Some(FuzzValue::Float(
+                            FloatWidth::F32,
+                            constrain_f64(raw, lo, hi, *allow_nan, *allow_inf),
+                        ))
                     }
-                    FloatWidth::F64 => out.extend_from_slice(&value.to_bits().to_le_bytes()),
+                    FloatWidth::F64 => {
+                        let bytes = take_bytes(cursor, 8)?;
+                        let raw = f64::from_bits(u64::from_le_bytes(bytes.try_into().unwrap()));
+                        Some(FuzzValue::Float(
+                            FloatWidth::F64,
+                            constrain_f64(raw, lo, hi, *allow_nan, *allow_inf),
+                        ))
+                    }
                 }
             }
             Self::Char(charset) => {
-                let scalar = rng.sample_char_u32(*charset);
-                out.extend_from_slice(&scalar.to_le_bytes());
+                let bytes = take_bytes(cursor, 4)?;
+                let raw = u32::from_le_bytes(bytes.try_into().unwrap());
+                let ch = char::from_u32(raw)
+                    .filter(|c| charset_contains(*charset, *c))
+                    .unwrap_or_else(|| project_char(raw as u64, *charset));
+                Some(FuzzValue::Char(ch))
             }
             Self::String {
                 charset,
                 min_len,
                 max_len,
             } => {
-                let len = rng.sample_u64(*min_len, *max_len);
-                out.extend_from_slice(&len.to_le_bytes());
-                for _ in 0..len {
-                    let scalar = rng.sample_char_u32(*charset);
-                    out.extend_from_slice(&scalar.to_le_bytes());
-                }
+                let len_bytes = take_bytes(cursor, 8)?;
+                let byte_len = u64::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+                let raw_bytes = take_bytes(cursor, byte_len)?;
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let s = decode_and_sanitize_string(raw_bytes, *charset, lo, hi);
+                Some(FuzzValue::String(s))
             }
             Self::Array {
                 elem,
                 min_len,
                 max_len,
             } => {
-                let len = rng.sample_u64(*min_len, *max_len);
-                out.extend_from_slice(&len.to_le_bytes());
-                for _ in 0..len {
-                    elem.write_random(rng, out);
+                let len_bytes = take_bytes(cursor, 8)?;
+                let raw_len = u64::from_le_bytes(len_bytes.try_into().unwrap());
+                let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
+                let count = project_u64(raw_len, lo as u64, hi as u64) as usize;
+                let mut items = Vec::with_capacity(count);
+                for _ in 0..count {
+                    items.push(elem.decode_value(cursor)?);
                 }
+                Some(FuzzValue::Array(items))
             }
-            Self::Tuple(items) => {
-                for item in items {
-                    item.write_random(rng, out);
+            Self::Tuple(specs) => {
+                let mut items = Vec::with_capacity(specs.len());
+                for spec in specs {
+                    items.push(spec.decode_value(cursor)?);
                 }
-            }
-        }
-    }
-
-    /// Mutates a payload buffer in place according to this [`ValueSpec`].
-    pub fn mutate(&self, buf: &mut Vec<u8>, rng: &mut Rng) {
-        if matches!(self, Self::Unit) {
-            buf.clear();
-            return;
-        }
-        // Choose between structure-aware re-mutation and low-level byte mutation.
-        let mut cursor = 0usize;
-        if !self.mutate_at(buf, &mut cursor, rng) || (rng.next_u64() & 3) == 0 {
-            mutate_raw_bytes(buf, 0, rng);
-        }
-    }
-
-    fn mutate_at(&self, buf: &mut Vec<u8>, offset: &mut usize, rng: &mut Rng) -> bool {
-        match self {
-            Self::Unit => true,
-            Self::Bool => {
-                if *offset >= buf.len() {
-                    return false;
-                }
-                if (rng.next_u64() & 1) == 0 {
-                    buf[*offset] ^= 1;
-                }
-                *offset += 1;
-                true
-            }
-            Self::Int { width, min, max } => {
-                let n = width.byte_len();
-                if *offset + n > buf.len() {
-                    return false;
-                }
-                if (rng.next_u64() & 1) == 0 {
-                    let cur = read_int_le(&buf[*offset..*offset + n], *width);
-                    let next = if (rng.next_u64() & 3) == 0 {
-                        rng.sample_i64(*min, *max)
-                    } else {
-                        let delta = ((rng.next_u64() % 33) as i64) - 16;
-                        project_i64(cur.wrapping_add(delta), *min, *max)
-                    };
-                    let mut tmp = Vec::with_capacity(n);
-                    write_int_le(&mut tmp, *width, next);
-                    buf[*offset..*offset + n].copy_from_slice(&tmp);
-                }
-                *offset += n;
-                true
-            }
-            Self::UInt { width, min, max } => {
-                let n = width.byte_len();
-                if *offset + n > buf.len() {
-                    return false;
-                }
-                if (rng.next_u64() & 1) == 0 {
-                    let cur = read_uint_le(&buf[*offset..*offset + n], *width);
-                    let next = if (rng.next_u64() & 3) == 0 {
-                        rng.sample_u64(*min, *max)
-                    } else {
-                        let delta = (rng.next_u64() % 33) as i64 - 16;
-                        project_u64(cur.wrapping_add_signed(delta), *min, *max)
-                    };
-                    let mut tmp = Vec::with_capacity(n);
-                    write_uint_le(&mut tmp, *width, next);
-                    buf[*offset..*offset + n].copy_from_slice(&tmp);
-                }
-                *offset += n;
-                true
-            }
-            Self::Float {
-                width,
-                min,
-                max,
-                allow_nan,
-                allow_inf,
-            } => {
-                let n = width.byte_len();
-                if *offset + n > buf.len() {
-                    return false;
-                }
-                if (rng.next_u64() & 1) == 0 {
-                    let val = rng.sample_f64(*min, *max, *allow_nan, *allow_inf);
-                    match width {
-                        FloatWidth::F32 => {
-                            buf[*offset..*offset + 4]
-                                .copy_from_slice(&(val as f32).to_bits().to_le_bytes());
-                        }
-                        FloatWidth::F64 => {
-                            buf[*offset..*offset + 8].copy_from_slice(&val.to_bits().to_le_bytes());
-                        }
-                    }
-                }
-                *offset += n;
-                true
-            }
-            Self::Char(charset) => {
-                if *offset + 4 > buf.len() {
-                    return false;
-                }
-                if (rng.next_u64() & 1) == 0 {
-                    let scalar = rng.sample_char_u32(*charset);
-                    buf[*offset..*offset + 4].copy_from_slice(&scalar.to_le_bytes());
-                }
-                *offset += 4;
-                true
-            }
-            Self::String {
-                charset,
-                min_len,
-                max_len,
-            } => {
-                if *offset + 8 > buf.len() {
-                    return false;
-                }
-                let raw_len = u64::from_le_bytes(buf[*offset..*offset + 8].try_into().unwrap());
-                let len = project_u64(raw_len, *min_len, *max_len) as usize;
-                let byte_span = 8 + len.saturating_mul(4);
-                if *offset + byte_span > buf.len() {
-                    return false;
-                }
-                if (rng.next_u64() & 3) == 0 {
-                    // Regenerate string with a new valid length.
-                    let mut replacement = Vec::new();
-                    self.write_random(rng, &mut replacement);
-                    let new_span = replacement.len();
-                    buf.splice(*offset..*offset + byte_span, replacement);
-                    *offset += new_span;
-                } else {
-                    // Mutate one or more characters in place.
-                    if len > 0 {
-                        let idx = (rng.next_u64() as usize) % len;
-                        let pos = *offset + 8 + idx * 4;
-                        let scalar = rng.sample_char_u32(*charset);
-                        buf[pos..pos + 4].copy_from_slice(&scalar.to_le_bytes());
-                    }
-                    *offset += byte_span;
-                }
-                true
-            }
-            Self::Array {
-                elem,
-                min_len,
-                max_len,
-            } => {
-                if *offset + 8 > buf.len() {
-                    return false;
-                }
-                let raw_len = u64::from_le_bytes(buf[*offset..*offset + 8].try_into().unwrap());
-                let len = project_u64(raw_len, *min_len, *max_len) as usize;
-                let start = *offset;
-                *offset += 8;
-                for _ in 0..len {
-                    if !elem.mutate_at(buf, offset, rng) {
-                        return false;
-                    }
-                }
-                if (rng.next_u64() & 7) == 0 {
-                    let end = *offset;
-                    let mut replacement = Vec::new();
-                    self.write_random(rng, &mut replacement);
-                    let new_len = replacement.len();
-                    buf.splice(start..end, replacement);
-                    *offset = start + new_len;
-                }
-                true
-            }
-            Self::Tuple(items) => {
-                for item in items {
-                    if !item.mutate_at(buf, offset, rng) {
-                        return false;
-                    }
-                }
-                true
+                Some(FuzzValue::Tuple(items))
             }
         }
     }
 }
 
+/// Callback signature matching [`libfuzzer_sys::fuzzer_mutate`].
+pub type RawMutateFn = fn(&mut [u8], usize, usize) -> usize;
+
 impl SuiteSpec {
-    /// Generates a suite-level input buffer for `case_idx` (8-byte little-endian
-    /// case index followed by that case's random payload).
-    pub fn generate_for_case(&self, case_idx: usize, rng: &mut Rng) -> Vec<u8> {
+    /// Generates a suite-level input buffer for `case_idx` using [`mutatis`].
+    pub fn generate_for_case(&self, case_idx: usize, session: &mut Session) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&(case_idx as u64).to_le_bytes());
         if let Some(case) = self.cases.get(case_idx) {
-            case.input.write_random(rng, &mut out);
+            let mut mutator = SpecMutator(&case.input);
+            if let Ok(val) = session.generate_with(&mut mutator) {
+                val.encode_into(&mut out);
+            }
         }
         out
     }
 
-    /// Mutates a suite-level input buffer for `case_idx` in place, keeping the
-    /// 8-byte little-endian case selector prefix intact.
-    pub fn mutate_for_case(&self, case_idx: usize, buf: &mut Vec<u8>, rng: &mut Rng) {
+    /// Mutates a suite-level input buffer for `case_idx` in place using [`mutatis`],
+    /// keeping the 8-byte little-endian case selector prefix intact.
+    pub fn mutate_for_case(&self, case_idx: usize, buf: &mut Vec<u8>, session: &mut Session) {
         let Some(case) = self.cases.get(case_idx) else {
             return;
         };
         if buf.len() < 8 {
-            *buf = self.generate_for_case(case_idx, rng);
+            *buf = self.generate_for_case(case_idx, session);
             return;
         }
         buf[..8].copy_from_slice(&(case_idx as u64).to_le_bytes());
         let mut payload = buf.split_off(8);
-        case.input.mutate(&mut payload, rng);
+        case.input.mutate(&mut payload, session);
         buf.extend_from_slice(&payload);
+    }
+
+    /// Decodes a suite-level input buffer (`case_idx` + `FuzzValue`).
+    pub fn decode_input(&self, bytes: &[u8]) -> Option<SuiteInput> {
+        if self.cases.is_empty() || bytes.len() < 8 {
+            return None;
+        }
+        let raw_idx = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let case_idx = (raw_idx as usize) % self.cases.len();
+        let mut cursor = &bytes[8..];
+        let payload = self.cases[case_idx].input.decode_value(&mut cursor)?;
+        Some(SuiteInput { case_idx, payload })
+    }
+
+    /// Mutates `data[..size]` in place within `max_size` using [`mutatis`] (and
+    /// falling back to `raw_mutate` from libFuzzer when unstructured or
+    /// exhausted), returning the new buffer size.
+    pub fn mutate_buffer(
+        &self,
+        data: &mut [u8],
+        size: usize,
+        max_size: usize,
+        seed: u32,
+        raw_mutate: Option<RawMutateFn>,
+    ) -> usize {
+        if self.cases.is_empty() || max_size == 0 {
+            return 0;
+        }
+
+        let mut session = Session::new().seed(u64::from(seed)).shrink(max_size < size);
+        let mut suite_mutator = SuiteMutator(self);
+
+        let new_bytes = match self.decode_input(&data[..size.min(data.len())]) {
+            Some(mut input) => match session.mutate_with(&mut suite_mutator, &mut input) {
+                Ok(()) => input.to_bytes(),
+                Err(_) => {
+                    if let Some(fuzzer_mutate) = raw_mutate {
+                        return fuzzer_mutate(data, size, max_size);
+                    }
+                    input.to_bytes()
+                }
+            },
+            None => match session.generate_with(&mut suite_mutator) {
+                Ok(generated) => generated.to_bytes(),
+                Err(_) => {
+                    if let Some(fuzzer_mutate) = raw_mutate {
+                        return fuzzer_mutate(data, size, max_size);
+                    }
+                    return 0;
+                }
+            },
+        };
+
+        let new_size = std::cmp::min(max_size, new_bytes.len()).min(data.len());
+        data[..new_size].copy_from_slice(&new_bytes[..new_size]);
+        new_size
     }
 }
 
-fn mutate_raw_bytes(buf: &mut [u8], start: usize, rng: &mut Rng) {
-    if buf.len() <= start {
-        return;
+fn take_bytes<'a>(cursor: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+    if cursor.len() < n {
+        None
+    } else {
+        let (head, tail) = cursor.split_at(n);
+        *cursor = tail;
+        Some(head)
     }
-    let span = buf.len() - start;
-    let idx = start + (rng.next_u64() as usize) % span;
-    match rng.next_u64() & 3 {
-        0 => {
-            let bit = (rng.next_u64() & 7) as u8;
-            buf[idx] ^= 1u8 << bit;
+}
+
+fn clamped_signed_bounds(width: IntWidth, min: i64, max: i64) -> (i64, i64) {
+    let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+    (
+        lo.clamp(width.signed_min(), width.signed_max()),
+        hi.clamp(width.signed_min(), width.signed_max()),
+    )
+}
+
+fn clamped_unsigned_bounds(width: IntWidth, min: u64, max: u64) -> (u64, u64) {
+    let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+    (lo.min(width.unsigned_max()), hi.min(width.unsigned_max()))
+}
+
+fn normalized_len_bounds(min_len: u64, max_len: u64) -> (usize, usize) {
+    let (lo, hi) = if min_len <= max_len {
+        (min_len, max_len)
+    } else {
+        (max_len, min_len)
+    };
+    let cap = 4096usize;
+    ((lo as usize).min(cap), (hi as usize).min(cap))
+}
+
+fn constrain_f64(raw: f64, lo: f64, hi: f64, allow_nan: bool, allow_inf: bool) -> f64 {
+    if raw.is_nan() {
+        if allow_nan {
+            return f64::NAN;
         }
-        1 => {
-            let delta = ((rng.next_u64() % 31) as i8).wrapping_sub(15) as u8;
-            buf[idx] = buf[idx].wrapping_add(delta);
+        return lo;
+    }
+    if raw.is_infinite() {
+        if allow_inf {
+            return raw;
         }
-        2 => {
-            buf[idx] = match rng.next_u64() & 3 {
-                0 => 0x00,
-                1 => 0xff,
-                2 => 0x7f,
-                _ => 0x80,
-            };
+        return if raw.is_sign_positive() { hi } else { lo };
+    }
+    if raw >= lo && raw <= hi {
+        raw
+    } else if lo >= hi {
+        lo
+    } else {
+        let u = ((raw.to_bits() >> 11) as f64) * (1.0 / 9007199254740992.0);
+        ((1.0 - u) * lo + u * hi).clamp(lo, hi)
+    }
+}
+
+fn constrain_string_len(
+    ctx: &mut Context,
+    s: &mut String,
+    charset: Charset,
+    min_len: usize,
+    max_len: usize,
+) -> MutatisResult<()> {
+    let mut chars: Vec<char> = s
+        .chars()
+        .take(max_len)
+        .map(|ch| {
+            if charset_contains(charset, ch) {
+                ch
+            } else {
+                project_char(ch as u64, charset)
+            }
+        })
+        .collect();
+    let mut char_gen = CharsetMutator(charset);
+    while chars.len() < min_len {
+        chars.push(char_gen.generate(ctx)?);
+    }
+    *s = chars.into_iter().collect();
+    Ok(())
+}
+
+fn constrain_vec_len(
+    ctx: &mut Context,
+    items: &mut Vec<FuzzValue>,
+    elem_spec: &ValueSpec,
+    min_len: usize,
+    max_len: usize,
+) -> MutatisResult<()> {
+    if items.len() > max_len {
+        items.truncate(max_len);
+    }
+    let mut elem_gen = SpecMutator(elem_spec);
+    while items.len() < min_len {
+        items.push(elem_gen.generate(ctx)?);
+    }
+    Ok(())
+}
+
+fn decode_and_sanitize_string(
+    raw_bytes: &[u8],
+    charset: Charset,
+    min_len: usize,
+    max_len: usize,
+) -> String {
+    let mut out = String::with_capacity(min_len);
+    if let Ok(valid) = std::str::from_utf8(raw_bytes) {
+        let mut count = 0usize;
+        for ch in valid.chars() {
+            if count >= max_len {
+                break;
+            }
+            out.push(if charset_contains(charset, ch) {
+                ch
+            } else {
+                project_char(ch as u64, charset)
+            });
+            count += 1;
         }
-        _ => {
-            buf[idx] = rng.next_u64() as u8;
+        while count < min_len {
+            out.push(project_char(count as u64, charset));
+            count += 1;
+        }
+    } else {
+        let target = project_u64(raw_bytes.len() as u64, min_len as u64, max_len as u64) as usize;
+        for i in 0..target {
+            let word = raw_bytes.get(i).copied().unwrap_or(i as u8) as u64;
+            out.push(project_char(word, charset));
         }
     }
+    out
+}
+
+fn charset_contains(charset: Charset, ch: char) -> bool {
+    match charset {
+        Charset::Ascii => ch.is_ascii(),
+        Charset::AsciiPrintable => (' '..='~').contains(&ch),
+        Charset::Alphanumeric => ch.is_ascii_alphanumeric(),
+        Charset::Alpha => ch.is_ascii_alphabetic(),
+        Charset::Digits => ch.is_ascii_digit(),
+        Charset::Identifier => ch.is_ascii_alphanumeric() || ch == '_',
+        Charset::Utf8 => true,
+    }
+}
+
+fn project_char(raw: u64, charset: Charset) -> char {
+    let code = match charset {
+        Charset::Ascii => (raw & 0x7f) as u32,
+        Charset::AsciiPrintable => PRINTABLE_ASCII[(raw as usize) % PRINTABLE_ASCII.len()] as u32,
+        Charset::Alphanumeric => {
+            ALPHANUMERIC_ASCII[(raw as usize) % ALPHANUMERIC_ASCII.len()] as u32
+        }
+        Charset::Alpha => ALPHA_ASCII[(raw as usize) % ALPHA_ASCII.len()] as u32,
+        Charset::Digits => DIGITS_ASCII[(raw as usize) % DIGITS_ASCII.len()] as u32,
+        Charset::Identifier => IDENT_ASCII[(raw as usize) % IDENT_ASCII.len()] as u32,
+        Charset::Utf8 => {
+            let candidate = (raw as u32) % 0x110000;
+            if (0xd800..=0xdfff).contains(&candidate) {
+                0x20 + (candidate & 0x5f)
+            } else {
+                candidate
+            }
+        }
+    };
+    char::from_u32(code).unwrap_or(' ')
 }
 
 fn write_int_le(out: &mut Vec<u8>, width: IntWidth, value: i64) {
@@ -489,36 +907,5 @@ pub fn project_i64(raw: i64, min: i64, max: i64) -> i64 {
         let u_raw = (raw as u64) ^ sign_bit;
         let projected = project_u64(u_raw, u_min, u_max);
         (projected ^ sign_bit) as i64
-    }
-}
-
-fn interpolate_f64(bits: u64, min: f64, max: f64) -> f64 {
-    if min >= max {
-        min
-    } else {
-        let u = ((bits >> 11) as f64) * (1.0 / 9007199254740992.0);
-        let v = (1.0 - u) * min + u * max;
-        v.clamp(min, max)
-    }
-}
-
-fn project_char_u32(raw: u64, charset: Charset) -> u32 {
-    match charset {
-        Charset::Ascii => (raw & 0x7f) as u32,
-        Charset::AsciiPrintable => PRINTABLE_ASCII[(raw as usize) % PRINTABLE_ASCII.len()] as u32,
-        Charset::Alphanumeric => {
-            ALPHANUMERIC_ASCII[(raw as usize) % ALPHANUMERIC_ASCII.len()] as u32
-        }
-        Charset::Alpha => ALPHA_ASCII[(raw as usize) % ALPHA_ASCII.len()] as u32,
-        Charset::Digits => DIGITS_ASCII[(raw as usize) % DIGITS_ASCII.len()] as u32,
-        Charset::Identifier => IDENT_ASCII[(raw as usize) % IDENT_ASCII.len()] as u32,
-        Charset::Utf8 => {
-            let candidate = (raw as u32) % 0x110000;
-            if (0xd800..=0xdfff).contains(&candidate) {
-                0x20 + (candidate & 0x5f)
-            } else {
-                candidate
-            }
-        }
     }
 }

@@ -1,29 +1,29 @@
-//! Entrypoint and mutational fuzzing harness for static-library Reussir test suites.
+//! Bridge between static-library Reussir fuzz targets, [`libfuzzer_sys`], and [`mutatis`].
 //!
-//! A Reussir test suite compiled as a static library exports `reussir_fuzz_init`
-//! and calls `test::fuzz::init(suite)`. During initialization, the Reussir side
+//! A Reussir test suite compiled for fuzzing exports `reussir_fuzz_init` and
+//! calls `test::fuzz::init(suite)`. During initialization, the Reussir side
 //! derives its [`spec::SuiteSpec`], serializes it to bytes, and registers its
 //! `TestTree` handle and `reussir_fuzz_run` trampoline via
 //! [`__reussir_fuzzer_register`].
 //!
-//! The Rust binary links the static library and invokes [`fuzz_target!`]:
+//! The fuzzer binary links the target archive and invokes [`fuzz_target!`]:
 //!
 //! ```ignore
+//! #![no_main]
 //! reussir_fuzzer::fuzz_target!();
 //! ```
 
-use std::ffi::{OsString, c_void};
-use std::path::PathBuf;
-use std::process::ExitCode;
-use std::sync::Mutex;
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use palc::Parser;
+pub use libfuzzer_sys;
+pub use mutatis;
 
 pub mod mutator;
 pub mod spec;
 
-use mutator::Rng;
-use spec::{CaseSpec, SuiteSpec};
+use spec::SuiteSpec;
 
 /// Function pointer that increments the reference count of a bridged Reussir `TestTree`.
 pub type CloneTreeFn = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
@@ -44,6 +44,8 @@ struct RawRegistration {
 }
 
 static REGISTERED: Mutex<Option<RawRegistration>> = Mutex::new(None);
+static SESSION: OnceLock<FuzzSession> = OnceLock::new();
+static UNIT_CASES_CHECKED: AtomicBool = AtomicBool::new(false);
 
 /// FFI callback invoked by `test::fuzz::init` during `reussir_fuzz_init`.
 ///
@@ -89,7 +91,14 @@ pub struct FuzzSession {
     run_fn: RunFuzzFn,
     spec_bytes: Vec<u8>,
     spec: SuiteSpec,
+    filter: Option<String>,
 }
+
+// Safety: libFuzzer executes target callbacks sequentially per process, and
+// `run_bytes` clones the underlying reference-counted `TestTree` handle before
+// invoking the Reussir runner trampoline.
+unsafe impl Send for FuzzSession {}
+unsafe impl Sync for FuzzSession {}
 
 impl FuzzSession {
     /// Initializes a fuzzing session by invoking the Reussir `reussir_fuzz_init`
@@ -107,6 +116,9 @@ impl FuzzSession {
             unsafe { (reg.drop_fn)(reg.tree as *mut c_void) };
             return Err("failed to decode SuiteSpec registered by test::fuzz::init".to_owned());
         };
+        let filter = std::env::var("REUSSIR_FUZZ_FILTER")
+            .ok()
+            .filter(|s| !s.is_empty());
         Ok(Self {
             tree: reg.tree as *mut c_void,
             clone_fn: reg.clone_fn,
@@ -114,6 +126,7 @@ impl FuzzSession {
             run_fn: reg.run_fn,
             spec_bytes: reg.spec_bytes,
             spec,
+            filter,
         })
     }
 
@@ -125,6 +138,17 @@ impl FuzzSession {
     /// Returns the raw serialized `"RTSP"` v1 bytes for the [`SuiteSpec`].
     pub fn spec_bytes(&self) -> &[u8] {
         &self.spec_bytes
+    }
+
+    /// Returns whether the case at `case_idx` is enabled under `REUSSIR_FUZZ_FILTER`.
+    pub fn selects_case(&self, case_idx: usize) -> bool {
+        let Some(case) = self.spec.cases.get(case_idx) else {
+            return false;
+        };
+        match &self.filter {
+            Some(pat) => case.joined_path().contains(pat),
+            None => true,
+        }
     }
 
     /// Feeds one suite-level byte buffer into the Reussir test runner (`reussir_fuzz_run`).
@@ -145,200 +169,161 @@ impl Drop for FuzzSession {
     }
 }
 
-/// Command-line interface for a `reussir-fuzzer` target binary.
-#[derive(Parser, Debug)]
-#[command(name = "reussir-fuzzer")]
-pub struct FuzzCli {
-    /// Run only test cases whose `/`-joined path contains `<PATTERN>`.
-    #[arg(short = 'm', long = "match")]
-    pub matches: Vec<String>,
-
-    /// Run only test cases whose `/`-joined path equals `<PATH>`.
-    #[arg(short = 'e', long = "exact")]
-    pub exact: Vec<String>,
-
-    /// Skip test cases whose `/`-joined path contains `<PATTERN>`.
-    #[arg(short = 's', long = "skip")]
-    pub skip: Vec<String>,
-
-    /// Number of fuzzing iterations per property test case.
-    #[arg(short = 'n', long = "iterations", default_value_t = 100)]
-    pub iterations: u64,
-
-    /// Deterministic 64-bit PRNG seed (uses OS entropy when omitted).
-    #[arg(long = "seed")]
-    pub seed: Option<u64>,
-
-    /// List matching test cases and their input specs without running them.
-    #[arg(short = 'l', long = "list", default_value_t = false)]
-    pub list: bool,
-
-    /// Write the binary SuiteSpec (`RTSP` v1) to `<PATH>`.
-    #[arg(long = "dump-spec")]
-    pub dump_spec: Option<PathBuf>,
-}
-
-impl FuzzCli {
-    fn selects(&self, case: &CaseSpec) -> bool {
-        let joined = case.joined_path();
-        if self.skip.iter().any(|pat| joined.contains(pat)) {
-            return false;
-        }
-        if self.matches.is_empty() && self.exact.is_empty() {
-            return true;
-        }
-        self.matches.iter().any(|pat| joined.contains(pat)) || self.exact.contains(&joined)
-    }
-}
-
-/// Runs the fuzzer entrypoint using process command-line arguments.
-pub fn run_fuzzer(init_fn: unsafe extern "C" fn()) -> ExitCode {
-    run_fuzzer_with_args(init_fn, std::env::args_os())
-}
-
-/// Runs the fuzzer entrypoint with an explicit argument iterator.
-pub fn run_fuzzer_with_args(
+/// Initializes libFuzzer and the registered Reussir [`FuzzSession`].
+#[doc(hidden)]
+pub fn libfuzzer_initialize(
+    argc: *const isize,
+    argv: *const *const *const u8,
     init_fn: unsafe extern "C" fn(),
-    args: impl IntoIterator<Item = OsString>,
-) -> ExitCode {
-    let cli = match FuzzCli::try_parse_from(args) {
-        Ok(cli) => cli,
-        Err(err) => match err.try_into_help() {
-            Ok(help) => {
-                println!("{help}");
-                return ExitCode::SUCCESS;
-            }
-            Err(err) => {
-                eprintln!("{err}");
-                return ExitCode::from(2);
-            }
-        },
-    };
-
+) -> isize {
+    libfuzzer_sys::initialize(argc, argv);
     let session = match FuzzSession::initialize(init_fn) {
         Ok(session) => session,
         Err(err) => {
-            eprintln!("error: {err}");
-            return ExitCode::from(2);
+            eprintln!("reussir-fuzzer initialization error: {err}");
+            std::process::abort();
         }
     };
-
-    if let Some(path) = &cli.dump_spec
-        && let Err(err) = std::fs::write(path, session.spec_bytes())
+    if let Ok(path) = std::env::var("REUSSIR_FUZZ_DUMP_SPEC")
+        && !path.is_empty()
+        && let Err(err) = std::fs::write(&path, session.spec_bytes())
     {
-        eprintln!("error: failed to write spec to `{}`: {err}", path.display());
-        return ExitCode::from(2);
+        eprintln!("reussir-fuzzer: failed to dump SuiteSpec to `{path}`: {err}");
+        std::process::abort();
     }
-
-    let selected: Vec<(usize, &CaseSpec)> = session
-        .spec()
-        .cases
-        .iter()
-        .enumerate()
-        .filter(|(_, case)| cli.selects(case))
-        .collect();
-
-    if cli.list {
-        for (_, case) in &selected {
-            println!("{case}");
+    if std::env::var("REUSSIR_FUZZ_LIST").ok().as_deref() == Some("1") {
+        for (idx, case) in session.spec().cases.iter().enumerate() {
+            if session.selects_case(idx) {
+                println!("{case}");
+            }
         }
-        return ExitCode::SUCCESS;
     }
+    let _ = SESSION.set(session);
+    0
+}
 
-    let (seed, mut rng) = match cli.seed {
-        Some(seed) => (seed, Rng::from_seed(seed)),
-        None => Rng::from_entropy(),
+/// Executes one libFuzzer input against the active Reussir [`FuzzSession`].
+#[doc(hidden)]
+pub fn libfuzzer_test_one_input(bytes: &[u8]) -> libfuzzer_sys::Corpus {
+    let Some(session) = SESSION.get() else {
+        return libfuzzer_sys::Corpus::Reject;
     };
+    if session.spec().cases.is_empty() {
+        return libfuzzer_sys::Corpus::Reject;
+    }
 
-    let iterations = cli.iterations.max(1);
-    let mut examples = 0usize;
-    let mut failures = 0usize;
-
-    for (case_idx, case) in selected {
-        examples += 1;
-        let path = case.joined_path();
-        if case.input.is_unit() {
-            let input = session.spec().generate_for_case(case_idx, &mut rng);
-            let rc = session.run_bytes(&input);
-            if rc == 0 {
-                println!("✓ {path}");
-            } else {
-                println!("✗ {path}");
-                failures += 1;
+    // Run unit test cases once on the first invocation so deterministic cases in
+    // a mixed TestTree are always exercised.
+    if !UNIT_CASES_CHECKED.swap(true, Ordering::Relaxed) {
+        for (idx, case) in session.spec().cases.iter().enumerate() {
+            if case.input.is_unit() && session.selects_case(idx) {
+                let buf = (idx as u64).to_le_bytes();
+                if session.run_bytes(&buf) == 1 {
+                    panic!("Reussir unit test case `{}` failed", case.joined_path());
+                }
             }
-            continue;
-        }
-
-        let mut corpus: Vec<Vec<u8>> = Vec::with_capacity(16);
-        let mut failed = false;
-        for step in 0..iterations {
-            let candidate = if corpus.is_empty() || step < 4 || (rng.next_u64() & 1) == 0 {
-                session.spec().generate_for_case(case_idx, &mut rng)
-            } else {
-                let base_idx = (rng.next_u64() as usize) % corpus.len();
-                let mut mutated = corpus[base_idx].clone();
-                session
-                    .spec()
-                    .mutate_for_case(case_idx, &mut mutated, &mut rng);
-                mutated
-            };
-
-            let rc = session.run_bytes(&candidate);
-            if rc == 1 {
-                println!("✗ {path} (failed at iteration {}, seed {seed})", step + 1);
-                failures += 1;
-                failed = true;
-                break;
-            } else if rc == 0 && corpus.len() < 32 {
-                corpus.push(candidate);
-            }
-        }
-
-        if !failed {
-            println!("✓ {path} ({iterations} fuzz runs)");
         }
     }
 
-    println!(
-        "\n{} example{}, {} failure{} (seed: {seed})",
-        examples,
-        if examples == 1 { "" } else { "s" },
-        failures,
-        if failures == 1 { "" } else { "s" },
-    );
+    if bytes.len() < 8 {
+        return libfuzzer_sys::Corpus::Reject;
+    }
+    let raw_idx = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    let case_idx = (raw_idx as usize) % session.spec().cases.len();
+    if !session.selects_case(case_idx) {
+        return libfuzzer_sys::Corpus::Reject;
+    }
 
-    if failures == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    match session.run_bytes(bytes) {
+        0 => libfuzzer_sys::Corpus::Keep,
+        -1 => libfuzzer_sys::Corpus::Reject,
+        _ => panic!(
+            "Reussir fuzz target `{}` failed",
+            session.spec().cases[case_idx].joined_path()
+        ),
     }
 }
 
-/// Defines the `main` entrypoint for a fuzzed Reussir static library target.
+/// Mutates `data[..size]` in place within `max_size` using [`mutatis`] and
+/// `libfuzzer-sys`'s `LLVMFuzzerMutate`.
+#[doc(hidden)]
+pub fn libfuzzer_custom_mutator(
+    data: &mut [u8],
+    size: usize,
+    max_size: usize,
+    seed: u32,
+    raw_mutate: mutator::RawMutateFn,
+) -> usize {
+    let Some(session) = SESSION.get() else {
+        return 0;
+    };
+    session
+        .spec()
+        .mutate_buffer(data, size, max_size, seed, Some(raw_mutate))
+}
+
+/// Defines the libFuzzer entrypoints (`LLVMFuzzerInitialize`,
+/// `rust_fuzzer_test_input`, and `LLVMFuzzerCustomMutator`) for a fuzzed
+/// Reussir static library target.
 ///
-/// By default, this calls the `reussir_fuzz_init` C trampoline exported by the
-/// Reussir test archive; an alternative symbol name may be passed explicitly.
+/// The crate invoking this macro should be compiled with `#![no_main]` so
+/// libFuzzer supplies the process `main` entrypoint.
 #[macro_export]
 macro_rules! fuzz_target {
     () => {
         $crate::fuzz_target!(reussir_fuzz_init);
     };
     ($init:ident) => {
-        extern crate reussir_rt;
-
-        fn main() -> ::std::process::ExitCode {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn LLVMFuzzerInitialize(
+            argc: *const isize,
+            argv: *const *const *const u8,
+        ) -> isize {
             unsafe extern "C" {
                 fn $init();
             }
-            $crate::run_fuzzer($init)
+            $crate::libfuzzer_initialize(argc, argv, $init)
+        }
+
+        #[unsafe(no_mangle)]
+        #[allow(improper_ctypes_definitions)]
+        pub extern "C" fn rust_fuzzer_test_input(bytes: &[u8]) -> i32 {
+            if let Some(path) = $crate::libfuzzer_sys::rust_libfuzzer_debug_path() {
+                use ::std::io::Write;
+                let mut file = ::std::fs::File::create(path)
+                    .expect("failed to create `RUST_LIBFUZZER_DEBUG_PATH` file");
+                let _ = writeln!(&mut file, "{bytes:?}");
+                return 0;
+            }
+            $crate::libfuzzer_test_one_input(bytes).to_libfuzzer_code()
+        }
+
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn LLVMFuzzerCustomMutator(
+            data: *mut u8,
+            size: usize,
+            max_size: usize,
+            seed: ::std::os::raw::c_uint,
+        ) -> usize {
+            let len = ::std::cmp::max(max_size, size);
+            let data_slice = unsafe { ::std::slice::from_raw_parts_mut(data, len) };
+            let new_size = $crate::libfuzzer_custom_mutator(
+                data_slice,
+                size,
+                max_size,
+                seed as u32,
+                $crate::libfuzzer_sys::fuzzer_mutate,
+            );
+            ::std::cmp::min(new_size, max_size)
         }
     };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::spec::{Charset, FloatWidth, IntWidth, ValueSpec};
+    use mutatis::Session;
+
+    use crate::spec::{CaseSpec, Charset, FloatWidth, IntWidth, SuiteSpec, ValueSpec};
 
     #[test]
     fn value_spec_and_suite_spec_round_trip_bytes() {
@@ -398,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn mutator_preserves_case_selector_prefix() {
+    fn mutatis_mutator_preserves_constraints_and_shrinks() {
         let suite = SuiteSpec {
             cases: vec![
                 CaseSpec {
@@ -407,24 +392,47 @@ mod tests {
                 },
                 CaseSpec {
                     path: vec!["suite".into(), "second".into()],
-                    input: ValueSpec::Array {
-                        elem: Box::new(ValueSpec::Int {
+                    input: ValueSpec::Tuple(vec![
+                        ValueSpec::Int {
                             width: IntWidth::I64,
                             min: -50,
                             max: 50,
-                        }),
-                        min_len: 1,
-                        max_len: 6,
-                    },
+                        },
+                        ValueSpec::String {
+                            charset: Charset::Identifier,
+                            min_len: 2,
+                            max_len: 8,
+                        },
+                        ValueSpec::Array {
+                            elem: Box::new(ValueSpec::UInt {
+                                width: IntWidth::I32,
+                                min: 5,
+                                max: 25,
+                            }),
+                            min_len: 1,
+                            max_len: 6,
+                        },
+                    ]),
                 },
             ],
         };
-        let mut rng = Rng::from_seed(42);
-        let mut buf = suite.generate_for_case(1, &mut rng);
+
+        let mut session = Session::new().seed(42);
+        let mut buf = suite.generate_for_case(1, &mut session);
         assert_eq!(u64::from_le_bytes(buf[..8].try_into().unwrap()), 1);
-        for _ in 0..32 {
-            suite.mutate_for_case(1, &mut buf, &mut rng);
+
+        for seed in 1..=32 {
+            suite.mutate_for_case(1, &mut buf, &mut session);
             assert_eq!(u64::from_le_bytes(buf[..8].try_into().unwrap()), 1);
+            let decoded = suite.decode_input(&buf).expect("valid suite input");
+            assert_eq!(decoded.case_idx, 1);
+
+            let mut raw = vec![0u8; 256];
+            let cur_len = buf.len().min(raw.len());
+            raw[..cur_len].copy_from_slice(&buf[..cur_len]);
+            let next_len = suite.mutate_buffer(&mut raw, cur_len, 256, seed, None);
+            assert!(next_len >= 8);
+            assert!(suite.decode_input(&raw[..next_len]).is_some());
         }
     }
 }

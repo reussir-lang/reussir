@@ -9,9 +9,9 @@
 // UNSUPPORTED: windows
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --lib test_fuzz
 // RUN: %python %S/Inputs/link_fuzz_driver.py --rene %rene --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --staticlib %std_rene_build/release/libtest_fuzz.a --driver %S/Inputs/fuzz_driver.rs --library-path %library_path -o %t.fuzz.exe
-// RUN: %t.fuzz.exe --list | %FileCheck %s --check-prefix=LIST
-// RUN: %t.fuzz.exe --skip broken --iterations 25 --seed 12345 | %FileCheck %s --check-prefix=PASS
-// RUN: %not %t.fuzz.exe --match broken --iterations 40 --seed 7 2>&1 | %FileCheck %s --check-prefix=FAIL
+// RUN: env REUSSIR_FUZZ_FILTER=arithmetic %t.fuzz.exe -runs=64 -seed=12345
+// RUN: env REUSSIR_FUZZ_FILTER=strings %t.fuzz.exe -runs=64 -seed=12345
+// RUN: %not env REUSSIR_FUZZ_FILTER=broken %t.fuzz.exe -runs=256 -seed=7 2>&1 | %FileCheck %s --check-prefix=FAIL
 
 import std::collections::cow::vec::Vec;
 import std::string::String;
@@ -74,21 +74,8 @@ pub fn fuzz_entry() {
 
 extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
 
-// LIST: fuzz_suite/arithmetic/unit baseline: unit
-// LIST: fuzz_suite/arithmetic/bounded sum stays in range: (i64[-50..=50], i64[-50..=50])
-// LIST: fuzz_suite/arithmetic/non-negative array elements: array(i64[0..=25])[1..=6]
-// LIST: fuzz_suite/strings/alphanumeric string length: string(alnum)[2..=8]
-// LIST: fuzz_suite/broken/threshold bug: i64[0..=100]
-
-// PASS: ✓ fuzz_suite/arithmetic/unit baseline
-// PASS: ✓ fuzz_suite/arithmetic/bounded sum stays in range (25 fuzz runs)
-// PASS: ✓ fuzz_suite/arithmetic/non-negative array elements (25 fuzz runs)
-// PASS: ✓ fuzz_suite/strings/alphanumeric string length (25 fuzz runs)
-// PASS: 4 examples, 0 failures (seed: 12345)
-
 // FAIL: Fuzz failure in fuzz_suite / broken / threshold bug
 // FAIL: counterexample:
 // FAIL: expected < 10
-// FAIL: To rerun use: --match fuzz_suite/broken/threshold bug
-// FAIL: ✗ fuzz_suite/broken/threshold bug
-// FAIL: 1 example, 1 failure (seed: 7)
+// FAIL: REUSSIR_FUZZ_FILTER="fuzz_suite/broken/threshold bug"
+

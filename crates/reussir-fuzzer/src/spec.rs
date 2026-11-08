@@ -33,6 +33,33 @@ impl IntWidth {
         }
     }
 
+    pub const fn signed_min(self) -> i64 {
+        match self {
+            Self::I8 => i8::MIN as i64,
+            Self::I16 => i16::MIN as i64,
+            Self::I32 => i32::MIN as i64,
+            Self::I64 => i64::MIN,
+        }
+    }
+
+    pub const fn signed_max(self) -> i64 {
+        match self {
+            Self::I8 => i8::MAX as i64,
+            Self::I16 => i16::MAX as i64,
+            Self::I32 => i32::MAX as i64,
+            Self::I64 => i64::MAX,
+        }
+    }
+
+    pub const fn unsigned_max(self) -> u64 {
+        match self {
+            Self::I8 => u8::MAX as u64,
+            Self::I16 => u16::MAX as u64,
+            Self::I32 => u32::MAX as u64,
+            Self::I64 => u64::MAX,
+        }
+    }
+
     pub const fn to_tag(self) -> u8 {
         match self {
             Self::I8 => 0,
