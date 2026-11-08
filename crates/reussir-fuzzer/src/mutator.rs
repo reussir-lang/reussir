@@ -616,8 +616,8 @@ impl ValueSpec {
                 let raw_len = le_u64.parse_next(input)?;
                 let (lo, hi) = normalized_len_bounds(*min_len, *max_len);
                 let count = project_u64(raw_len, lo as u64, hi as u64) as usize;
-                let items =
-                    repeat(count, |inp: &mut &[u8]| elem.parse_value(inp)).parse_next(input)?;
+                let items = repeat(count, |inp: &mut &[u8]| elem.parse_value(inp))
+                    .parse_next(input)?;
                 Ok(FuzzValue::Array(items))
             }
             Self::Tuple(specs) => {
