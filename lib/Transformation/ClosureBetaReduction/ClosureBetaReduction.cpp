@@ -64,6 +64,11 @@
 ///    structure were consumed once per execution before and still are — they
 ///    just take their seat in the substitution pack.
 ///
+///  * SINK and DROP: a fresh chain consumed in the arms of a branching
+///    operation moves into the one arm that does more than release it; a
+///    release of a fresh chain becomes the release of its captures. Both
+///    expose the redexes an inlined `match` leaves behind.
+///
 /// Fused evals that bottom out anywhere else survive the pass; the SCF-ops
 /// lowering re-expands them into unchecked applies + plain eval, so the net
 /// effect of FOLD+STRIP on a chain the inliner merged is the removal of its
@@ -76,12 +81,14 @@
 #include <llvm/Support/Casting.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/PatternMatch.h>
+#include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/LoopLikeInterface.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
+#include "Reussir/IR/ReussirTypes.h"
 
 namespace reussir {
 
@@ -116,8 +123,8 @@ struct FoldApplyIntoEvalPattern
 
 // STRIP: eval(uniqify(x), pack) → eval(x, pack) when the uniqify is a
 // provable runtime no-op (x is a single-use apply/create link, unique by
-// construction). Only fires under a FUSED eval: a plain eval paired with
-// its frontend-emitted uniqify is left byte-identical.
+// construction). A plain eval paired with its frontend-emitted uniqify over
+// anything else is left byte-identical.
 struct StripNoopUniqifyPattern
     : public mlir::OpRewritePattern<ReussirClosureEvalOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -125,8 +132,6 @@ struct StripNoopUniqifyPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirClosureEvalOp eval,
                   mlir::PatternRewriter &rewriter) const override {
-    if (eval.getArgs().empty())
-      return mlir::failure();
     auto uniqify = eval.getClosure().getDefiningOp<ReussirClosureUniqifyOp>();
     if (!uniqify || !uniqify.getUniqified().hasOneUse())
       return mlir::failure();
@@ -175,6 +180,199 @@ struct InlineCreateIntoEvalPattern
     rewriter.eraseOp(create);
     if (token && token.use_empty())
       rewriter.eraseOp(token.getDefiningOp());
+    return mlir::success();
+  }
+};
+
+// A fresh closure chain `create; (uniqify | apply)*` ending at `top`: every
+// link below `top` is single-use and in `top`'s block, and the create is
+// inlined with at most a plain `token.alloc`. Fills `chain` bottom-up and
+// `caps` with the applied arguments in application order.
+ReussirClosureCreateOp
+matchFreshChain(mlir::Value top,
+                llvm::SmallVectorImpl<mlir::Operation *> &chain,
+                llvm::SmallVectorImpl<mlir::Value> &caps) {
+  mlir::Operation *topDef = top.getDefiningOp();
+  if (!topDef)
+    return {};
+  for (mlir::Value link = top;;) {
+    mlir::Operation *def = link.getDefiningOp();
+    if (!def || def->getBlock() != topDef->getBlock() ||
+        (link != top && !link.hasOneUse()))
+      return {};
+    chain.push_back(def);
+    if (auto apply = llvm::dyn_cast<ReussirClosureApplyOp>(def)) {
+      caps.push_back(apply.getArg());
+      link = apply.getClosure();
+    } else if (auto uniqify = llvm::dyn_cast<ReussirClosureUniqifyOp>(def)) {
+      link = uniqify.getClosure();
+    } else if (auto create = llvm::dyn_cast<ReussirClosureCreateOp>(def)) {
+      mlir::Value token = create.getToken();
+      if (!create.isInlined() ||
+          (token && !token.getDefiningOp<ReussirTokenAllocOp>()))
+        return {};
+      std::reverse(chain.begin(), chain.end());
+      std::reverse(caps.begin(), caps.end());
+      return create;
+    } else {
+      return {};
+    }
+  }
+}
+
+// Whether dropping the box can be replaced by releasing its captures one by
+// one: each is rc-typed or needs no release at all.
+bool capturesReleasable(llvm::ArrayRef<mlir::Value> caps) {
+  return llvm::all_of(caps, [](mlir::Value cap) {
+    return llvm::isa<RcType>(cap.getType()) ||
+           isTriviallyCopyable(cap.getType());
+  });
+}
+
+// Releases the captures in payload order at the insertion point, in place of
+// `boxRelease`, as the box's drop would. Each release keeps the box release's
+// cleanup hooks, a superset of the hooks reachable through one capture.
+void releaseCaptures(mlir::PatternRewriter &rewriter, ReussirRcDecOp boxRelease,
+                     llvm::ArrayRef<mlir::Value> caps) {
+  for (mlir::Value cap : caps)
+    if (llvm::isa<RcType>(cap.getType()))
+      ReussirRcDecOp::create(rewriter, boxRelease.getLoc(),
+                             /*nullableToken=*/NullableType{}, cap,
+                             /*destructureTag=*/mlir::IntegerAttr{},
+                             /*boundMembers=*/mlir::DenseI64ArrayAttr{},
+                             boxRelease.getCleanupAttr());
+}
+
+bool isPlainRelease(mlir::Operation *op) {
+  auto dec = llvm::dyn_cast<ReussirRcDecOp>(op);
+  return dec && dec->use_empty() && dec.getNumResults() == 0 &&
+         !dec.isDestructuring();
+}
+
+// Erases a fresh chain (bottom-up order in `chain`) and the create's dead
+// token.
+void eraseFreshChain(mlir::PatternRewriter &rewriter,
+                     llvm::ArrayRef<mlir::Operation *> chain) {
+  auto create = llvm::cast<ReussirClosureCreateOp>(chain.front());
+  mlir::Value token = create.getToken();
+  for (mlir::Operation *op : llvm::reverse(chain))
+    rewriter.eraseOp(op);
+  if (token && token.use_empty())
+    rewriter.eraseOp(token.getDefiningOp());
+}
+
+// DROP: rc.dec(fresh chain) → release the applied captures. The box was
+// never evaluated, so its only effect is dropping what the applies stored.
+struct DropFreshClosurePattern : public mlir::OpRewritePattern<ReussirRcDecOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirRcDecOp dec,
+                  mlir::PatternRewriter &rewriter) const override {
+    mlir::Value top = dec.getRcPtr();
+    if (!isPlainRelease(dec) || !top.hasOneUse())
+      return mlir::failure();
+    llvm::SmallVector<mlir::Operation *> chain;
+    llvm::SmallVector<mlir::Value> caps;
+    if (!matchFreshChain(top, chain, caps) || !capturesReleasable(caps))
+      return mlir::failure();
+    rewriter.setInsertionPoint(dec);
+    releaseCaptures(rewriter, dec, caps);
+    rewriter.eraseOp(dec);
+    eraseFreshChain(rewriter, chain);
+    return mlir::success();
+  }
+};
+
+// SINK: a fresh chain consumed inside the arms of one branching operation,
+// e.g. the inlined `match self { Pass => next(), Fail(_) => self }`:
+//
+//   %c = create {body}; apply cap
+//   dispatch { [0]: eval(uniqify %c)   [1]: rc.dec %c }
+//
+// moves into the one arm that does more than release it, and each release
+// in the other arms becomes the release of the captures. The arm then holds
+// a single-use chain that FOLD/STRIP/INLINE or DROP reduce. The body moves
+// rather than being copied, so code size does not grow.
+struct SinkFreshClosurePattern
+    : public mlir::OpRewritePattern<ReussirClosureCreateOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirClosureCreateOp create,
+                  mlir::PatternRewriter &rewriter) const override {
+    // Climb to the end of the single-use chain.
+    mlir::Value top = create.getClosure();
+    while (top.hasOneUse()) {
+      mlir::Operation *user = *top.getUsers().begin();
+      if (user->getBlock() != create->getBlock() ||
+          !llvm::isa<ReussirClosureApplyOp, ReussirClosureUniqifyOp>(user) ||
+          user->getOperand(user->getNumOperands() - 1) != top)
+        break;
+      top = user->getResult(0);
+    }
+    llvm::SmallVector<mlir::Operation *> chain;
+    llvm::SmallVector<mlir::Value> caps;
+    if (top.use_empty() || !matchFreshChain(top, chain, caps))
+      return mlir::failure();
+
+    // Every use sits strictly inside one branching op of the chain's block
+    // whose regions run at most once.
+    mlir::Block *block = create->getBlock();
+    mlir::Operation *branch =
+        block->findAncestorOpInBlock(**top.getUsers().begin());
+    auto regionBranch =
+        llvm::dyn_cast_or_null<mlir::RegionBranchOpInterface>(branch);
+    if (!regionBranch || llvm::isa<mlir::LoopLikeOpInterface>(branch))
+      return mlir::failure();
+    for (mlir::Region &region : branch->getRegions())
+      if (regionBranch.isRepetitiveRegion(region.getRegionNumber()) ||
+          !(region.empty() || region.hasOneBlock()))
+        return mlir::failure();
+
+    mlir::Region *home = nullptr;
+    llvm::SmallVector<mlir::Operation *> releases;
+    for (mlir::Operation *user : top.getUsers()) {
+      if (user == branch || block->findAncestorOpInBlock(*user) != branch)
+        return mlir::failure();
+      mlir::Region *region = user->getParentRegion();
+      while (region->getParentOp() != branch)
+        region = region->getParentOp()->getParentRegion();
+      if (isPlainRelease(user) && user->getParentRegion() == region) {
+        releases.push_back(user);
+        continue;
+      }
+      if (home && home != region)
+        return mlir::failure();
+      home = region;
+    }
+    if (!home)
+      home = releases.front()->getParentRegion();
+    llvm::erase_if(releases, [&](mlir::Operation *release) {
+      return release->getParentRegion() == home;
+    });
+    if (!releases.empty() && !capturesReleasable(caps))
+      return mlir::failure();
+
+    for (mlir::Operation *release : releases) {
+      rewriter.setInsertionPoint(release);
+      releaseCaptures(rewriter, llvm::cast<ReussirRcDecOp>(release), caps);
+      rewriter.eraseOp(release);
+    }
+    // Insert before the first operation of the home block that uses the
+    // chain, possibly through nested regions.
+    mlir::Block &homeBlock = home->front();
+    mlir::Operation *anchor = nullptr;
+    for (mlir::Operation *user : top.getUsers()) {
+      mlir::Operation *ancestor = homeBlock.findAncestorOpInBlock(*user);
+      if (!anchor || ancestor->isBeforeInBlock(anchor))
+        anchor = ancestor;
+    }
+    mlir::Value token = create.getToken();
+    if (token)
+      rewriter.moveOpBefore(token.getDefiningOp(), anchor);
+    for (mlir::Operation *op : chain)
+      rewriter.moveOpBefore(op, anchor);
     return mlir::success();
   }
 };
@@ -333,12 +531,7 @@ mlir::LogicalResult structuralBetaReduction(ReussirClosureEvalOp eval,
   // The box's dec used to release the captures the outer applies
   // consumed; release them directly where it stood.
   rewriter.setInsertionPoint(dec);
-  for (mlir::Value cap : outerCaps)
-    if (llvm::isa<RcType>(cap.getType()))
-      ReussirRcDecOp::create(rewriter, dec.getLoc(),
-                             /*nullableToken=*/NullableType{}, cap,
-                             /*destructureTag=*/mlir::IntegerAttr{},
-                             /*boundMembers=*/mlir::DenseI64ArrayAttr{});
+  releaseCaptures(rewriter, dec, outerCaps);
   for (mlir::Operation *op : localChain)
     rewriter.eraseOp(op);
   for (ReussirRcIncOp inc : incs)
@@ -371,7 +564,9 @@ struct ClosureBetaReductionPass
     mlir::RewritePatternSet patterns(&getContext());
     patterns.add<FoldApplyIntoEvalPattern, StripNoopUniqifyPattern,
                  InlineCreateIntoEvalPattern,
-                 InlineStructurallyCarriedCreatePattern>(&getContext());
+                 InlineStructurallyCarriedCreatePattern,
+                 DropFreshClosurePattern, SinkFreshClosurePattern>(
+        &getContext());
     if (mlir::failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
