@@ -357,6 +357,15 @@ mod tests {
 
     use crate::spec::{CaseSpec, Charset, FloatWidth, IntWidth, SuiteSpec, ValueSpec};
 
+    /// The unit-test binary links `libfuzzer_sys`, whose `LLVMFuzzerTestOneInput`
+    /// calls the hook [`fuzz_target!`] defines in fuzzer binaries. COFF links
+    /// resolve that reference even though the tests never run it.
+    #[unsafe(no_mangle)]
+    #[allow(improper_ctypes_definitions)]
+    extern "C" fn rust_fuzzer_test_input(_bytes: &[u8]) -> i32 {
+        0
+    }
+
     #[test]
     fn value_spec_and_suite_spec_round_trip_bytes() {
         let complex = ValueSpec::Tuple(vec![
