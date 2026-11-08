@@ -269,11 +269,20 @@ pub unsafe fn prepare_module_for_fuzzing(module: LLVMModuleRef) {
 /// [`crate::llvm::run_backend_llvm_pipeline`].
 ///
 /// # Safety
-/// `module` must be a valid `LLVMModuleRef`.
-pub unsafe fn run_sanitizer_coverage_pass(module: LLVMModuleRef, options: &SanCovOptions) {
+/// `module` must be a valid `LLVMModuleRef`, and `machine` must be a valid
+/// `LLVMTargetMachineRef` or null.
+pub unsafe fn run_sanitizer_coverage_pass(
+    module: LLVMModuleRef,
+    machine: llvm_sys::target_machine::LLVMTargetMachineRef,
+    options: &SanCovOptions,
+) {
     let sys_opts = options.to_sys();
     unsafe {
-        sys::reussirRunSanitizerCoveragePass(module as sys::LLVMModuleRef, &raw const sys_opts);
+        sys::reussirRunSanitizerCoveragePass(
+            module as sys::LLVMModuleRef,
+            machine as sys::LLVMTargetMachineRef,
+            &raw const sys_opts,
+        );
     }
 }
 

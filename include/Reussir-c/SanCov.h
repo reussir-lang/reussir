@@ -17,6 +17,7 @@
 #ifndef REUSSIR_C_SANCOV_H
 #define REUSSIR_C_SANCOV_H
 
+#include "llvm-c/TargetMachine.h"
 #include "llvm-c/Types.h"
 
 #ifdef __cplusplus
@@ -61,10 +62,13 @@ typedef struct ReussirSanCovOptions {
 // value-profile hooks.
 void reussirPrepareModuleForFuzzing(LLVMModuleRef module);
 
-// Runs LLVM's `SanitizerCoveragePass` over `module` with `options`. Call AFTER
+// Runs LLVM's `SanitizerCoveragePass` over `module` with `options`, and ensures
+// `machine` (when non-null) emits `llvm.global_ctors` into `.init_array` on ELF
+// targets that do not use legacy `.ctors`. Call AFTER
 // `reussirRunBackendLLVMPipeline`. A no-op when `options` is NULL or
 // `options->coverageType == ReussirSanCovNone`.
 void reussirRunSanitizerCoveragePass(LLVMModuleRef module,
+                                     LLVMTargetMachineRef machine,
                                      const ReussirSanCovOptions *options);
 
 #ifdef __cplusplus

@@ -13,17 +13,188 @@
 // RUN: %FileCheck %s --check-prefix=FUZZIR < %t.fuzzer.ll
 // RUN: env REUSSIR_FUZZ_FILTER=arithmetic %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
 // RUN: env REUSSIR_FUZZ_FILTER=strings %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_FILTER=wavl %std_rene_build/fuzz/test_fuzz -runs=128 -seed=12345 -artifact_prefix=%t.
 // RUN: %not env REUSSIR_FUZZ_FILTER=broken %std_rene_build/fuzz/test_fuzz -runs=256 -seed=7 -artifact_prefix=%t. 2>&1 | %FileCheck %s --check-prefix=FAIL
 
 import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::collections::pure::wavlmap::Entry;
+import std::collections::pure::wavlmap::WavlMap;
+import std::collections::pure::wavlset::PopResult as SetPop;
+import std::collections::pure::wavlset::WavlSet;
+import std::option::Option;
 import std::string::String;
 import test::domain::alphanumeric;
 import test::domain::i64_domain;
 import test::domain::tuple2;
+import test::domain::tuple3;
 import test::expect::expect;
 import test::expect::should_be;
 import test::fuzz::fuzz_init;
 import test::tree::TestTree;
+
+fn list_len(l: List<i64>, acc: u64) -> u64 {
+    match l {
+        List::Nil => acc,
+        List::Cons(_, t) => list_len(t, acc + 1)
+    }
+}
+
+fn sorted_strict(l: List<i64>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a < b && sorted_strict(List::Cons { b, rest })
+    }
+}
+
+fn sorted_desc_strict(l: List<i64>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a > b && sorted_desc_strict(List::Cons { b, rest })
+    }
+}
+
+fn keys_sorted(l: List<Entry<i64, i64>>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a.key < b.key && keys_sorted(List::Cons { b, rest })
+    }
+}
+
+fn model_insert(l: List<i64>, x: i64) -> List<i64> {
+    match l {
+        List::Nil => List::Cons { x, List::Nil },
+        List::Cons(h, t) => {
+            if x < h {
+                List::Cons { x, List::Cons { h, t } }
+            } else {
+                if x == h {
+                    List::Cons { h, t }
+                } else {
+                    List::Cons { h, model_insert(t, x) }
+                }
+            }
+        }
+    }
+}
+
+fn model_remove(l: List<i64>, x: i64) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(h, t) =>
+            if x == h { t } else { List::Cons { h, model_remove(t, x) } }
+    }
+}
+
+fn model_pop_min(l: List<i64>) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(_, t) => t
+    }
+}
+
+fn model_pop_max(l: List<i64>) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(_, List::Nil) => List::Nil,
+        List::Cons(h, t) => List::Cons { h, model_pop_max(t) }
+    }
+}
+
+fn model_equal(a: List<i64>, b: List<i64>) -> bool {
+    match a {
+        List::Nil => b.is_nil(),
+        List::Cons(h, t) => match b {
+            List::Nil => false,
+            List::Cons(h2, t2) => h == h2 && model_equal(t, t2)
+        }
+    }
+}
+
+fn log2_ceil(n: u64, acc: u64) -> u64 {
+    if n <= 1 { acc } else { log2_ceil((n + 1) / 2, acc + 1) }
+}
+
+fn balanced(depth: u64, size: u64) -> bool {
+    depth <= 2 * log2_ceil(size, 0) + 1
+}
+
+fn apply_set_ops(
+    ops: Vec<i64>,
+    idx: u64,
+    set: WavlSet<i64>,
+    model: List<i64>
+) -> bool {
+    if idx >= ops.len() {
+        let asc = set.to_list();
+        let desc = set.to_list_desc();
+        set.len() == list_len(model, 0)
+            && balanced(set.depth(), set.len())
+            && sorted_strict(asc)
+            && sorted_desc_strict(desc)
+            && model_equal(set.to_list(), model)
+            && WavlSet::from_list(set.to_list()) == set
+    } else {
+        let op = ops.get(idx).unwrap_or(0);
+        if op >= 0 {
+            let k = op % 32;
+            apply_set_ops(ops, idx + 1, set.insert(k), model_insert(model, k))
+        } else {
+            if op >= -64 {
+                let k = (0 - op) % 32;
+                apply_set_ops(ops, idx + 1, set.remove(k), model_remove(model, k))
+            } else {
+                if op >= -82 {
+                    let next_set = match set.pop_min() {
+                        SetPop::Empty(s) => s,
+                        SetPop::Popped(_, rest) => rest
+                    };
+                    apply_set_ops(ops, idx + 1, next_set, model_pop_min(model))
+                } else {
+                    let next_set = match set.pop_max() {
+                        SetPop::Empty(s) => s,
+                        SetPop::Popped(_, rest) => rest
+                    };
+                    apply_set_ops(ops, idx + 1, next_set, model_pop_max(model))
+                }
+            }
+        }
+    }
+}
+
+fn build_set_from_vec(xs: Vec<i64>, idx: u64, acc: WavlSet<i64>) -> WavlSet<i64> {
+    if idx >= xs.len() {
+        acc
+    } else {
+        let k = xs.get(idx).unwrap_or(0);
+        build_set_from_vec(xs, idx + 1, acc.insert(k))
+    }
+}
+
+fn build_map_from_vecs(
+    keys: Vec<i64>,
+    vals: Vec<i64>,
+    idx: u64,
+    acc: WavlMap<i64, i64>
+) -> WavlMap<i64, i64> {
+    if idx >= keys.len() || idx >= vals.len() {
+        acc
+    } else {
+        let k = keys.get(idx).unwrap_or(0);
+        let v = vals.get(idx).unwrap_or(0);
+        if v < 0 {
+            build_map_from_vecs(keys, vals, idx + 1, acc.remove(k))
+        } else {
+            build_map_from_vecs(keys, vals, idx + 1, acc.insert(k, v))
+        }
+    }
+}
 
 fn suite() -> TestTree {
     let arithmetic = TestTree::group("arithmetic")
@@ -57,6 +228,94 @@ fn suite() -> TestTree {
             }
         );
 
+    let wavl = TestTree::group("wavl")
+        .with_fuzz(
+            "set insert/remove/pop model & rank balance",
+            i64_domain().in_range(-100, 100).vec().max_len(48),
+            |ops: Vec<i64>| {
+                expect(
+                    apply_set_ops(ops, 0, WavlSet::new(), List::Nil),
+                    "WavlSet diverged from sorted-list model or violated rank balance"
+                )
+            }
+        )
+        .with_fuzz(
+            "set algebra, neighbours & range invariants",
+            tuple3(
+                i64_domain().in_range(0, 31).vec().max_len(24),
+                i64_domain().in_range(0, 31).vec().max_len(24),
+                tuple2(i64_domain().in_range(-4, 36), i64_domain().in_range(-4, 36))
+            ),
+            |input: (Vec<i64>, Vec<i64>, (i64, i64))| {
+                let (xs, ys, bounds) = input;
+                let (lo, hi) = bounds;
+                let a = build_set_from_vec(xs, 0, WavlSet::new());
+                let b = build_set_from_vec(ys, 0, WavlSet::new());
+                let u = a.union(b);
+                let inter = a.intersection(b);
+                let diff = a.difference(b);
+                let sym = a.symmetric_difference(b);
+                let win = a.range(lo, hi);
+                let fl_ok = match a.floor(lo) {
+                    Option::Some(k) => k <= lo && a.contains(k) && !a.any(|x| x > k && x <= lo),
+                    Option::None => !a.any(|x| x <= lo)
+                };
+                let ce_ok = match a.ceiling(lo) {
+                    Option::Some(k) => k >= lo && a.contains(k) && !a.any(|x| x < k && x >= lo),
+                    Option::None => !a.any(|x| x >= lo)
+                };
+                expect(
+                    balanced(u.depth(), u.len())
+                        && balanced(inter.depth(), inter.len())
+                        && balanced(diff.depth(), diff.len())
+                        && balanced(sym.depth(), sym.len())
+                        && balanced(win.depth(), win.len())
+                        && u.len() + inter.len() == a.len() + b.len()
+                        && sym == u.difference(inter)
+                        && diff.is_disjoint(b)
+                        && win.all(|x| x >= lo && x < hi)
+                        && fl_ok
+                        && ce_ok,
+                    "WavlSet algebra/range/neighbour invariant failed"
+                )
+            }
+        )
+        .with_fuzz(
+            "map churn, union_with & range invariants",
+            tuple2(
+                tuple2(
+                    i64_domain().in_range(0, 31).vec().max_len(32),
+                    i64_domain().in_range(-50, 200).vec().max_len(32)
+                ),
+                tuple2(
+                    i64_domain().in_range(0, 31).vec().max_len(32),
+                    i64_domain().in_range(-50, 200).vec().max_len(32)
+                )
+            ),
+            |pair: ((Vec<i64>, Vec<i64>), (Vec<i64>, Vec<i64>))| {
+                let (left, right) = pair;
+                let (k1, v1) = left;
+                let (k2, v2) = right;
+                let m1 = build_map_from_vecs(k1, v1, 0, WavlMap::new());
+                let m2 = build_map_from_vecs(k2, v2, 0, WavlMap::new());
+                let combined = m1.union_with(m2, |v1, v2| v1 + v2);
+                let inter = m1.intersection_with(m2, |v1, v2| v1 - v2);
+                let diff = m1.difference(m2);
+                expect(
+                    balanced(m1.depth(), m1.len())
+                        && balanced(m2.depth(), m2.len())
+                        && balanced(combined.depth(), combined.len())
+                        && balanced(inter.depth(), inter.len())
+                        && balanced(diff.depth(), diff.len())
+                        && keys_sorted(combined.to_list())
+                        && keys_sorted(inter.to_list())
+                        && combined.len() + inter.len() == m1.len() + m2.len()
+                        && diff.is_disjoint(m2),
+                    "WavlMap invariant failed"
+                )
+            }
+        );
+
     let broken = TestTree::group("broken")
         .with_fuzz(
             "threshold bug",
@@ -67,6 +326,7 @@ fn suite() -> TestTree {
     TestTree::group("fuzz_suite")
         .with_group(arithmetic)
         .with_group(strings)
+        .with_group(wavl)
         .with_group(broken)
 }
 

@@ -358,6 +358,7 @@ unsafe extern "C" {
     /// after `reussirRunBackendLLVMPipeline`).
     pub fn reussirRunSanitizerCoveragePass(
         module: LLVMModuleRef,
+        machine: LLVMTargetMachineRef,
         options: *const ReussirSanCovOptions,
     );
 

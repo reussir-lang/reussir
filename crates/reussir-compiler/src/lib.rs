@@ -373,7 +373,11 @@ pub fn emit_to_file_with_sancov(
         run_backend_llvm_pipeline(finalized.module, opt, machine.machine, lto);
         if let Some(sancov) = sancov {
             tracing::debug!(?sancov, "running LLVM SanitizerCoveragePass");
-            reussir_backend::sancov::run_sanitizer_coverage_pass(finalized.module, sancov);
+            reussir_backend::sancov::run_sanitizer_coverage_pass(
+                finalized.module,
+                machine.machine,
+                sancov,
+            );
         }
         tracing::debug!("running LLVM codegen");
         let result = emit(finalized.module, machine, kind, out_path);

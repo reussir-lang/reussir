@@ -21,6 +21,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Instrumentation/SanitizerCoverage.h>
 
 void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
@@ -40,9 +41,13 @@ void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
 }
 
 void reussirRunSanitizerCoveragePass(LLVMModuleRef module,
+                                     LLVMTargetMachineRef machine,
                                      const ReussirSanCovOptions *options) {
   if (!options || options->coverageType == ReussirSanCovNone)
     return;
+
+  if (auto *tm = reinterpret_cast<llvm::TargetMachine *>(machine))
+    tm->Options.UseInitArray = 1;
 
   llvm::SanitizerCoverageOptions covOpts;
   switch (options->coverageType) {
