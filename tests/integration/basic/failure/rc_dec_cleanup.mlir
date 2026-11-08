@@ -30,3 +30,13 @@ module {
     return
   }
 }
+
+// -----
+
+module {
+  func.func @ref_drop_unresolved(%ref: !reussir.ref<i64>) {
+    // expected-error @+1 {{cleanup hook not found: @missing}}
+    reussir.ref.drop(%ref : !reussir.ref<i64>) cleanup(@missing)
+    return
+  }
+}
