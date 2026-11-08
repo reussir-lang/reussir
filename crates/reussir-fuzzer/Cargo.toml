@@ -1,0 +1,12 @@
+[package]
+name = "reussir-fuzzer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libfuzzer-sys.workspace = true
+mutatis.workspace = true
+
+[lib]
+crate-type = ["lib"]
