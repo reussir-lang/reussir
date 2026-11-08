@@ -1,0 +1,25 @@
+// RUN: %rrc %s --package-name scope --emit llvm-ir --fuzzer --sancov-exclude scope::harness -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+// RUN: %rrc %s --package-name scope --emit mir -o %t.mir
+// RUN: %rrc %t.mir --emit llvm-ir --fuzzer --sancov-exclude scope::harness -o %t.roundtrip.ll
+// RUN: %FileCheck %s < %t.roundtrip.ll
+// RUN: %rrc %s --package-name scope --emit mlir-llvm --fuzzer --sancov-exclude scope::harness -o %t.mlir
+// RUN: %rrc %t.mlir --emit llvm-ir --fuzzer -o %t.resumed.ll
+// RUN: %FileCheck %s < %t.resumed.ll
+// RUN: %not %rrc %t.mlir --emit llvm-ir --fuzzer --sancov-include scope -o %t.bad.ll 2>&1 | %FileCheck %s --check-prefix=CONFLICT
+// RUN: %not %rrc %t.ll --emit llvm-ir --fuzzer --sancov-include scope -o %t.bad.ll 2>&1 | %FileCheck %s --check-prefix=CONFLICT
+// CONFLICT: coverage scope conflicts with resumed
+//
+// CHECK-DAG: attributes #[[BODY:[0-9]+]] = { optforfuzzing {{.*}}"reussir-coverage"="on" "reussir-coverage-origin"="_RNvC5scope5drive"
+// CHECK-DAG: attributes #[[HARNESS:[0-9]+]] = { nosanitize_coverage "reussir-coverage"="off" "reussir-coverage-origin"="_RNvC5scope7harness"
+// CHECK-DAG: @__sanitizer_cov_trace_const_cmp8(i64 1000,
+
+pub fn harness(x: i64, body: i64 -> i64) -> i64 {
+    body(if x == 42 { x + 1 } else { x })
+}
+
+pub fn drive(x: i64) -> i64 {
+    harness(x, |value: i64| if value > 1000 { value * 7 } else { value + 9 })
+}
+
+extern "C" trampoline "scope_drive" = drive;

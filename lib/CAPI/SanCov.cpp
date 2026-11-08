@@ -15,6 +15,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir-c/SanCov.h"
+#include "Reussir/IR/Coverage.h"
+#include <llvm/Demangle/Demangle.h>
+#include <llvm/IR/Instructions.h>
+#include <mlir/CAPI/IR.h>
+#include <mlir/CAPI/Support.h>
 
 #include <llvm-c/Core.h>
 
@@ -24,6 +29,76 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Instrumentation/SanitizerCoverage.h>
 
+void reussirPrepareCoverage(MlirModule module) {
+  reussir::prepareCoverage(unwrap(module));
+}
+
+int reussirPrepareCoverageLLVM(LLVMModuleRef module,
+                               const MlirStringRef *includes,
+                               size_t includeCount,
+                               const MlirStringRef *excludes,
+                               size_t excludeCount, int explicitScopes) {
+  auto matches = [](const MlirStringRef *scopes, size_t count,
+                    llvm::StringRef name) {
+    return llvm::any_of(
+        llvm::ArrayRef(scopes, count), [&](MlirStringRef scope) {
+          auto prefix = unwrap(scope);
+          return name == prefix || name.starts_with((prefix + "::").str()) ||
+                 name.starts_with((prefix + "<").str());
+        });
+  };
+  auto &m = *llvm::unwrap(module);
+  if (includeCount == 0 && excludeCount == 0 &&
+      llvm::none_of(m, [](llvm::Function &f) {
+        return f.hasFnAttribute("reussir-coverage");
+      }))
+    return 1;
+  auto strings = [](const MlirStringRef *scopes, size_t count) {
+    llvm::SmallVector<llvm::StringRef> values;
+    for (auto scope : llvm::ArrayRef(scopes, count))
+      values.push_back(unwrap(scope));
+    return values;
+  };
+  auto policy = reussir::coverageScopeKey(strings(includes, includeCount),
+                                          strings(excludes, excludeCount));
+  for (auto &f : m)
+    if (auto saved = f.getFnAttribute("reussir-coverage-policy");
+        saved.isValid()) {
+      if (explicitScopes && saved.getValueAsString() != policy)
+        return 0;
+      policy = saved.getValueAsString();
+      break;
+    }
+  for (auto &f : m) {
+    f.addFnAttr("reussir-coverage-policy", policy);
+    auto origin = f.getFnAttribute("reussir-coverage-origin");
+    auto name = llvm::demangle(
+        (origin.isValid() ? origin.getValueAsString() : f.getName()).str());
+    auto scope = f.getFnAttribute("reussir-coverage");
+    bool enabled = scope.isValid() ? scope.getValueAsString() == "on"
+                                   : (includeCount == 0 ||
+                                      matches(includes, includeCount, name)) &&
+                                         !matches(excludes, excludeCount, name);
+    f.addFnAttr("reussir-coverage", enabled ? "on" : "off");
+    if (!enabled)
+      f.addFnAttr(llvm::Attribute::NoSanitizeCoverage);
+  }
+  for (auto &f : m) {
+    bool enabled = !f.hasFnAttribute(llvm::Attribute::NoSanitizeCoverage);
+    for (auto &block : f)
+      for (auto &inst : block)
+        if (auto *call = llvm::dyn_cast<llvm::CallBase>(&inst)) {
+          auto *callee = call->getCalledFunction();
+          if (!callee || enabled == callee->hasFnAttribute(
+                                        llvm::Attribute::NoSanitizeCoverage)) {
+            call->removeFnAttr(llvm::Attribute::AlwaysInline);
+            call->addFnAttr(llvm::Attribute::NoInline);
+          }
+        }
+  }
+  return 1;
+}
+
 void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
   static constexpr llvm::StringLiteral kNoBuiltinAttrs[] = {
       "no-builtin-bcmp",   "no-builtin-memcmp",      "no-builtin-strcasecmp",
@@ -32,7 +107,8 @@ void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
   };
   llvm::Module &m = *llvm::unwrap(module);
   for (llvm::Function &f : m) {
-    if (f.isDeclaration())
+    if (f.isDeclaration() ||
+        f.hasFnAttribute(llvm::Attribute::NoSanitizeCoverage))
       continue;
     f.addFnAttr(llvm::Attribute::OptForFuzzing);
     for (llvm::StringRef attr : kNoBuiltinAttrs)

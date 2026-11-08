@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Conversion/ClosureOutlining.h"
+#include "Reussir/IR/Coverage.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirEnumAttrs.h"
 #include "Reussir/IR/ReussirOps.h"
@@ -124,6 +125,10 @@ void ClosureOutliningPass::runOnOperation() {
         createClosureCloneFunction(op, name, rewriter);
     mlir::func::FuncOp dropFunction =
         createClosureDropFunction(op, name, rewriter);
+
+    inheritCoverage(op, evaluateFunction);
+    excludeCoverage(cloneFunction);
+    excludeCoverage(dropFunction);
 
     // Third, create vtable operation
     rewriter.setInsertionPointToEnd(moduleOp.getBody());
@@ -450,7 +455,8 @@ mlir::func::FuncOp ClosureOutliningPass::createClosureCloneFunction(
   size_t size = dataLayout.getTypeSize(rcBoxType).getFixedValue();
   size_t align = dataLayout.getTypeABIAlignment(rcBoxType);
   TokenType tokenType = TokenType::get(rewriter.getContext(), align, size);
-  mlir::Value token = ReussirTokenAllocOp::create(rewriter, loc, tokenType,
+  mlir::Value token =
+      ReussirTokenAllocOp::create(rewriter, loc, tokenType,
                                   /*dynamicSize=*/mlir::Value());
 
   // Allocate assemble space on stack first

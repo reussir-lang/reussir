@@ -1,0 +1,11 @@
+import std::collections::cow::vec::Vec;
+import test::domain::i64_domain;
+import test::expect::pass;
+import test::tree::TestTree;
+
+pub fn fuzz_entry() {
+    test::fuzz::init(TestTree::group("noop")
+        .with_fuzz("always pass", i64_domain().vec().with_len_range(0, 64),
+            |xs: Vec<i64>| pass()));
+}
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
