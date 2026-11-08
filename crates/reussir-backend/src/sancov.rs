@@ -287,7 +287,7 @@ pub fn prepare_module_scope<'c>(
     context: &'c melior::Context,
     module: &mut Module<'c>,
     options: &SanCovOptions,
-) {
+) -> Result<(), String> {
     if options.include.is_empty()
         && options.exclude.is_empty()
         && module
@@ -298,11 +298,11 @@ pub fn prepare_module_scope<'c>(
         unsafe {
             sys::reussirPrepareCoverage(module.to_raw());
         }
-        return;
+        return Ok(());
     }
     let excluded = options.excluded_scopes();
     if options.include.is_empty() && excluded.is_empty() {
-        return;
+        return Ok(());
     }
     for (name, scopes) in [
         ("reussir.coverage.include", &options.include),
@@ -312,20 +312,28 @@ pub fn prepare_module_scope<'c>(
             .iter()
             .map(|s| StringAttribute::new(context, s).into())
             .collect();
-        module
-            .as_operation_mut()
-            .set_attribute(name, ArrayAttribute::new(context, &strings).into());
+        let attr = ArrayAttribute::new(context, &strings).into();
+        if let Ok(saved) = module.as_operation().attribute(name)
+            && saved != attr
+        {
+            return Err("coverage scope conflicts with resumed MLIR".into());
+        }
+        module.as_operation_mut().set_attribute(name, attr);
     }
     unsafe {
         sys::reussirPrepareCoverage(module.to_raw());
     }
+    Ok(())
 }
 
 /// Applies scope to linked LLVM definitions and preserves cross-scope calls.
 ///
 /// # Safety
 /// `module` must be a valid LLVM module.
-pub unsafe fn prepare_llvm_scope(module: LLVMModuleRef, options: &SanCovOptions) {
+pub unsafe fn prepare_llvm_scope(
+    module: LLVMModuleRef,
+    options: &SanCovOptions,
+) -> Result<(), String> {
     let excluded = options.excluded_scopes();
     let refs = |scopes: &[String]| {
         scopes
@@ -338,14 +346,20 @@ pub unsafe fn prepare_llvm_scope(module: LLVMModuleRef, options: &SanCovOptions)
     };
     let includes = refs(&options.include);
     let excludes = refs(&excluded);
-    unsafe {
+    let result = unsafe {
         sys::reussirPrepareCoverageLLVM(
             module.cast(),
             includes.as_ptr(),
             includes.len(),
             excludes.as_ptr(),
             excludes.len(),
-        );
+            c_int::from(!options.include.is_empty() || !options.exclude.is_empty()),
+        )
+    };
+    if result == 0 {
+        Err("coverage scope conflicts with resumed LLVM IR".into())
+    } else {
+        Ok(())
     }
 }
 

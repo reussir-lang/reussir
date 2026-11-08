@@ -177,7 +177,7 @@ pub(crate) fn backend_module<'c>(
         ..LoweringOptions::default()
     };
     if let Some(options) = sancov {
-        reussir_backend::sancov::prepare_module_scope(context, &mut module, options);
+        reussir_backend::sancov::prepare_module_scope(context, &mut module, options)?;
     }
     let optimize_ffi = !matches!(opt, OptLevel::None);
     tracing::debug!("gathering polymorphic FFI");

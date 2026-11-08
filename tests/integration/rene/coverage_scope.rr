@@ -1,0 +1,10 @@
+// UNSUPPORTED: windows
+// RUN: %rene build --manifest-path %S/coverage_scope/rene.ncl --build-dir %t.bdir --profile fuzz --bin noop %rrc_linker
+// RUN: mkdir -p %t.corpus
+// RUN: %python -c "open(r'%t.corpus/empty-vec', 'wb').write(bytes(16))"
+// RUN: %t.bdir/fuzz/noop %t.corpus -runs=10000 -seed=12345 2>&1 | %FileCheck %s
+// A valid empty-vector seed exercises the case before mutation starts. Neither
+// vector length nor values should add coverage or comparison features.
+// CHECK: INITED cov: [[COV:[0-9]+]] ft: [[FT:[0-9]+]] corp: 1/16b
+// CHECK-NOT: NEW
+// CHECK: DONE{{ *}}cov: [[COV]] ft: [[FT]] corp: 1/16b

@@ -360,7 +360,8 @@ unsafe extern "C" {
         include_count: usize,
         excludes: *const MlirStringRef,
         exclude_count: usize,
-    );
+        explicit_scopes: c_int,
+    ) -> c_int;
 
     /// Runs LLVM's `SanitizerCoveragePass` over `module` with `options` (call
     /// after `reussirRunBackendLLVMPipeline`).

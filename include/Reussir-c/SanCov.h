@@ -57,11 +57,11 @@ typedef struct ReussirSanCovOptions {
 } ReussirSanCovOptions;
 
 void reussirPrepareCoverage(MlirModule module);
-void reussirPrepareCoverageLLVM(LLVMModuleRef module,
-                                const MlirStringRef *includes,
-                                size_t includeCount,
-                                const MlirStringRef *excludes,
-                                size_t excludeCount);
+int reussirPrepareCoverageLLVM(LLVMModuleRef module,
+                               const MlirStringRef *includes,
+                               size_t includeCount,
+                               const MlirStringRef *excludes,
+                               size_t excludeCount, int explicitScopes);
 
 // Stamps fuzzing attributes (`optforfuzzing` and `no-builtin-*` string/memory
 // comparison exclusions, matching clang `-fsanitize=fuzzer-no-link`) onto every

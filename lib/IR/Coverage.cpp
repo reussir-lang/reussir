@@ -1,6 +1,7 @@
 #include "Reussir/IR/Coverage.h"
 
 #include <llvm/Demangle/Demangle.h>
+#include <llvm/Support/JSON.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/Builders.h>
@@ -41,6 +42,19 @@ void annotate(mlir::Operation *op, bool enabled, mlir::StringAttr origin) {
   attrs.push_back(
       builder.getArrayAttr({builder.getStringAttr("reussir-coverage"),
                             builder.getStringAttr(enabled ? "on" : "off")}));
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  auto strings = [&](llvm::StringRef attr) {
+    llvm::SmallVector<llvm::StringRef> values;
+    if (auto array = module->getAttrOfType<mlir::ArrayAttr>(attr))
+      for (auto value : array)
+        values.push_back(llvm::cast<mlir::StringAttr>(value).getValue());
+    return values;
+  };
+  attrs.push_back(
+      builder.getArrayAttr({builder.getStringAttr("reussir-coverage-policy"),
+                            builder.getStringAttr(coverageScopeKey(
+                                strings("reussir.coverage.include"),
+                                strings("reussir.coverage.exclude")))}));
   if (origin)
     attrs.push_back(builder.getArrayAttr(
         {builder.getStringAttr("reussir-coverage-origin"), origin}));
@@ -50,6 +64,16 @@ void annotate(mlir::Operation *op, bool enabled, mlir::StringAttr origin) {
   op->setAttr(name, builder.getArrayAttr(attrs));
 }
 } // namespace
+
+std::string coverageScopeKey(llvm::ArrayRef<llvm::StringRef> includes,
+                             llvm::ArrayRef<llvm::StringRef> excludes) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  os << llvm::json::Value(
+      llvm::json::Object{{"include", llvm::json::Array(includes)},
+                         {"exclude", llvm::json::Array(excludes)}});
+  return result;
+}
 
 bool coverageEnabled(mlir::Operation *op) {
   auto module = op->getParentOfType<mlir::ModuleOp>();

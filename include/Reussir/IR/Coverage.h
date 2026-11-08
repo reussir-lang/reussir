@@ -5,6 +5,8 @@
 
 namespace reussir {
 
+std::string coverageScopeKey(llvm::ArrayRef<llvm::StringRef> includes,
+                             llvm::ArrayRef<llvm::StringRef> excludes);
 bool coverageEnabled(mlir::Operation *op);
 bool sameCoverageScope(mlir::Operation *lhs, mlir::Operation *rhs);
 void prepareCoverage(mlir::ModuleOp module);

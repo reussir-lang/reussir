@@ -188,16 +188,16 @@ fn run(cli: &Cli) -> Result<bool, String> {
         }
     }
     let parsed_sancov = SanCovOptions::from_flags(&cli.sancov)?;
-    if parsed_sancov.is_some() && target <= Stage::MlirLlvm {
+    if parsed_sancov.is_some() && target < Stage::MlirLlvm {
         return Err(format!(
-            "--sancov instruments LLVM IR, but `{target}` stops before the LLVM pass \
-             pipeline; emit `llvm-ir` or a later stage"
+            "--sancov configures LLVM lowering, but `{target}` stops before it; \
+             emit `mlir-llvm` or a later stage"
         ));
     }
-    if cli.fuzzer && target <= Stage::MlirLlvm {
+    if cli.fuzzer && target < Stage::MlirLlvm {
         return Err(format!(
-            "--fuzzer instruments LLVM IR, but `{target}` stops before the LLVM pass \
-             pipeline; emit `llvm-ir` or a later stage"
+            "--fuzzer configures LLVM lowering, but `{target}` stops before it; \
+             emit `mlir-llvm` or a later stage"
         ));
     }
     let mut sancov = if cli.fuzzer {

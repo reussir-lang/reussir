@@ -3,6 +3,12 @@
 // RUN: %rrc %s --package-name scope --emit mir -o %t.mir
 // RUN: %rrc %t.mir --emit llvm-ir --fuzzer --sancov-exclude scope::harness -o %t.roundtrip.ll
 // RUN: %FileCheck %s < %t.roundtrip.ll
+// RUN: %rrc %s --package-name scope --emit mlir-llvm --fuzzer --sancov-exclude scope::harness -o %t.mlir
+// RUN: %rrc %t.mlir --emit llvm-ir --fuzzer -o %t.resumed.ll
+// RUN: %FileCheck %s < %t.resumed.ll
+// RUN: %not %rrc %t.mlir --emit llvm-ir --fuzzer --sancov-include scope -o %t.bad.ll 2>&1 | %FileCheck %s --check-prefix=CONFLICT
+// RUN: %not %rrc %t.ll --emit llvm-ir --fuzzer --sancov-include scope -o %t.bad.ll 2>&1 | %FileCheck %s --check-prefix=CONFLICT
+// CONFLICT: coverage scope conflicts with resumed
 //
 // CHECK-DAG: attributes #[[BODY:[0-9]+]] = { optforfuzzing {{.*}}"reussir-coverage"="on" "reussir-coverage-origin"="_RNvC5scope5drive"
 // CHECK-DAG: attributes #[[HARNESS:[0-9]+]] = { nosanitize_coverage "reussir-coverage"="off" "reussir-coverage-origin"="_RNvC5scope7harness"

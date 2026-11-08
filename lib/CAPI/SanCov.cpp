@@ -33,11 +33,11 @@ void reussirPrepareCoverage(MlirModule module) {
   reussir::prepareCoverage(unwrap(module));
 }
 
-void reussirPrepareCoverageLLVM(LLVMModuleRef module,
-                                const MlirStringRef *includes,
-                                size_t includeCount,
-                                const MlirStringRef *excludes,
-                                size_t excludeCount) {
+int reussirPrepareCoverageLLVM(LLVMModuleRef module,
+                               const MlirStringRef *includes,
+                               size_t includeCount,
+                               const MlirStringRef *excludes,
+                               size_t excludeCount, int explicitScopes) {
   auto matches = [](const MlirStringRef *scopes, size_t count,
                     llvm::StringRef name) {
     return llvm::any_of(
@@ -52,8 +52,25 @@ void reussirPrepareCoverageLLVM(LLVMModuleRef module,
       llvm::none_of(m, [](llvm::Function &f) {
         return f.hasFnAttribute("reussir-coverage");
       }))
-    return;
+    return 1;
+  auto strings = [](const MlirStringRef *scopes, size_t count) {
+    llvm::SmallVector<llvm::StringRef> values;
+    for (auto scope : llvm::ArrayRef(scopes, count))
+      values.push_back(unwrap(scope));
+    return values;
+  };
+  auto policy = reussir::coverageScopeKey(strings(includes, includeCount),
+                                          strings(excludes, excludeCount));
+  for (auto &f : m)
+    if (auto saved = f.getFnAttribute("reussir-coverage-policy");
+        saved.isValid()) {
+      if (explicitScopes && saved.getValueAsString() != policy)
+        return 0;
+      policy = saved.getValueAsString();
+      break;
+    }
   for (auto &f : m) {
+    f.addFnAttr("reussir-coverage-policy", policy);
     auto origin = f.getFnAttribute("reussir-coverage-origin");
     auto name = llvm::demangle(
         (origin.isValid() ? origin.getValueAsString() : f.getName()).str());
@@ -62,6 +79,7 @@ void reussirPrepareCoverageLLVM(LLVMModuleRef module,
                                    : (includeCount == 0 ||
                                       matches(includes, includeCount, name)) &&
                                          !matches(excludes, excludeCount, name);
+    f.addFnAttr("reussir-coverage", enabled ? "on" : "off");
     if (!enabled)
       f.addFnAttr(llvm::Attribute::NoSanitizeCoverage);
   }
@@ -78,6 +96,7 @@ void reussirPrepareCoverageLLVM(LLVMModuleRef module,
           }
         }
   }
+  return 1;
 }
 
 void reussirPrepareModuleForFuzzing(LLVMModuleRef module) {
