@@ -45,7 +45,7 @@ def ReussirSpecialPointerTagPass
 // ClosureBetaReduction
 //===----------------------------------------------------------------------===//
 def ReussirClosureBetaReductionPass
-    : Pass<"reussir-closure-beta-reduction", "::mlir::func::FuncOp"> {
+    : Pass<"reussir-closure-beta-reduction", "::mlir::ModuleOp"> {
   let summary = "beta-reduce closure apply/eval chains";
   let description = [{
     `reussir-closure-beta-reduction` walks each `closure.eval`'s operand up
@@ -63,6 +63,12 @@ def ReussirClosureBetaReductionPass
     into the arm that evaluates it, and a release of an unevaluated chain
     becomes the release of its captures.
 
+    A closure literal passed to a function that only retains, releases,
+    evaluates, or forwards it to its own recursive calls is specialized away:
+    the call goes to a private copy of the callee that takes the literal's
+    captures instead of the closure, with the literal's body spliced at each
+    evaluation.
+
     Runs after the inliner (so cross-function create→eval pairs are visible)
     and before token instantiation / closure outlining (bodies are still
     inline regions). Intended for aggressive optimization only: inlining
@@ -70,6 +76,11 @@ def ReussirClosureBetaReductionPass
     programmer wrote, which hurts debuggability.
   }];
   let dependentDialects = ["::reussir::ReussirDialect"];
+  let options =
+      [Option<"maxCalleeOps", "max-callee-ops", "unsigned", "512",
+              "Only specialize callees with at most this many operations.">,
+       Option<"maxCopiesPerCallee", "max-copies-per-callee", "unsigned", "8",
+              "Specialize each callee for at most this many literals.">];
 }
 
 //===----------------------------------------------------------------------===//

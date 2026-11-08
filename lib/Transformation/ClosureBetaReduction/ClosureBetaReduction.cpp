@@ -69,6 +69,12 @@
 ///    release of a fresh chain becomes the release of its captures. Both
 ///    expose the redexes an inlined `match` leaves behind.
 ///
+///  * SPECIALIZE: after the patterns reach a fixpoint, a closure literal
+///    passed to a function that only retains, releases, evaluates, or
+///    forwards it to its own recursive calls goes to a copy of the callee
+///    that takes the literal's captures instead; the patterns then run again
+///    over the spliced bodies.
+///
 /// Fused evals that bottom out anywhere else survive the pass; the SCF-ops
 /// lowering re-expands them into unchecked applies + plain eval, so the net
 /// effect of FOLD+STRIP on a chain the inliner merged is the removal of its
@@ -80,6 +86,7 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/Casting.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/IRMapping.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/LoopLikeInterface.h>
@@ -89,6 +96,8 @@
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/Transformation/Passes.h"
+#include "Reussir/Transformation/Specialization.h"
 
 namespace reussir {
 
@@ -232,7 +241,7 @@ bool capturesReleasable(llvm::ArrayRef<mlir::Value> caps) {
 // Releases the captures in payload order at the insertion point, in place of
 // `boxRelease`, as the box's drop would. Each release keeps the box release's
 // cleanup hooks, a superset of the hooks reachable through one capture.
-void releaseCaptures(mlir::PatternRewriter &rewriter, ReussirRcDecOp boxRelease,
+void releaseCaptures(mlir::OpBuilder &rewriter, ReussirRcDecOp boxRelease,
                      llvm::ArrayRef<mlir::Value> caps) {
   for (mlir::Value cap : caps)
     if (llvm::isa<RcType>(cap.getType()))
@@ -555,6 +564,195 @@ struct InlineStructurallyCarriedCreatePattern
   }
 };
 
+// SPECIALIZE: a closure literal passed to a function that only retains,
+// releases, evaluates, or forwards it to its own recursive calls, e.g.
+//
+//   fn ins(t: Tree, k: i64, cmp: (i64, i64) -> i64) -> Tree {
+//     ... cmp(k, kx) ... ins(l, k, cmp) ...
+//   }
+//   ins(t, k, |a, b| b - a)
+//
+// The call goes to a copy of the callee that takes the literal's captures in
+// place of the closure. A reference to the box stands for one owned copy of
+// every capture: retaining or releasing the parameter retains or releases
+// the captures, an eval splices the literal's body with the captures
+// prepended to its arguments, and a recursive call forwards the captures.
+// The box is never allocated and its evaluations become direct code.
+
+// Whether parameter `index` of `function` is used only as one immutable
+// closure value: retained once, released, evaluated (directly or through a
+// uniqify), or forwarded at the same position to a call of `function`.
+bool isClosureLiteralParameter(mlir::func::FuncOp function, unsigned index) {
+  mlir::BlockArgument param = function.getArgument(index);
+  if (isBorrowedArgument(param))
+    return false;
+  return llvm::all_of(param.getUses(), [&](mlir::OpOperand &use) {
+    mlir::Operation *user = use.getOwner();
+    if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(user))
+      return inc.isSingleAcquire();
+    if (isPlainRelease(user))
+      return true;
+    if (llvm::isa<ReussirClosureEvalOp>(user))
+      return use.getOperandNumber() == 0;
+    if (auto uniqify = llvm::dyn_cast<ReussirClosureUniqifyOp>(user)) {
+      mlir::Value unique = uniqify.getUniqified();
+      if (!unique.hasOneUse())
+        return false;
+      auto eval = llvm::dyn_cast<ReussirClosureEvalOp>(*unique.user_begin());
+      return eval && eval.getClosure() == unique;
+    }
+    if (auto call = llvm::dyn_cast<mlir::func::CallOp>(user))
+      return call.getCallee() == function.getSymName() &&
+             use.getOperandNumber() == index;
+    return false;
+  });
+}
+
+// Splices `create`'s body before the builder's insertion point with `args`
+// substituted for its parameters; returns the yielded value, if any.
+mlir::Value spliceBody(mlir::OpBuilder &builder, ReussirClosureCreateOp create,
+                       mlir::ValueRange args) {
+  mlir::Block &body = create.getBody().front();
+  mlir::IRMapping mapping;
+  mapping.map(body.getArguments(), args);
+  for (mlir::Operation &op : body.without_terminator())
+    builder.clone(op, mapping);
+  auto yield = llvm::cast<ReussirClosureYieldOp>(body.getTerminator());
+  return yield.getValue() ? mapping.lookupOrDefault(yield.getValue())
+                          : mlir::Value();
+}
+
+llvm::SmallVector<mlir::Value> replaceOperand(mlir::OperandRange operands,
+                                              unsigned index,
+                                              mlir::ValueRange replacement) {
+  llvm::SmallVector<mlir::Value> result(operands.take_front(index));
+  llvm::append_range(result, replacement);
+  llvm::append_range(result, operands.drop_front(index + 1));
+  return result;
+}
+
+// Rewrites parameter `index` of `spec`, a copy of the callee, into the
+// captures of `create`, whose types are `capTypes`.
+void rewriteClosureParameter(mlir::func::FuncOp spec, unsigned index,
+                             ReussirClosureCreateOp create,
+                             mlir::TypeRange capTypes) {
+  mlir::BlockArgument param = spec.getArgument(index);
+  llvm::SmallVector<unsigned> positions(capTypes.size(), index + 1);
+  llvm::SmallVector<mlir::DictionaryAttr> attrs(capTypes.size());
+  llvm::SmallVector<mlir::Location> locs(capTypes.size(), param.getLoc());
+  if (mlir::failed(spec.insertArguments(positions, capTypes, attrs, locs)))
+    llvm_unreachable("a function body accepts new arguments");
+  llvm::SmallVector<mlir::Value> caps(
+      spec.getArguments().slice(index + 1, capTypes.size()));
+
+  mlir::OpBuilder builder(spec.getContext());
+  for (mlir::Operation *user : llvm::to_vector(param.getUsers())) {
+    builder.setInsertionPoint(user);
+    if (llvm::isa<ReussirRcIncOp>(user)) {
+      for (mlir::Value cap : caps)
+        if (llvm::isa<RcType>(cap.getType()))
+          ReussirRcIncOp::create(builder, user->getLoc(), cap);
+      user->erase();
+    } else if (auto release = llvm::dyn_cast<ReussirRcDecOp>(user)) {
+      releaseCaptures(builder, release, caps);
+      user->erase();
+    } else if (auto call = llvm::dyn_cast<mlir::func::CallOp>(user)) {
+      auto direct = mlir::func::CallOp::create(
+          builder, call.getLoc(), spec,
+          replaceOperand(call.getOperands(), index, caps));
+      call.replaceAllUsesWith(direct.getResults());
+      call.erase();
+    } else {
+      mlir::Operation *uniqify =
+          llvm::isa<ReussirClosureUniqifyOp>(user) ? user : nullptr;
+      auto eval = llvm::cast<ReussirClosureEvalOp>(
+          uniqify ? *uniqify->user_begin() : user);
+      builder.setInsertionPoint(eval);
+      llvm::SmallVector<mlir::Value> args(caps);
+      llvm::append_range(args, eval.getArgs());
+      mlir::Value result = spliceBody(builder, create, args);
+      if (eval.getNumResults())
+        eval.getResult().replaceAllUsesWith(result);
+      eval.erase();
+      if (uniqify)
+        uniqify->erase();
+    }
+  }
+  if (mlir::failed(spec.eraseArgument(index)))
+    llvm_unreachable("the closure parameter has no uses left");
+}
+
+// Whether `function` holds at most `limit` operations.
+bool isSmallFunction(mlir::func::FuncOp function, unsigned limit) {
+  unsigned count = 0;
+  return !function
+              .walk([&](mlir::Operation *) {
+                return ++count > limit ? mlir::WalkResult::interrupt()
+                                       : mlir::WalkResult::advance();
+              })
+              .wasInterrupted();
+}
+
+// Specializes callees on the closure literals passed to them. Copies are
+// bounded per callee; a copy's own calls are visited in turn.
+void specializeClosureLiterals(mlir::ModuleOp module, unsigned maxCalleeOps,
+                               unsigned maxCopiesPerCallee) {
+  mlir::SymbolTable symbols(module);
+  llvm::DenseMap<mlir::Operation *, unsigned> copies;
+  llvm::SmallVector<mlir::func::CallOp> worklist;
+  module.walk([&](mlir::func::CallOp call) { worklist.push_back(call); });
+  while (!worklist.empty()) {
+    mlir::func::CallOp call = worklist.pop_back_val();
+    auto callee = symbols.lookup<mlir::func::FuncOp>(call.getCallee());
+    if (!callee || callee.isExternal() || callee == call->getParentOp() ||
+        copies[callee] >= maxCopiesPerCallee ||
+        !isSmallFunction(callee, maxCalleeOps))
+      continue;
+    for (auto [index, arg] : llvm::enumerate(call.getOperands())) {
+      auto rc = llvm::dyn_cast<RcType>(arg.getType());
+      if (!rc || !llvm::isa<ClosureType>(rc.getElementType()) ||
+          !arg.hasOneUse())
+        continue;
+      llvm::SmallVector<mlir::Operation *> chain;
+      llvm::SmallVector<mlir::Value> caps;
+      ReussirClosureCreateOp create = matchFreshChain(arg, chain, caps);
+      if (!create || !sameCoverageScope(create, callee) ||
+          !capturesReleasable(caps) ||
+          !isClosureLiteralParameter(callee, index))
+        continue;
+
+      mlir::func::FuncOp spec = clonePrivateSpecialization(
+          callee, (callee.getSymName() + ".closure").str(), symbols);
+      ++copies[callee];
+      rewriteClosureParameter(spec, index, create,
+                              mlir::ValueRange(caps).getTypes());
+      mlir::OpBuilder builder(call);
+      auto direct = mlir::func::CallOp::create(
+          builder, call.getLoc(), spec,
+          replaceOperand(call.getOperands(), index, caps));
+      call.replaceAllUsesWith(direct.getResults());
+      call.erase();
+      mlir::Value token = create.getToken();
+      // The literal's body goes away with it, and so do its calls.
+      llvm::SmallPtrSet<mlir::Operation *, 8> inBody;
+      create.walk([&](mlir::func::CallOp inner) { inBody.insert(inner); });
+      llvm::erase_if(worklist, [&](mlir::func::CallOp pending) {
+        return inBody.contains(pending);
+      });
+      for (mlir::Operation *op : llvm::reverse(chain))
+        op->erase();
+      if (token && token.use_empty())
+        token.getDefiningOp()->erase();
+      worklist.push_back(direct);
+      spec.walk([&](mlir::func::CallOp inner) {
+        if (inner.getCallee() != spec.getSymName())
+          worklist.push_back(inner);
+      });
+      break;
+    }
+  }
+}
+
 struct ClosureBetaReductionPass
     : public impl::ReussirClosureBetaReductionPassBase<
           ClosureBetaReductionPass> {
@@ -567,8 +765,12 @@ struct ClosureBetaReductionPass
                  InlineStructurallyCarriedCreatePattern,
                  DropFreshClosurePattern, SinkFreshClosurePattern>(
         &getContext());
-    if (mlir::failed(
-            mlir::applyPatternsGreedily(getOperation(), std::move(patterns))))
+    mlir::FrozenRewritePatternSet frozen(std::move(patterns));
+    if (mlir::failed(mlir::applyPatternsGreedily(getOperation(), frozen)))
+      return signalPassFailure();
+    specializeClosureLiterals(getOperation(), maxCalleeOps, maxCopiesPerCallee);
+    // Reduce the closures the spliced bodies create in turn.
+    if (mlir::failed(mlir::applyPatternsGreedily(getOperation(), frozen)))
       signalPassFailure();
   }
 };

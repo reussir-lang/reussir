@@ -9,6 +9,7 @@ add_mlir_library(MLIRReussirClosureBetaReduction
 
   LINK_LIBS PUBLIC
   MLIRReussir
+  MLIRReussirSpecialization
   MLIRFuncDialect
   MLIRPass
 )

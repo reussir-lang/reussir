@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s \
-// RUN:   --pass-pipeline='builtin.module(func.func(reussir-closure-beta-reduction))' \
+// RUN:   --pass-pipeline='builtin.module(reussir-closure-beta-reduction)' \
 // RUN: | %FileCheck %s
 
 // Regression test for issue #396. An identity closure yields one of its block
