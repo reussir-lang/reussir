@@ -28,7 +28,10 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/MemRef/IR/ValueBoundsOpInterfaceImpl.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -36,10 +39,12 @@
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/ValueRange.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
+#include <mlir/Interfaces/LoopLikeInterface.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
 #include "Reussir/Analysis/EquivalenceAnalysis.h"
+#include "Reussir/Analysis/TokenCompatibility.h"
 #include "Reussir/Conversion/AcquireDropExpansion.h"
 #include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
@@ -424,6 +429,20 @@ private:
     return type.getName() != nullptr;
   }
 
+  // A variant of unknown tag released on the unique path of an expanded
+  // decrement is left to the outlining phase. Expanding it dispatches over
+  // every arm, and a member release inside an arm is out of reach of both
+  // inc/dec cancellation (its block does not post-dominate the unique path)
+  // and token reuse (its token cannot leave the arm).
+  bool deferToOutlining(ReussirRefDropOp op, RecordType type) const {
+    if (outlineRecord || !type.isVariant() || op.getVariant() ||
+        op.getInlined())
+      return false;
+    auto branch = llvm::dyn_cast<mlir::scf::IfOp>(op->getParentOp());
+    return branch && branch->hasAttr(kExpandedDecrementAttr) &&
+           op->getParentRegion() == &branch.getThenRegion();
+  }
+
 public:
   DropExpansionPattern(mlir::MLIRContext *context, bool outlineRecord,
                        mlir::SymbolTableCollection *symbols,
@@ -466,6 +485,8 @@ public:
           return rewriteDropCell(cellType, op, rewriter);
         })
         .Case<RecordType>([&](RecordType recordType) {
+          if (deferToOutlining(op, recordType))
+            return mlir::failure();
           if (shouldOutline(op, recordType) &&
               recordType.classifyRecordDrop() == RecordDropKind::Worklist) {
             emitWorklistDrop(op.getRef(), op.getLoc(), rewriter, symbols, true);
@@ -645,6 +666,128 @@ static void forwardEquivalentLoads(mlir::func::FuncOp func) {
   }
 }
 
+// Whether token reuse could hand a token of `tokenType` from the box `rc`,
+// produced at `site`, to an acceptor: one in a later operation of its block
+// (nested regions included), before a loop or a call in tail position. Other
+// calls are crossed as under `reuse-across-call`, so the reach is never
+// underestimated.
+static bool mayReuseToken(mlir::Operation *site, TokenType tokenType,
+                          mlir::TypedValue<RcType> rc,
+                          EquivalenceAnalysis &equivalence,
+                          TokenSizeAnalysis &sizes) {
+  auto isFlush = [](mlir::Operation *op) {
+    if (auto loop = llvm::dyn_cast<mlir::LoopLikeOpInterface>(op))
+      return !loop.getLoopRegions().empty();
+    auto call = llvm::dyn_cast<mlir::func::CallOp>(op);
+    return call && isTailPositioned(op) &&
+           !call.getCallee().starts_with("core::intrinsic::");
+  };
+  for (mlir::Operation *op = site->getNextNode(); op; op = op->getNextNode()) {
+    if (isFlush(op))
+      return false;
+    mlir::WalkResult walk =
+        op->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *nested) {
+          if (nested != op && isFlush(nested))
+            return mlir::WalkResult::skip();
+          auto acceptor = llvm::dyn_cast<TokenAcceptor>(nested);
+          if (!acceptor || !acceptor.shouldAcceptToken() ||
+              !acceptor.getToken())
+            return mlir::WalkResult::advance();
+          auto alloc = acceptor.getToken().getDefiningOp<ReussirTokenAllocOp>();
+          if (alloc && alloc.getToken().hasOneUse() &&
+              scoreTokenForAcceptor(tokenType, rc, acceptor, equivalence,
+                                    sizes) >= 0)
+            return mlir::WalkResult::interrupt();
+          return mlir::WalkResult::advance();
+        });
+    if (walk.wasInterrupted())
+      return true;
+  }
+  return false;
+}
+
+// An expanded decrement whose unique path releases the box only through the
+// outlined drop glue (a variant of unknown tag, see `deferToOutlining`) adds
+// nothing to the outlined decrement but its token. When no acceptor within
+// the token's reach can take it, token reuse would only free it, so the
+// decrement keeps its condition and shared path but releases the box on its
+// unique path with a single call that drops the payload and frees the box.
+static void outlineUnreusedDecrements(mlir::func::FuncOp func,
+                                      mlir::SymbolTableCollection &symbols,
+                                      bool tailRecursiveDrops) {
+  llvm::SmallVector<mlir::scf::IfOp> candidates;
+  func.walk([&](mlir::scf::IfOp branch) {
+    if (!branch->hasAttr(kExpandedDecrementAttr) ||
+        branch.getNumResults() != 1 || !branch->getResult(0).use_empty())
+      return;
+    // A token yielded into an enclosing decrement can escape it.
+    if (auto parent = llvm::dyn_cast<mlir::scf::IfOp>(branch->getParentOp());
+        parent && parent->hasAttr(kExpandedDecrementAttr))
+      return;
+    candidates.push_back(branch);
+  });
+
+  EquivalenceAnalysis equivalence;
+  TokenSizeAnalysis sizes;
+  mlir::PatternRewriter rewriter(func.getContext());
+  for (mlir::scf::IfOp branch : candidates) {
+    // The unique path of a plain decrement: borrow, drop, and yield the box
+    // as the token.
+    mlir::Block &unique = branch.getThenRegion().front();
+    if (unique.getOperations().size() != 5)
+      continue;
+    auto it = unique.begin();
+    auto borrow = llvm::dyn_cast<ReussirRcBorrowOp>(*it++);
+    auto drop = llvm::dyn_cast<ReussirRefDropOp>(*it++);
+    auto reinterpret = llvm::dyn_cast<ReussirRcReinterpretOp>(*it);
+    if (!borrow || !drop || !reinterpret ||
+        drop.getRef() != borrow.getBorrowed() ||
+        reinterpret.getRcPtr() != borrow.getRcPtr())
+      continue;
+    auto record =
+        llvm::dyn_cast<RecordType>(drop.getRef().getType().getElementType());
+    // Only a payload the glue already drops through the worklist: the release
+    // runs on the same scheduler. One dropped by direct recursion keeps its
+    // destructor call, which is cheaper than scheduling the release.
+    if (!record || !record.isVariant() || drop.getVariant() ||
+        drop.getInlined() ||
+        record.classifyRecordDrop() != RecordDropKind::Worklist)
+      continue;
+    mlir::TypedValue<RcType> rc = borrow.getRcPtr();
+    auto tokenType = llvm::cast<TokenType>(
+        llvm::cast<NullableType>(branch->getResult(0).getType()).getPtrTy());
+    if (mayReuseToken(branch, tokenType, rc, equivalence, sizes))
+      continue;
+
+    bool run = !isInsideWorklistGlue(branch);
+    rewriter.setInsertionPoint(branch);
+    auto outlined = mlir::scf::IfOp::create(
+        rewriter, branch.getLoc(), mlir::TypeRange{}, branch.getCondition(),
+        /*addThenBlock=*/false, /*addElseBlock=*/false);
+    outlined->setAttrs(branch->getAttrs());
+    outlined.getThenRegion().takeBody(branch.getThenRegion());
+    outlined.getElseRegion().takeBody(branch.getElseRegion());
+    branch.erase();
+
+    mlir::Block &release = outlined.getThenRegion().front();
+    while (!release.empty())
+      release.back().erase();
+    rewriter.setInsertionPointToEnd(&release);
+    emitWorklistRelease(rc, outlined.getLoc(), rewriter, &symbols, run,
+                        tailRecursiveDrops);
+    mlir::scf::YieldOp::create(rewriter, outlined.getLoc());
+
+    mlir::Operation *sharedYield =
+        outlined.getElseRegion().front().getTerminator();
+    mlir::Operation *null = sharedYield->getOperand(0).getDefiningOp();
+    rewriter.setInsertionPoint(sharedYield);
+    mlir::scf::YieldOp::create(rewriter, sharedYield->getLoc());
+    sharedYield->erase();
+    if (null && null->use_empty())
+      null->erase();
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // AcquireDropExpansionPass
 //===----------------------------------------------------------------------===//
@@ -654,6 +797,15 @@ struct AcquireDropExpansionPass
     : public impl::ReussirAcquireDropExpansionPassBase<
           AcquireDropExpansionPass> {
   using Base::Base;
+
+  // Token reach queries compare allocation sizes through value bounds, as
+  // token reuse does.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    Base::getDependentDialects(registry);
+    mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
+    mlir::memref::registerValueBoundsOpInterfaceExternalModels(registry);
+  }
+
   void runOnOperation() override {
     auto module = llvm::cast<mlir::ModuleOp>(getOperation());
     if (mlir::failed(resolveDropOrder(module, dropOrder)))
@@ -667,6 +819,9 @@ struct AcquireDropExpansionPass
       if (mlir::failed(prepareWorklistDropBridges(module, rewriter, symbols)))
         return signalPassFailure();
     }
+    if (outlineRecord && expandDecrement)
+      for (auto func : module.getOps<mlir::func::FuncOp>())
+        outlineUnreusedDecrements(func, symbols, tailRecursiveDrops);
     mlir::RewritePatternSet patterns(&getContext());
     populateAcquireDropExpansionConversionPatterns(
         patterns, outlineRecord, &symbols, tailRecursiveDrops);

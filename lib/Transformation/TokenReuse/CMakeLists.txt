@@ -9,6 +9,7 @@ add_mlir_library(MLIRReussirTokenReuse
 
   LINK_LIBS PUBLIC
   MLIRReussir
+  MLIRReussirAnalysis
   MLIRIR
   MLIRPass
   MLIRArithValueBoundsOpInterfaceImpl
