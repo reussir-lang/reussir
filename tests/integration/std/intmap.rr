@@ -201,14 +201,14 @@ fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
 #[main]
 pub fn main() {
     test::runner::run_main(TestTree::group("intmap")
-        .with_case("basics", || basics())
-        .with_case("signed keys", || signed_keys())
-        .with_case("powers of two", || powers_of_two())
-        .with_case("churn", || test_churn())
-        .with_case("generic values", || generic_values())
+        .with_case("basics", basics)
+        .with_case("signed keys", signed_keys)
+        .with_case("powers of two", powers_of_two)
+        .with_case("churn", test_churn)
+        .with_case("generic values", generic_values)
         .with_fuzz(
             "model equivalence (fuzz)",
             list_of(tuple2(i64_domain(), i64_domain())),
-            |ops : List<(i64, i64)>| model_equivalence(ops)
+            model_equivalence
         ))
 }
