@@ -180,12 +180,12 @@ fn test_fifo(items : List<i32>) -> Outcome {
 #[main]
 pub fn main() {
     test::runner::run_main(TestTree::group("rtqueue")
-        .with_case("new", || test_new())
-        .with_case("snoc", || test_snoc())
-        .with_case("uncons", || test_uncons())
-        .with_case("persistence", || test_persistence())
-        .with_case("bulk rotation", || test_bulk_rotation())
-        .with_case("interleaved rotation", || test_interleaved_rotation())
-        .with_case("shared payload", || test_shared_payload())
-        .with_fuzz("fifo (fuzz)", list_of(i32_domain()), |items : List<i32>| test_fifo(items)))
+        .with_case("new", test_new)
+        .with_case("snoc", test_snoc)
+        .with_case("uncons", test_uncons)
+        .with_case("persistence", test_persistence)
+        .with_case("bulk rotation", test_bulk_rotation)
+        .with_case("interleaved rotation", test_interleaved_rotation)
+        .with_case("shared payload", test_shared_payload)
+        .with_fuzz("fifo (fuzz)", list_of(i32_domain()), test_fifo))
 }
