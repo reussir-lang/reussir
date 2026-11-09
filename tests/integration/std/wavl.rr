@@ -1,226 +1,51 @@
-// A downstream package instantiates the generic WAVL set and map. Cases
-// cover the public API, ascending iteration, persistence of shared trees,
-// the ordered queries (neighbours, windows, end removal), the set and map
-// algebra, a pseudorandom insert/remove churn cross-checked against a
-// sorted-list model, and the height bound that only a balanced tree keeps.
+// Dedicated coverage-guided fuzz driver and unit suite for the generic WAVL
+// set (`WavlSet`) and map (`WavlMap`).
+// Unit cases cover basic operations, ascending/descending iteration,
+// persistence, ordered neighbour/window queries, set/map algebra,
+// higher-order transforms, pseudorandom churn, and logarithmic rank balance.
+// Fuzz targets exercise arbitrary operation streams, neighbour/range queries,
+// algebra, and transforms against sorted-list reference models.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}wavl
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin wavl %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}wavl
 
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/set_basics.in | %FileCheck %s --check-prefix=SET
-// SET:      1
-// SET-NEXT: 1
-// SET-NEXT: 1
-// SET-NEXT: 1
-// SET-NEXT: 1
-// SET-NEXT: 1
-// SET-NEXT: 1
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/wavl%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/wavl%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/map_basics.in | %FileCheck %s --check-prefix=MAP
-// MAP:      1
-// MAP-NEXT: 1
-// MAP-NEXT: 1
-// MAP-NEXT: 1
-// MAP-NEXT: 1
-// MAP-NEXT: 1
-// MAP-NEXT: 1
-// MAP-NEXT: 1
+// CHECK:      wavl/set basics: unit
+// CHECK-NEXT: wavl/map basics: unit
+// CHECK-NEXT: wavl/set order: unit
+// CHECK-NEXT: wavl/map order: unit
+// CHECK-NEXT: wavl/churn: unit
+// CHECK-NEXT: wavl/set api: unit
+// CHECK-NEXT: wavl/set algebra: unit
+// CHECK-NEXT: wavl/set transforms: unit
+// CHECK-NEXT: wavl/map api: unit
+// CHECK-NEXT: wavl/map algebra: unit
+// CHECK-NEXT: wavl/map transforms: unit
+// CHECK-NEXT: wavl/balance: unit
+// CHECK-NEXT: wavl/set insert/remove/pop/take model & rank balance (fuzz):
+// CHECK-NEXT: wavl/set algebra, neighbours, range & transforms (fuzz):
+// CHECK-NEXT: wavl/map operations, model & rank balance (fuzz):
+// CHECK-NEXT: wavl/map algebra, neighbours, range & transforms (fuzz):
 
-// The ordering cases print observations, not booleans: an empty container
-// satisfies "is sorted" vacuously, so a boolean cannot distinguish a correct
-// traversal from one that yields nothing. The two lengths bracket the fold —
-// a defect that disturbs the tree while folding shows up as a second length
-// that disagrees with the first, and the log names which one is wrong.
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/set_order.in | %FileCheck %s --check-prefix=SETORD
-// elements iterated before the fold
-// SETORD:      7
-// the seven keys in ascending order, folded into one number
-// SETORD-NEXT: 1234789
-// elements iterated after the fold
-// SETORD-NEXT: 7
-// from_list(to_list(s)) round-trip size
-// SETORD-NEXT: 7
-// strictly ascending
-// SETORD-NEXT: 1
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/map_order.in | %FileCheck %s --check-prefix=MAPORD
-// entries iterated before the fold
-// MAPORD:      4
-// sum of key*100 + value over the four entries
-// MAPORD-NEXT: 2420
-// entries iterated after the fold
-// MAPORD-NEXT: 4
-// from_list(to_list(m)) round-trip, then get(9)
-// MAPORD-NEXT: 90
-// keys strictly ascending
-// MAPORD-NEXT: 1
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/churn.in | %FileCheck %s --check-prefix=CHURN
-// CHURN:      1
-// CHURN-NEXT: 1
-
-// The API cases print one boolean per group of related operations, so a
-// failure names the group. The one number in each is a count that a
-// vacuously-true boolean could otherwise hide.
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/set_api.in | %FileCheck %s --check-prefix=SETAPI
-// singleton, clear, get, take (hit), take (miss)
-// SETAPI:      1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// pop_min, pop_max, pop on an empty set
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// floor, ceiling, predecessor, successor
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// elements reported for the window [3, 8) over {1,3,5,7,9}
-// SETAPI-NEXT: 3
-// window membership, window ordering, degenerate and total windows
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-// SETAPI-NEXT: 1
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/set_algebra.in | %FileCheck %s --check-prefix=SETALG
-// union, intersection, difference, symmetric difference
-// SETALG:      1
-// SETALG-NEXT: 1
-// SETALG-NEXT: 1
-// SETALG-NEXT: 1
-// containment relations, disjointness, equality
-// SETALG-NEXT: 1
-// SETALG-NEXT: 1
-// SETALG-NEXT: 1
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/set_transforms.in | %FileCheck %s --check-prefix=SETTR
-// {1,2,3,4} folded left, then right: the two directions disagree on digit
-// order, which is exactly what distinguishes them
-// SETTR:      1234
-// SETTR-NEXT: 4321
-// elements in the descending traversal, and that it is descending
-// SETTR-NEXT: 4
-// SETTR-NEXT: 1
-// filter, map, predicates, find
-// SETTR-NEXT: 1
-// SETTR-NEXT: 1
-// SETTR-NEXT: 1
-// SETTR-NEXT: 1
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/map_api.in | %FileCheck %s --check-prefix=MAPAPI
-// singleton, clear, get_entry
-// MAPAPI:      1
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// insert_result (replaced, added), insert_with
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// remove_entry (removed, missing)
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// pop_min, pop_max, pop on an empty map
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// adjust, update, alter
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// floor, ceiling, predecessor, successor
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// entries reported for the window [3, 8) over keys {1,3,5,7,9}
-// MAPAPI-NEXT: 3
-// window contents, window ordering
-// MAPAPI-NEXT: 1
-// MAPAPI-NEXT: 1
-// the keys as digits, then the values summed — both in ascending key order
-// MAPAPI-NEXT: 13579
-// MAPAPI-NEXT: 250
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/map_algebra.in | %FileCheck %s --check-prefix=MAPALG
-// union, union_with, intersection, intersection_with, difference
-// MAPALG:      1
-// MAPALG-NEXT: 1
-// MAPALG-NEXT: 1
-// MAPALG-NEXT: 1
-// MAPALG-NEXT: 1
-// submaps, disjointness, equality and contains_value
-// MAPALG-NEXT: 1
-// MAPALG-NEXT: 1
-// MAPALG-NEXT: 1
-
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/map_transforms.in | %FileCheck %s --check-prefix=MAPTR
-// keys folded left, then right
-// MAPTR:      1234
-// MAPTR-NEXT: 4321
-// map_values, map_keys, map_entries
-// MAPTR-NEXT: 1
-// MAPTR-NEXT: 1
-// MAPTR-NEXT: 1
-// filter, filter_map
-// MAPTR-NEXT: 1
-// MAPTR-NEXT: 1
-// predicates, find, traversal order
-// MAPTR-NEXT: 1
-// MAPTR-NEXT: 1
-// MAPTR-NEXT: 1
-
-// Balance is the one property a behavioural test cannot see: a tree that
-// forgot to rebalance still answers every query correctly, just slowly.
-// The depths are printed rather than only bound-checked, so a rebalancing
-// regression that stays inside the bound is still visible in the log.
-// RUN: %std_rene_build/release/wavl%exe_ext < %S/Inputs/wavl/balance.in | %FileCheck %s --check-prefix=BAL
-// 2000 ascending inserts — the degenerate case for an unbalanced tree
-// BAL:      2000
-// BAL-NEXT: 11
-// within 2*log2(n)+1, and still sorted
-// BAL-NEXT: 1
-// BAL-NEXT: 1
-// after removing the 1000 even keys
-// BAL-NEXT: 1000
-// BAL-NEXT: 11
-// BAL-NEXT: 1
-// BAL-NEXT: 1
-// after 1000 pop_max instead, which drives the deletion mirror
-// BAL-NEXT: 1000
-// BAL-NEXT: 10
-// BAL-NEXT: 1
-// draining all 2000 from each end, in order
-// BAL-NEXT: 1
-// BAL-NEXT: 1
-// the same for the map, whose ranks are stored rather than parity-encoded
-// BAL-NEXT: 11
-// BAL-NEXT: 1
-// BAL-NEXT: 1
-
-// A downstream executable package exercises the generic WAVL set and map.
-// Each input selects one test case; case 5 churns pseudorandom
-// insert/remove sequences and checks membership against a sorted-list
-// model plus ascending iteration order.
-
-import std::option::Option;
-import std::collections::pure::wavlset::WavlSet;
-import std::collections::pure::wavlset::TakeResult;
-// Both containers name their end-removal result `PopResult`; the aliases keep
-// the two apart in this module, which uses them side by side.
-import std::collections::pure::wavlset::PopResult as SetPop;
-import std::collections::pure::wavlmap::WavlMap;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
 import std::collections::pure::wavlmap::Entry;
 import std::collections::pure::wavlmap::InsertResult;
-import std::collections::pure::wavlmap::RemoveResult;
 import std::collections::pure::wavlmap::PopResult as MapPop;
-import std::collections::pure::list::List;
-
-fn wb(v : bool) { test_utils::io::write_i32(if v { 1 } else { 0 }) }
-
-fn w(v : i64) { test_utils::io::write_i32(v as i32) }
+import std::collections::pure::wavlmap::RemoveResult;
+import std::collections::pure::wavlmap::WavlMap;
+import std::collections::pure::wavlset::PopResult as SetPop;
+import std::collections::pure::wavlset::TakeResult;
+import std::collections::pure::wavlset::WavlSet;
+import std::option::Option;
+import test::domain::i64_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::expect::expect;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
 
 fn list_len(l : List<i64>, acc : i64) -> i64 {
     match l {
@@ -240,40 +65,21 @@ fn lcg(seed : i64) -> i64 {
     (seed * 1103515245 + 12345) % 2147483648
 }
 
-fn test_set_basics() {
-    let s : WavlSet<i64> = WavlSet::new().insert(5).insert(1).insert(9).insert(5);
-    wb(s.len() == 3);
-    wb(s.contains(5) && s.contains(1) && s.contains(9) && !s.contains(2));
-    let removed = s.remove(5).remove(42);
-    wb(removed.len() == 2 && !removed.contains(5));
-    // the original set is unaffected
-    wb(s.contains(5));
-    wb(s.min().unwrap_or(0) == 1 && s.max().unwrap_or(0) == 9);
-    let empty : WavlSet<i64> = WavlSet::new();
-    wb(empty.is_empty());
-    let empty2 : WavlSet<i64> = WavlSet::new();
-    wb(empty2.min().is_none());
-}
-
-fn test_map_basics() {
-    let m : WavlMap<i64, i64> = WavlMap::new().insert(3, 30).insert(1, 10).insert(3, 33);
-    wb(m.len() == 2);
-    wb(m.get(3 as i64).unwrap_or(0) == 33);
-    wb(m.get(1 as i64).unwrap_or(0) == 10);
-    wb(m.get(9 as i64).is_none());
-    let removed = m.remove(1 as i64);
-    wb(removed.len() == 1 && !removed.contains_key(1 as i64));
-    wb(m.contains_key(1 as i64));
-    wb(match m.min() { Option::Some(e) => e.key == 1, Option::None => false });
-    wb(match m.max() { Option::Some(e) => e.key == 3, Option::None => false });
-}
-
 fn sorted_strict(l : List<i64>) -> bool {
     match l {
         List::Nil => true,
         List::Cons(_, List::Nil) => true,
         List::Cons(a, List::Cons(b, rest)) =>
             a < b && sorted_strict(List::Cons { b, rest })
+    }
+}
+
+fn sorted_desc_strict(l : List<i64>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a > b && sorted_desc_strict(List::Cons { b, rest })
     }
 }
 
@@ -286,39 +92,22 @@ fn keys_sorted(l : List<Entry<i64, i64>>) -> bool {
     }
 }
 
-// The ordering cases print their observations rather than collapsing each to
-// a boolean. Two reasons, both learned the hard way from this file:
-//
-//   - `sorted_strict` is vacuously true on an empty list, so a container that
-//     silently yields nothing passes the ordering check. A printed length
-//     cannot hide that.
-//   - a boolean names no value, so a failure says only "something in this
-//     block is wrong". Printing each observation makes the log say which.
-//
-// The two traversals bracket the fold deliberately: `fold_left` walks the
-// tree while `to_list` materializes it, and a bug that disturbs the tree
-// during the fold shows up as a second length that disagrees with the first.
-fn test_set_order() {
-    let s = WavlSet::new().insert(4 as i64).insert(2).insert(9).insert(7)
-        .insert(1).insert(8).insert(3);
-    w(list_len(s.to_list(), 0));                  // before any fold
-    w(s.fold_left(0, |acc, x| acc * 10 + x));
-    w(list_len(s.to_list(), 0));                  // after the fold
-    w(WavlSet::from_list(s.to_list()).len() as i64);
-    wb(sorted_strict(s.to_list()));
+fn keys_sorted_desc(l : List<Entry<i64, i64>>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a.key > b.key && keys_sorted_desc(List::Cons { b, rest })
+    }
 }
 
-fn test_map_order() {
-    let m = WavlMap::new().insert(4 as i64, 40 as i64).insert(2, 20)
-        .insert(9, 90).insert(7, 70);
-    w(entry_list_len(m.to_list(), 0));            // before any fold
-    w(m.fold_left(0, |acc, k, v| acc + k * 100 + v));
-    w(entry_list_len(m.to_list(), 0));            // after the fold
-    w(WavlMap::from_list(m.to_list()).get(9 as i64).unwrap_or(0));
-    wb(keys_sorted(m.to_list()));
+fn model_contains(l : List<i64>, x : i64) -> bool {
+    match l {
+        List::Nil => false,
+        List::Cons(h, t) => h == x || (h < x && model_contains(t, x))
+    }
 }
 
-// Sorted-list reference model for the churn case.
 fn model_insert(l : List<i64>, x : i64) -> List<i64> {
     match l {
         List::Nil => List::Cons { x, List::Nil },
@@ -344,6 +133,36 @@ fn model_remove(l : List<i64>, x : i64) -> List<i64> {
     }
 }
 
+fn model_min(l : List<i64>) -> Option<i64> {
+    match l {
+        List::Nil => Option::None,
+        List::Cons(h, _) => Option::Some { h }
+    }
+}
+
+fn model_max(l : List<i64>) -> Option<i64> {
+    match l {
+        List::Nil => Option::None,
+        List::Cons(h, List::Nil) => Option::Some { h },
+        List::Cons(_, t) => model_max(t)
+    }
+}
+
+fn model_pop_min(l : List<i64>) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(_, t) => t
+    }
+}
+
+fn model_pop_max(l : List<i64>) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(_, List::Nil) => List::Nil,
+        List::Cons(h, t) => List::Cons { h, model_pop_max(t) }
+    }
+}
+
 fn model_equal(a : List<i64>, b : List<i64>) -> bool {
     match a {
         List::Nil => b.is_nil(),
@@ -352,6 +171,151 @@ fn model_equal(a : List<i64>, b : List<i64>) -> bool {
             List::Cons(h2, t2) => h == h2 && model_equal(t, t2)
         }
     }
+}
+
+fn model_fold_left(l : List<i64>, acc : i64) -> i64 {
+    match l {
+        List::Nil => acc,
+        List::Cons(h, t) => model_fold_left(t, acc * 31 + h)
+    }
+}
+
+fn model_fold_right(l : List<i64>, acc : i64) -> i64 {
+    match l {
+        List::Nil => acc,
+        List::Cons(h, t) => model_fold_right(t, acc) * 31 + h
+    }
+}
+
+// Sorted-entry-list reference model for WavlMap.
+fn entry_model_get(l : List<Entry<i64, i64>>, k : i64) -> Option<i64> {
+    match l {
+        List::Nil => Option::None,
+        List::Cons(e, t) => {
+            if e.key == k {
+                Option::Some { e.value }
+            } else {
+                if e.key < k {
+                    entry_model_get(t, k)
+                } else {
+                    Option::None
+                }
+            }
+        }
+    }
+}
+
+fn entry_model_insert(
+    l : List<Entry<i64, i64>>,
+    k : i64,
+    v : i64
+) -> List<Entry<i64, i64>> {
+    match l {
+        List::Nil => List::Cons { Entry { key: k, value: v }, List::Nil },
+        List::Cons(e, t) => {
+            if k < e.key {
+                List::Cons { Entry { key: k, value: v }, List::Cons { e, t } }
+            } else {
+                if k == e.key {
+                    List::Cons { Entry { key: k, value: v }, t }
+                } else {
+                    List::Cons { e, entry_model_insert(t, k, v) }
+                }
+            }
+        }
+    }
+}
+
+fn entry_model_remove(
+    l : List<Entry<i64, i64>>,
+    k : i64
+) -> List<Entry<i64, i64>> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(e, t) =>
+            if e.key == k { t } else { List::Cons { e, entry_model_remove(t, k) } }
+    }
+}
+
+fn entry_model_min(l : List<Entry<i64, i64>>) -> Option<Entry<i64, i64>> {
+    match l {
+        List::Nil => Option::None,
+        List::Cons(e, _) => Option::Some { e }
+    }
+}
+
+fn entry_model_max(l : List<Entry<i64, i64>>) -> Option<Entry<i64, i64>> {
+    match l {
+        List::Nil => Option::None,
+        List::Cons(e, List::Nil) => Option::Some { e },
+        List::Cons(_, t) => entry_model_max(t)
+    }
+}
+
+fn entry_model_pop_min(l : List<Entry<i64, i64>>) -> List<Entry<i64, i64>> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(_, t) => t
+    }
+}
+
+fn entry_model_pop_max(l : List<Entry<i64, i64>>) -> List<Entry<i64, i64>> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(_, List::Nil) => List::Nil,
+        List::Cons(e, t) => List::Cons { e, entry_model_pop_max(t) }
+    }
+}
+
+fn entry_list_equal(
+    a : List<Entry<i64, i64>>,
+    b : List<Entry<i64, i64>>
+) -> bool {
+    match a {
+        List::Nil => b.is_nil(),
+        List::Cons(e1, t1) => match b {
+            List::Nil => false,
+            List::Cons(e2, t2) =>
+                e1.key == e2.key && e1.value == e2.value && entry_list_equal(t1, t2)
+        }
+    }
+}
+
+fn entry_model_keys(l : List<Entry<i64, i64>>) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(e, t) => List::Cons { e.key, entry_model_keys(t) }
+    }
+}
+
+fn entry_model_values(l : List<Entry<i64, i64>>) -> List<i64> {
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(e, t) => List::Cons { e.value, entry_model_values(t) }
+    }
+}
+
+fn entry_model_fold_left(l : List<Entry<i64, i64>>, acc : i64) -> i64 {
+    match l {
+        List::Nil => acc,
+        List::Cons(e, t) => entry_model_fold_left(t, acc * 31 + e.key * 7 + e.value)
+    }
+}
+
+fn entry_model_fold_right(l : List<Entry<i64, i64>>, acc : i64) -> i64 {
+    match l {
+        List::Nil => acc,
+        List::Cons(e, t) =>
+            entry_model_fold_right(t, acc) * 31 + e.key * 7 + e.value
+    }
+}
+
+fn log2_ceil(n : u64, acc : u64) -> u64 {
+    if n <= 1 { acc } else { log2_ceil((n + 1) / 2, acc + 1) }
+}
+
+fn balanced(depth : u64, size : u64) -> bool {
+    depth <= 2 * log2_ceil(size, 0) + 1
 }
 
 fn churn(
@@ -373,121 +337,10 @@ fn churn(
     }
 }
 
-fn test_churn() {
-    wb(churn(3000, 7, WavlSet::new(), List::Nil));
-    wb(churn(3000, 99, WavlSet::new(), List::Nil));
-}
-
-// {1, 3, 5, ..., 2n-1}: an odd-only set, so every even probe is a miss and
-// the neighbour queries have to interpolate rather than land on a key.
 fn odds(n : i64, acc : WavlSet<i64>) -> WavlSet<i64> {
     if n == 0 { acc } else { odds(n - 1, acc.insert(2 * n - 1)) }
 }
 
-fn test_set_api() {
-    let s = odds(5, WavlSet::new());
-    let one : WavlSet<i64> = WavlSet::singleton(4);
-    wb(one.len() == 1 && one.contains(4) && !one.contains(5));
-    // clearing yields a new empty set and leaves the original intact
-    wb(s.clear().is_empty() && s.len() == 5);
-    wb(match s.get(3) { Option::Some(v) => v == 3, Option::None => false }
-        && s.get(4).is_none());
-    wb(match s.take(3) {
-        TakeResult::Taken(v, rest) =>
-            v == 3 && rest.len() == 4 && !rest.contains(3),
-        TakeResult::Missing(_) => false
-    });
-    wb(match s.take(4) {
-        TakeResult::Missing(same) => same.len() == 5 && same.contains(3),
-        TakeResult::Taken(_, _) => false
-    });
-    wb(match s.pop_min() {
-        SetPop::Popped(v, rest) =>
-            v == 1 && rest.len() == 4 && rest.min().unwrap_or(0) == 3,
-        SetPop::Empty(_) => false
-    });
-    wb(match s.pop_max() {
-        SetPop::Popped(v, rest) =>
-            v == 9 && rest.len() == 4 && rest.max().unwrap_or(0) == 7,
-        SetPop::Empty(_) => false
-    });
-    let drained : WavlSet<i64> = WavlSet::new();
-    wb(match drained.pop_min() {
-        SetPop::Empty(same) => same.is_empty(),
-        SetPop::Popped(_, _) => false
-    });
-    // neighbours: a hit, a miss between two keys, and both ends
-    wb(s.floor(4).unwrap_or(0) == 3 && s.floor(5).unwrap_or(0) == 5
-        && s.floor(0).is_none() && s.floor(10).unwrap_or(0) == 9);
-    wb(s.ceiling(4).unwrap_or(0) == 5 && s.ceiling(5).unwrap_or(0) == 5
-        && s.ceiling(10).is_none() && s.ceiling(0).unwrap_or(0) == 1);
-    wb(s.predecessor(5).unwrap_or(0) == 3 && s.predecessor(4).unwrap_or(0) == 3
-        && s.predecessor(1).is_none());
-    wb(s.successor(5).unwrap_or(0) == 7 && s.successor(4).unwrap_or(0) == 5
-        && s.successor(9).is_none());
-    // [low, high): 3 and 5 and 7 are in, 9 is not
-    let window = s.range(3, 8);
-    w(list_len(s.range_to_list(3, 8), 0));
-    wb(window.len() == 3 && window.contains(3) && window.contains(5)
-        && window.contains(7) && !window.contains(1) && !window.contains(9));
-    wb(sorted_strict(s.range_to_list(3, 8)));
-    wb(s.range(2, 2).is_empty() && s.range(0, 100).len() == 5);
-}
-
-fn test_set_algebra() {
-    let left : WavlSet<i64> = WavlSet::new().insert(1).insert(2).insert(3);
-    let right : WavlSet<i64> = WavlSet::new().insert(3).insert(4);
-    let union = left.union(right);
-    let intersection = left.intersection(right);
-    let difference = left.difference(right);
-    let symmetric = left.symmetric_difference(right);
-    let subset : WavlSet<i64> = WavlSet::new().insert(1).insert(3);
-    let equal : WavlSet<i64> = WavlSet::new().insert(3).insert(2).insert(1);
-    let disjoint : WavlSet<i64> = WavlSet::new().insert(8).insert(9);
-    wb(union.len() == 4 && union.contains(1) && union.contains(4)
-        && sorted_strict(union.to_list()));
-    wb(intersection.len() == 1 && intersection.contains(3));
-    wb(difference.len() == 2 && difference.contains(1)
-        && difference.contains(2) && !difference.contains(3));
-    wb(symmetric.len() == 3 && symmetric.contains(1) && symmetric.contains(2)
-        && symmetric.contains(4) && !symmetric.contains(3));
-    wb(subset.is_subset(left) && left.is_superset(subset)
-        && subset.is_proper_subset(left) && left.is_proper_superset(subset)
-        && !left.is_proper_subset(equal));
-    wb(left.is_disjoint(disjoint) && !left.is_disjoint(right));
-    wb(left.equals(equal) && left == equal && left != right);
-}
-
-fn sorted_desc_strict(l : List<i64>) -> bool {
-    match l {
-        List::Nil => true,
-        List::Cons(_, List::Nil) => true,
-        List::Cons(a, List::Cons(b, rest)) =>
-            a > b && sorted_desc_strict(List::Cons { b, rest })
-    }
-}
-
-fn test_set_transforms() {
-    let s : WavlSet<i64> = WavlSet::new().insert(1).insert(2).insert(3)
-        .insert(4).insert(2);
-    let evens = s.filter(|v| v % 2 == 0);
-    let parity = s.map(|v| v % 2);
-    // fold_right sees the elements from the greatest down, so the digits
-    // land in the opposite order from fold_left's
-    w(s.fold_left(0, |acc, v| acc * 10 + v));
-    w(s.fold_right(0, |v, acc| acc * 10 + v));
-    w(list_len(s.to_list_desc(), 0));
-    wb(sorted_desc_strict(s.to_list_desc()));
-    wb(evens.len() == 2 && evens.contains(2) && evens.contains(4));
-    wb(parity.len() == 2 && parity.contains(0) && parity.contains(1));
-    wb(s.count_if(|v| v >= 3) == 2 && s.any(|v| v == 4) && !s.any(|v| v == 9)
-        && s.all(|v| v > 0) && !s.all(|v| v > 1));
-    // the least match, not an arbitrary one
-    wb(s.find(|v| v % 2 == 0).unwrap_or(0) == 2
-        && s.find(|v| v > 10).is_none());
-}
-
-// A map of {1: 10, 3: 30, 5: 50, 7: 70, 9: 90}.
 fn odd_map(n : i64, acc : WavlMap<i64, i64>) -> WavlMap<i64, i64> {
     if n == 0 {
         acc
@@ -501,151 +354,6 @@ fn entry_is(entry : Option<Entry<i64, i64>>, key : i64, value : i64) -> bool {
         Option::Some(e) => e.key == key && e.value == value,
         Option::None => false
     }
-}
-
-fn test_map_api() {
-    let m = odd_map(5, WavlMap::new());
-    let one : WavlMap<i64, i64> = WavlMap::singleton(4, 40);
-    wb(one.len() == 1 && one.get(4 as i64).unwrap_or(0) == 40);
-    wb(m.clear().is_empty() && m.len() == 5);
-    wb(entry_is(m.get_entry(3 as i64), 3, 30) && m.get_entry(4 as i64).is_none());
-    wb(match m.insert_result(3 as i64, 33) {
-        InsertResult::Replaced(previous, next) =>
-            previous == 30 && next.get(3 as i64).unwrap_or(0) == 33
-                && next.len() == 5,
-        InsertResult::Added(_) => false
-    });
-    wb(match m.insert_result(4 as i64, 40) {
-        InsertResult::Added(next) => next.len() == 6 && next.contains_key(4 as i64),
-        InsertResult::Replaced(_, _) => false
-    });
-    // combine receives the stored value first
-    wb(m.insert_with(3, 5, |current, incoming| current - incoming)
-            .get(3 as i64).unwrap_or(0) == 25
-        && m.insert_with(4, 5, |current, incoming| current - incoming)
-            .get(4 as i64).unwrap_or(0) == 5);
-    wb(match m.remove_entry(3 as i64) {
-        RemoveResult::Removed(entry, rest) =>
-            entry.key == 3 && entry.value == 30 && rest.len() == 4,
-        RemoveResult::Missing(_) => false
-    });
-    wb(match m.remove_entry(4 as i64) {
-        RemoveResult::Missing(same) => same.len() == 5,
-        RemoveResult::Removed(_, _) => false
-    });
-    wb(match m.pop_min() {
-        MapPop::Popped(entry, rest) =>
-            entry.key == 1 && entry.value == 10 && rest.len() == 4,
-        MapPop::Empty(_) => false
-    });
-    wb(match m.pop_max() {
-        MapPop::Popped(entry, rest) =>
-            entry.key == 9 && entry.value == 90 && rest.len() == 4,
-        MapPop::Empty(_) => false
-    });
-    let drained : WavlMap<i64, i64> = WavlMap::new();
-    wb(match drained.pop_max() {
-        MapPop::Empty(same) => same.is_empty(),
-        MapPop::Popped(_, _) => false
-    });
-    // adjust and update leave a missing key alone; alter can create one
-    wb(m.adjust(3, |v| v + 1).get(3 as i64).unwrap_or(0) == 31
-        && m.adjust(4, |v| v + 1).len() == 5);
-    wb(m.update(3, |v| Option::Some { v + 2 }).get(3 as i64).unwrap_or(0) == 32
-        && m.update(3, |ignored| Option::None).len() == 4
-        && m.update(4, |v| Option::Some { v }).len() == 5);
-    wb(m.alter(4, |slot| match slot {
-            Option::Some(v) => Option::Some { v },
-            Option::None => Option::Some { 44 }
-        }).get(4 as i64).unwrap_or(0) == 44
-        && m.alter(3, |ignored| Option::None).len() == 4);
-    wb(entry_is(m.floor_entry(4 as i64), 3, 30)
-        && entry_is(m.floor_entry(5 as i64), 5, 50)
-        && m.floor_entry(0 as i64).is_none());
-    wb(entry_is(m.ceiling_entry(4 as i64), 5, 50)
-        && entry_is(m.ceiling_entry(5 as i64), 5, 50)
-        && m.ceiling_entry(10 as i64).is_none());
-    wb(entry_is(m.predecessor_entry(5 as i64), 3, 30)
-        && m.predecessor_entry(1 as i64).is_none());
-    wb(entry_is(m.successor_entry(5 as i64), 7, 70)
-        && m.successor_entry(9 as i64).is_none());
-    let window = m.range(3, 8);
-    w(entry_list_len(m.range_to_list(3, 8), 0));
-    wb(window.len() == 3 && window.get(3 as i64).unwrap_or(0) == 30
-        && window.get(7 as i64).unwrap_or(0) == 70
-        && !window.contains_key(9 as i64));
-    wb(keys_sorted(m.range_to_list(3, 8)));
-    // keys and values are both in ascending key order, so they line up
-    w(m.keys().fold_left(0, |acc, k| acc * 10 + k));
-    w(m.values().fold_left(0, |acc, v| acc + v));
-}
-
-fn test_map_algebra() {
-    let left : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(2, 20)
-        .insert(3, 30);
-    let right : WavlMap<i64, i64> = WavlMap::new().insert(3, 300).insert(4, 400);
-    let union = left.union(right);
-    let combined = left.union_with(right, |mine, theirs| mine + theirs);
-    let intersection = left.intersection(right);
-    let scaled = left.intersection_with(right, |mine, theirs| mine + theirs);
-    let difference = left.difference(right);
-    let submap : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(3, 30);
-    let equal : WavlMap<i64, i64> = WavlMap::new().insert(3, 30).insert(2, 20)
-        .insert(1, 10);
-    let disjoint : WavlMap<i64, i64> = WavlMap::new().insert(8, 80);
-    // the right-hand value wins a plain union
-    wb(union.len() == 4 && union.get(3 as i64).unwrap_or(0) == 300
-        && union.get(4 as i64).unwrap_or(0) == 400
-        && keys_sorted(union.to_list()));
-    wb(combined.len() == 4 && combined.get(3 as i64).unwrap_or(0) == 330
-        && combined.get(1 as i64).unwrap_or(0) == 10);
-    wb(intersection.len() == 1 && intersection.get(3 as i64).unwrap_or(0) == 30);
-    wb(scaled.len() == 1 && scaled.get(3 as i64).unwrap_or(0) == 330);
-    wb(difference.len() == 2 && difference.contains_key(1 as i64)
-        && !difference.contains_key(3 as i64));
-    wb(submap.is_submap(left) && submap.is_proper_submap(left)
-        && !left.is_submap(submap)
-        && submap.is_submap_by(left, |mine, theirs| mine <= theirs));
-    wb(left.is_disjoint(disjoint) && !left.is_disjoint(right));
-    wb(left.equals(equal) && left == equal && left != right
-        && left.contains_value(20) && !left.contains_value(99));
-}
-
-fn test_map_transforms() {
-    let m : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(2, 20)
-        .insert(3, 30).insert(4, 40);
-    let doubled = m.map_values(|v| v * 2);
-    let shifted = m.map_keys(|k| k + 10);
-    let swapped = m.map_entries(|k, v| Entry { key: v, value: k });
-    let evens = m.filter(|k, ignored| k % 2 == 0);
-    let picked = m.filter_map(|k, v| {
-        if k >= 3 { Option::Some { v + 1 } } else { Option::None }
-    });
-    w(m.fold_left(0, |acc, k, ignored| acc * 10 + k));
-    w(m.fold_right(0, |k, ignored, acc| acc * 10 + k));
-    wb(doubled.len() == 4 && doubled.get(3 as i64).unwrap_or(0) == 60);
-    wb(shifted.len() == 4 && shifted.get(13 as i64).unwrap_or(0) == 30
-        && !shifted.contains_key(3 as i64));
-    wb(swapped.len() == 4 && swapped.get(30 as i64).unwrap_or(0) == 3);
-    wb(evens.len() == 2 && evens.contains_key(2 as i64)
-        && !evens.contains_key(1 as i64));
-    wb(picked.len() == 2 && picked.get(3 as i64).unwrap_or(0) == 31
-        && !picked.contains_key(2 as i64));
-    wb(m.count_if(|k, ignored| k >= 3) == 2 && m.any(|ignored, v| v == 40)
-        && m.all(|k, v| v == k * 10) && !m.all(|k, ignored| k > 1));
-    wb(entry_is(m.find(|k, ignored| k % 2 == 0), 2, 20)
-        && m.find(|k, ignored| k > 10).is_none());
-    wb(keys_sorted(m.to_list()) && entry_list_len(m.to_list_desc(), 0) == 4);
-}
-
-// The smallest k with 2^k >= n, so `2 * log2_ceil(n) + 1` is never below the
-// WAVL height bound of 2·log2(n) edges and the assertion cannot false-fail.
-fn log2_ceil(n : u64, acc : u64) -> u64 {
-    if n <= 1 { acc } else { log2_ceil((n + 1) / 2, acc + 1) }
-}
-
-fn balanced(depth : u64, size : u64) -> bool {
-    depth <= 2 * log2_ceil(size, 0) + 1
 }
 
 fn insert_up(next : i64, end : i64, acc : WavlSet<i64>) -> WavlSet<i64> {
@@ -702,51 +410,864 @@ fn pop_map_all(m : WavlMap<i64, i64>, expected : i64) -> bool {
     }
 }
 
-// Ascending insertion is the worst case for an unbalanced search tree: it
-// degenerates into a list. The printed depths are the observation — a
-// regression in the rebalancing shows up there long before the boolean
-// bound trips.
-fn test_balance() {
-    let ascending = insert_up(1, 2001, WavlSet::new());
-    w(ascending.len() as i64);
-    w(ascending.depth() as i64);
-    wb(balanced(ascending.depth(), ascending.len()));
-    wb(sorted_strict(ascending.to_list()));
-    let thinned = remove_evens(2, 2001, ascending);
-    w(thinned.len() as i64);
-    w(thinned.depth() as i64);
-    wb(balanced(thinned.depth(), thinned.len()));
-    wb(sorted_strict(thinned.to_list()));
-    // popping 1000 times off the top exercises the deletion mirror
-    let halved = pop_max_n(ascending, 1000);
-    w(halved.len() as i64);
-    w(halved.depth() as i64);
-    wb(balanced(halved.depth(), halved.len())
-        && halved.max().unwrap_or(0) == 1000
-        && sorted_strict(halved.to_list()));
-    wb(pop_min_all(ascending, 1));
-    wb(pop_max_all(ascending, 2000));
-    let mapped = map_up(1, 2001, WavlMap::new());
-    w(mapped.depth() as i64);
-    wb(balanced(mapped.depth(), mapped.len()));
-    wb(pop_map_all(mapped, 1));
-}
-
-#[main]
-pub fn main() {
-    match test_utils::io::read_i32() {
-        1 => test_set_basics(),
-        2 => test_map_basics(),
-        3 => test_set_order(),
-        4 => test_map_order(),
-        5 => test_churn(),
-        6 => test_set_api(),
-        7 => test_set_algebra(),
-        8 => test_set_transforms(),
-        9 => test_map_api(),
-        10 => test_map_algebra(),
-        11 => test_map_transforms(),
-        12 => test_balance(),
-        _ => core::intrinsic::panic::panic()
+// Fuzz helper 1: apply arbitrary WavlSet operations and cross-check against a
+// sorted-list model.
+fn apply_set_ops(
+    ops : Vec<i64>,
+    idx : u64,
+    set : WavlSet<i64>,
+    model : List<i64>
+) -> bool {
+    if idx >= ops.len() {
+        let asc = set.to_list();
+        let desc = set.to_list_desc();
+        let min_ok = match set.min() {
+            Option::Some(v) => match model_min(model) {
+                Option::Some(mv) => v == mv,
+                Option::None => false
+            },
+            Option::None => model_min(model).is_none()
+        };
+        let max_ok = match set.max() {
+            Option::Some(v) => match model_max(model) {
+                Option::Some(mv) => v == mv,
+                Option::None => false
+            },
+            Option::None => model_max(model).is_none()
+        };
+        set.len() == (list_len(model, 0) as u64)
+            && set.is_empty() == model.is_nil()
+            && balanced(set.depth(), set.len())
+            && sorted_strict(asc)
+            && sorted_desc_strict(desc)
+            && model_equal(set.to_list(), model)
+            && WavlSet::from_list(set.to_list()) == set
+            && min_ok
+            && max_ok
+            && set.fold_left(0, |acc, x| acc * 31 + x) == model_fold_left(model, 0)
+            && set.fold_right(0, |x, acc| acc * 31 + x) == model_fold_right(model, 0)
+    } else {
+        let op = ops.get(idx).unwrap_or(0);
+        if op >= 0 {
+            let k = op % 32;
+            apply_set_ops(ops, idx + 1, set.insert(k), model_insert(model, k))
+        } else {
+            let tag = (0 - op) % 5;
+            let k = ((0 - op) / 5) % 32;
+            if tag == 0 {
+                apply_set_ops(ops, idx + 1, set.remove(k), model_remove(model, k))
+            } else {
+                if tag == 1 {
+                    let had = model_contains(model, k);
+                    match set.take(k) {
+                        TakeResult::Taken(v, rest) =>
+                            had && v == k
+                                && apply_set_ops(ops, idx + 1, rest, model_remove(model, k)),
+                        TakeResult::Missing(same) =>
+                            !had && apply_set_ops(ops, idx + 1, same, model)
+                    }
+                } else {
+                    if tag == 2 {
+                        let exp_min = model_min(model);
+                        match set.pop_min() {
+                            SetPop::Empty(s) =>
+                                exp_min.is_none()
+                                    && apply_set_ops(ops, idx + 1, s, model),
+                            SetPop::Popped(v, rest) =>
+                                match exp_min {
+                                    Option::Some(mv) =>
+                                        v == mv
+                                            && apply_set_ops(
+                                                ops,
+                                                idx + 1,
+                                                rest,
+                                                model_pop_min(model)
+                                            ),
+                                    Option::None => false
+                                }
+                        }
+                    } else {
+                        let exp_max = model_max(model);
+                        match set.pop_max() {
+                            SetPop::Empty(s) =>
+                                exp_max.is_none()
+                                    && apply_set_ops(ops, idx + 1, s, model),
+                            SetPop::Popped(v, rest) =>
+                                match exp_max {
+                                    Option::Some(mv) =>
+                                        v == mv
+                                            && apply_set_ops(
+                                                ops,
+                                                idx + 1,
+                                                rest,
+                                                model_pop_max(model)
+                                            ),
+                                    Option::None => false
+                                }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+fn build_set_from_vec(xs : Vec<i64>, idx : u64, acc : WavlSet<i64>) -> WavlSet<i64> {
+    if idx >= xs.len() {
+        acc
+    } else {
+        let k = xs.get(idx).unwrap_or(0);
+        build_set_from_vec(xs, idx + 1, acc.insert(k))
+    }
+}
+
+// Fuzz helper 3: apply arbitrary WavlMap operations and cross-check against a
+// sorted-entry-list model.
+fn apply_map_ops(
+    ops : Vec<i64>,
+    vals : Vec<i64>,
+    idx : u64,
+    map : WavlMap<i64, i64>,
+    model : List<Entry<i64, i64>>
+) -> bool {
+    if idx >= ops.len() || idx >= vals.len() {
+        let min_ok = match map.min() {
+            Option::Some(e) => match entry_model_min(model) {
+                Option::Some(me) => e.key == me.key && e.value == me.value,
+                Option::None => false
+            },
+            Option::None => entry_model_min(model).is_none()
+        };
+        let max_ok = match map.max() {
+            Option::Some(e) => match entry_model_max(model) {
+                Option::Some(me) => e.key == me.key && e.value == me.value,
+                Option::None => false
+            },
+            Option::None => entry_model_max(model).is_none()
+        };
+        map.len() == (entry_list_len(model, 0) as u64)
+            && map.is_empty() == model.is_nil()
+            && balanced(map.depth(), map.len())
+            && keys_sorted(map.to_list())
+            && keys_sorted_desc(map.to_list_desc())
+            && entry_list_equal(map.to_list(), model)
+            && WavlMap::from_list(map.to_list()) == map
+            && min_ok
+            && max_ok
+            && model_equal(map.keys(), entry_model_keys(model))
+            && model_equal(map.values(), entry_model_values(model))
+            && map.fold_left(0, |acc, k, v| acc * 31 + k * 7 + v)
+                == entry_model_fold_left(model, 0)
+            && map.fold_right(0, |k, v, acc| acc * 31 + k * 7 + v)
+                == entry_model_fold_right(model, 0)
+    } else {
+        let raw_op = ops.get(idx).unwrap_or(0);
+        let val = vals.get(idx).unwrap_or(0);
+        let abs_op = if raw_op < 0 { 0 - raw_op } else { raw_op };
+        let tag = abs_op % 10;
+        let k = (abs_op / 10) % 24;
+        if tag == 0 {
+            apply_map_ops(
+                ops,
+                vals,
+                idx + 1,
+                map.insert(k, val),
+                entry_model_insert(model, k, val)
+            )
+        } else {
+            if tag == 1 {
+                let next_model = match entry_model_get(model, k) {
+                    Option::Some(cur) =>
+                        if cur >= 0 {
+                            entry_model_remove(model, k)
+                        } else {
+                            entry_model_insert(model, k, 0 - cur)
+                        },
+                    Option::None => entry_model_insert(model, k, val)
+                };
+                let next_map = map.alter(k, |slot| match slot {
+                    Option::Some(cur) =>
+                        if cur >= 0 { Option::None } else { Option::Some { 0 - cur } },
+                    Option::None => Option::Some { val }
+                });
+                apply_map_ops(ops, vals, idx + 1, next_map, next_model)
+            } else {
+                if tag == 2 {
+                let prev = entry_model_get(model, k);
+                let next_model = entry_model_insert(model, k, val);
+                match map.insert_result(k, val) {
+                    InsertResult::Replaced(old_v, next_map) => match prev {
+                        Option::Some(exp_old) =>
+                            old_v == exp_old
+                                && apply_map_ops(ops, vals, idx + 1, next_map, next_model),
+                        Option::None => false
+                    },
+                    InsertResult::Added(next_map) =>
+                        prev.is_none()
+                            && apply_map_ops(ops, vals, idx + 1, next_map, next_model)
+                }
+            } else {
+                if tag == 3 {
+                    let next_val = match entry_model_get(model, k) {
+                        Option::Some(cur) => cur + val,
+                        Option::None => val
+                    };
+                    apply_map_ops(
+                        ops,
+                        vals,
+                        idx + 1,
+                        map.insert_with(k, val, |cur, inc| cur + inc),
+                        entry_model_insert(model, k, next_val)
+                    )
+                } else {
+                    if tag == 4 {
+                        apply_map_ops(
+                            ops,
+                            vals,
+                            idx + 1,
+                            map.remove(k),
+                            entry_model_remove(model, k)
+                        )
+                    } else {
+                        if tag == 5 {
+                            let prev = entry_model_get(model, k);
+                            match map.remove_entry(k) {
+                                RemoveResult::Removed(e, rest) => match prev {
+                                    Option::Some(exp_v) =>
+                                        e.key == k && e.value == exp_v
+                                            && apply_map_ops(
+                                                ops,
+                                                vals,
+                                                idx + 1,
+                                                rest,
+                                                entry_model_remove(model, k)
+                                            ),
+                                    Option::None => false
+                                },
+                                RemoveResult::Missing(same) =>
+                                    prev.is_none()
+                                        && apply_map_ops(ops, vals, idx + 1, same, model)
+                            }
+                        } else {
+                            if tag == 6 {
+                                let exp_min = entry_model_min(model);
+                                match map.pop_min() {
+                                    MapPop::Empty(same) =>
+                                        exp_min.is_none()
+                                            && apply_map_ops(ops, vals, idx + 1, same, model),
+                                    MapPop::Popped(e, rest) => match exp_min {
+                                        Option::Some(me) =>
+                                            e.key == me.key && e.value == me.value
+                                                && apply_map_ops(
+                                                    ops,
+                                                    vals,
+                                                    idx + 1,
+                                                    rest,
+                                                    entry_model_pop_min(model)
+                                                ),
+                                        Option::None => false
+                                    }
+                                }
+                            } else {
+                                if tag == 7 {
+                                    let exp_max = entry_model_max(model);
+                                    match map.pop_max() {
+                                        MapPop::Empty(same) =>
+                                            exp_max.is_none()
+                                                && apply_map_ops(ops, vals, idx + 1, same, model),
+                                        MapPop::Popped(e, rest) => match exp_max {
+                                            Option::Some(me) =>
+                                                e.key == me.key && e.value == me.value
+                                                    && apply_map_ops(
+                                                        ops,
+                                                        vals,
+                                                        idx + 1,
+                                                        rest,
+                                                        entry_model_pop_max(model)
+                                                    ),
+                                            Option::None => false
+                                        }
+                                    }
+                                } else {
+                                    if tag == 8 {
+                                        let next_model = match entry_model_get(model, k) {
+                                            Option::Some(cur) =>
+                                                entry_model_insert(model, k, cur + 3),
+                                            Option::None => model
+                                        };
+                                        apply_map_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            map.adjust(k, |v| v + 3),
+                                            next_model
+                                        )
+                                    } else {
+                                        let next_model = match entry_model_get(model, k) {
+                                            Option::Some(cur) =>
+                                                if cur % 2 == 0 {
+                                                    entry_model_insert(model, k, cur / 2)
+                                                } else {
+                                                    entry_model_remove(model, k)
+                                                },
+                                            Option::None => model
+                                        };
+                                        apply_map_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            map.update(k, |v| {
+                                                if v % 2 == 0 {
+                                                    Option::Some { v / 2 }
+                                                } else {
+                                                    Option::None
+                                                }
+                                            }),
+                                            next_model
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+}
+
+fn build_map_from_vecs(
+    keys : Vec<i64>,
+    vals : Vec<i64>,
+    idx : u64,
+    acc : WavlMap<i64, i64>
+) -> WavlMap<i64, i64> {
+    if idx >= keys.len() || idx >= vals.len() {
+        acc
+    } else {
+        let k = keys.get(idx).unwrap_or(0);
+        let v = vals.get(idx).unwrap_or(0);
+        if v < -25 {
+            build_map_from_vecs(keys, vals, idx + 1, acc.remove(k))
+        } else {
+            build_map_from_vecs(keys, vals, idx + 1, acc.insert(k, v))
+        }
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("wavl")
+        .with_case("set basics", || {
+            let s : WavlSet<i64> = WavlSet::new().insert(5).insert(1).insert(9).insert(5);
+            let removed = s.remove(5).remove(42);
+            let empty : WavlSet<i64> = WavlSet::new();
+            let empty2 : WavlSet<i64> = WavlSet::new();
+            expect(
+                s.len() == 3
+                    && s.contains(5) && s.contains(1) && s.contains(9) && !s.contains(2)
+                    && removed.len() == 2 && !removed.contains(5)
+                    && s.contains(5)
+                    && s.min().unwrap_or(0) == 1 && s.max().unwrap_or(0) == 9
+                    && empty.is_empty()
+                    && empty2.min().is_none(),
+                "set basics failed"
+            )
+        })
+        .with_case("map basics", || {
+            let m : WavlMap<i64, i64> = WavlMap::new().insert(3, 30).insert(1, 10).insert(3, 33);
+            let removed = m.remove(1 as i64);
+            let min_ok = match m.min() { Option::Some(e) => e.key == 1, Option::None => false };
+            let max_ok = match m.max() { Option::Some(e) => e.key == 3, Option::None => false };
+            expect(
+                m.len() == 2
+                    && m.get(3 as i64).unwrap_or(0) == 33
+                    && m.get(1 as i64).unwrap_or(0) == 10
+                    && m.get(9 as i64).is_none()
+                    && removed.len() == 1 && !removed.contains_key(1 as i64)
+                    && m.contains_key(1 as i64)
+                    && min_ok
+                    && max_ok,
+                "map basics failed"
+            )
+        })
+        .with_case("set order", || {
+            let s = WavlSet::new().insert(4 as i64).insert(2).insert(9).insert(7)
+                .insert(1).insert(8).insert(3);
+            expect(
+                list_len(s.to_list(), 0) == 7
+                    && s.fold_left(0, |acc, x| acc * 10 + x) == 1234789
+                    && list_len(s.to_list(), 0) == 7
+                    && (WavlSet::from_list(s.to_list()).len() as i64) == 7
+                    && sorted_strict(s.to_list()),
+                "set order failed"
+            )
+        })
+        .with_case("map order", || {
+            let m = WavlMap::new().insert(4 as i64, 40 as i64).insert(2, 20)
+                .insert(9, 90).insert(7, 70);
+            expect(
+                entry_list_len(m.to_list(), 0) == 4
+                    && m.fold_left(0, |acc, k, v| acc + k * 100 + v) == 2420
+                    && entry_list_len(m.to_list(), 0) == 4
+                    && WavlMap::from_list(m.to_list()).get(9 as i64).unwrap_or(0) == 90
+                    && keys_sorted(m.to_list()),
+                "map order failed"
+            )
+        })
+        .with_case("churn", || {
+            expect(
+                churn(3000, 7, WavlSet::new(), List::Nil)
+                    && churn(3000, 99, WavlSet::new(), List::Nil),
+                "churn failed"
+            )
+        })
+        .with_case("set api", || {
+            let s = odds(5, WavlSet::new());
+            let one : WavlSet<i64> = WavlSet::singleton(4);
+            let get_ok = match s.get(3) { Option::Some(v) => v == 3, Option::None => false }
+                && s.get(4).is_none();
+            let take_hit = match s.take(3) {
+                TakeResult::Taken(v, rest) =>
+                    v == 3 && rest.len() == 4 && !rest.contains(3),
+                TakeResult::Missing(_) => false
+            };
+            let take_miss = match s.take(4) {
+                TakeResult::Missing(same) => same.len() == 5 && same.contains(3),
+                TakeResult::Taken(_, _) => false
+            };
+            let pop_min_ok = match s.pop_min() {
+                SetPop::Popped(v, rest) =>
+                    v == 1 && rest.len() == 4 && rest.min().unwrap_or(0) == 3,
+                SetPop::Empty(_) => false
+            };
+            let pop_max_ok = match s.pop_max() {
+                SetPop::Popped(v, rest) =>
+                    v == 9 && rest.len() == 4 && rest.max().unwrap_or(0) == 7,
+                SetPop::Empty(_) => false
+            };
+            let drained : WavlSet<i64> = WavlSet::new();
+            let pop_empty_ok = match drained.pop_min() {
+                SetPop::Empty(same) => same.is_empty(),
+                SetPop::Popped(_, _) => false
+            };
+            let window = s.range(3, 8);
+            expect(
+                one.len() == 1 && one.contains(4) && !one.contains(5)
+                    && s.clear().is_empty() && s.len() == 5
+                    && get_ok && take_hit && take_miss
+                    && pop_min_ok && pop_max_ok && pop_empty_ok
+                    && s.floor(4).unwrap_or(0) == 3 && s.floor(5).unwrap_or(0) == 5
+                    && s.floor(0).is_none() && s.floor(10).unwrap_or(0) == 9
+                    && s.ceiling(4).unwrap_or(0) == 5 && s.ceiling(5).unwrap_or(0) == 5
+                    && s.ceiling(10).is_none() && s.ceiling(0).unwrap_or(0) == 1
+                    && s.predecessor(5).unwrap_or(0) == 3 && s.predecessor(4).unwrap_or(0) == 3
+                    && s.predecessor(1).is_none()
+                    && s.successor(5).unwrap_or(0) == 7 && s.successor(4).unwrap_or(0) == 5
+                    && s.successor(9).is_none()
+                    && list_len(s.range_to_list(3, 8), 0) == 3
+                    && window.len() == 3 && window.contains(3) && window.contains(5)
+                    && window.contains(7) && !window.contains(1) && !window.contains(9)
+                    && sorted_strict(s.range_to_list(3, 8))
+                    && s.range(2, 2).is_empty() && s.range(0, 100).len() == 5,
+                "set api failed"
+            )
+        })
+        .with_case("set algebra", || {
+            let left : WavlSet<i64> = WavlSet::new().insert(1).insert(2).insert(3);
+            let right : WavlSet<i64> = WavlSet::new().insert(3).insert(4);
+            let union = left.union(right);
+            let intersection = left.intersection(right);
+            let difference = left.difference(right);
+            let symmetric = left.symmetric_difference(right);
+            let subset : WavlSet<i64> = WavlSet::new().insert(1).insert(3);
+            let equal : WavlSet<i64> = WavlSet::new().insert(3).insert(2).insert(1);
+            let disjoint : WavlSet<i64> = WavlSet::new().insert(8).insert(9);
+            expect(
+                union.len() == 4 && union.contains(1) && union.contains(4)
+                    && sorted_strict(union.to_list())
+                    && intersection.len() == 1 && intersection.contains(3)
+                    && difference.len() == 2 && difference.contains(1)
+                    && difference.contains(2) && !difference.contains(3)
+                    && symmetric.len() == 3 && symmetric.contains(1)
+                    && symmetric.contains(2) && symmetric.contains(4)
+                    && !symmetric.contains(3)
+                    && subset.is_subset(left) && left.is_superset(subset)
+                    && subset.is_proper_subset(left) && left.is_proper_superset(subset)
+                    && !left.is_proper_subset(equal)
+                    && left.is_disjoint(disjoint) && !left.is_disjoint(right)
+                    && left.equals(equal) && left == equal && left != right,
+                "set algebra failed"
+            )
+        })
+        .with_case("set transforms", || {
+            let s : WavlSet<i64> = WavlSet::new().insert(1).insert(2).insert(3)
+                .insert(4).insert(2);
+            let evens = s.filter(|v| v % 2 == 0);
+            let parity = s.map(|v| v % 2);
+            expect(
+                s.fold_left(0, |acc, v| acc * 10 + v) == 1234
+                    && s.fold_right(0, |v, acc| acc * 10 + v) == 4321
+                    && list_len(s.to_list_desc(), 0) == 4
+                    && sorted_desc_strict(s.to_list_desc())
+                    && evens.len() == 2 && evens.contains(2) && evens.contains(4)
+                    && parity.len() == 2 && parity.contains(0) && parity.contains(1)
+                    && s.count_if(|v| v >= 3) == 2 && s.any(|v| v == 4) && !s.any(|v| v == 9)
+                    && s.all(|v| v > 0) && !s.all(|v| v > 1)
+                    && s.find(|v| v % 2 == 0).unwrap_or(0) == 2
+                    && s.find(|v| v > 10).is_none(),
+                "set transforms failed"
+            )
+        })
+        .with_case("map api", || {
+            let m = odd_map(5, WavlMap::new());
+            let one : WavlMap<i64, i64> = WavlMap::singleton(4, 40);
+            let ins_rep = match m.insert_result(3 as i64, 33) {
+                InsertResult::Replaced(previous, next) =>
+                    previous == 30 && next.get(3 as i64).unwrap_or(0) == 33
+                        && next.len() == 5,
+                InsertResult::Added(_) => false
+            };
+            let ins_add = match m.insert_result(4 as i64, 40) {
+                InsertResult::Added(next) =>
+                    next.len() == 6 && next.contains_key(4 as i64),
+                InsertResult::Replaced(_, _) => false
+            };
+            let rem_hit = match m.remove_entry(3 as i64) {
+                RemoveResult::Removed(entry, rest) =>
+                    entry.key == 3 && entry.value == 30 && rest.len() == 4,
+                RemoveResult::Missing(_) => false
+            };
+            let rem_miss = match m.remove_entry(4 as i64) {
+                RemoveResult::Missing(same) => same.len() == 5,
+                RemoveResult::Removed(_, _) => false
+            };
+            let pop_min_ok = match m.pop_min() {
+                MapPop::Popped(entry, rest) =>
+                    entry.key == 1 && entry.value == 10 && rest.len() == 4,
+                MapPop::Empty(_) => false
+            };
+            let pop_max_ok = match m.pop_max() {
+                MapPop::Popped(entry, rest) =>
+                    entry.key == 9 && entry.value == 90 && rest.len() == 4,
+                MapPop::Empty(_) => false
+            };
+            let drained : WavlMap<i64, i64> = WavlMap::new();
+            let pop_empty_ok = match drained.pop_max() {
+                MapPop::Empty(same) => same.is_empty(),
+                MapPop::Popped(_, _) => false
+            };
+            let window = m.range(3, 8);
+            expect(
+                one.len() == 1 && one.get(4 as i64).unwrap_or(0) == 40
+                    && m.clear().is_empty() && m.len() == 5
+                    && entry_is(m.get_entry(3 as i64), 3, 30)
+                    && m.get_entry(4 as i64).is_none()
+                    && ins_rep && ins_add
+                    && m.insert_with(3, 5, |current, incoming| current - incoming)
+                        .get(3 as i64).unwrap_or(0) == 25
+                    && m.insert_with(4, 5, |current, incoming| current - incoming)
+                        .get(4 as i64).unwrap_or(0) == 5
+                    && rem_hit && rem_miss
+                    && pop_min_ok && pop_max_ok && pop_empty_ok
+                    && m.adjust(3, |v| v + 1).get(3 as i64).unwrap_or(0) == 31
+                    && m.adjust(4, |v| v + 1).len() == 5
+                    && m.update(3, |v| Option::Some { v + 2 }).get(3 as i64).unwrap_or(0) == 32
+                    && m.update(3, |ignored| Option::None).len() == 4
+                    && m.update(4, |v| Option::Some { v }).len() == 5
+                    && m.alter(4, |slot| match slot {
+                        Option::Some(v) => Option::Some { v },
+                        Option::None => Option::Some { 44 }
+                    }).get(4 as i64).unwrap_or(0) == 44
+                    && m.alter(3, |ignored| Option::None).len() == 4
+                    && entry_is(m.floor_entry(4 as i64), 3, 30)
+                    && entry_is(m.floor_entry(5 as i64), 5, 50)
+                    && m.floor_entry(0 as i64).is_none()
+                    && entry_is(m.ceiling_entry(4 as i64), 5, 50)
+                    && entry_is(m.ceiling_entry(5 as i64), 5, 50)
+                    && m.ceiling_entry(10 as i64).is_none()
+                    && entry_is(m.predecessor_entry(5 as i64), 3, 30)
+                    && m.predecessor_entry(1 as i64).is_none()
+                    && entry_is(m.successor_entry(5 as i64), 7, 70)
+                    && m.successor_entry(9 as i64).is_none()
+                    && entry_list_len(m.range_to_list(3, 8), 0) == 3
+                    && window.len() == 3 && window.get(3 as i64).unwrap_or(0) == 30
+                    && window.get(7 as i64).unwrap_or(0) == 70
+                    && !window.contains_key(9 as i64)
+                    && keys_sorted(m.range_to_list(3, 8))
+                    && m.keys().fold_left(0, |acc, k| acc * 10 + k) == 13579
+                    && m.values().fold_left(0, |acc, v| acc + v) == 250,
+                "map api failed"
+            )
+        })
+        .with_case("map algebra", || {
+            let left : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(2, 20)
+                .insert(3, 30);
+            let right : WavlMap<i64, i64> = WavlMap::new().insert(3, 300).insert(4, 400);
+            let union = left.union(right);
+            let combined = left.union_with(right, |mine, theirs| mine + theirs);
+            let intersection = left.intersection(right);
+            let scaled = left.intersection_with(right, |mine, theirs| mine + theirs);
+            let difference = left.difference(right);
+            let submap : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(3, 30);
+            let equal : WavlMap<i64, i64> = WavlMap::new().insert(3, 30).insert(2, 20)
+                .insert(1, 10);
+            let disjoint : WavlMap<i64, i64> = WavlMap::new().insert(8, 80);
+            expect(
+                union.len() == 4 && union.get(3 as i64).unwrap_or(0) == 300
+                    && union.get(4 as i64).unwrap_or(0) == 400
+                    && keys_sorted(union.to_list())
+                    && combined.len() == 4 && combined.get(3 as i64).unwrap_or(0) == 330
+                    && combined.get(1 as i64).unwrap_or(0) == 10
+                    && intersection.len() == 1 && intersection.get(3 as i64).unwrap_or(0) == 30
+                    && scaled.len() == 1 && scaled.get(3 as i64).unwrap_or(0) == 330
+                    && difference.len() == 2 && difference.contains_key(1 as i64)
+                    && !difference.contains_key(3 as i64)
+                    && submap.is_submap(left) && submap.is_proper_submap(left)
+                    && !left.is_submap(submap)
+                    && submap.is_submap_by(left, |mine, theirs| mine <= theirs)
+                    && left.is_disjoint(disjoint) && !left.is_disjoint(right)
+                    && left.equals(equal) && left == equal && left != right
+                    && left.contains_value(20) && !left.contains_value(99),
+                "map algebra failed"
+            )
+        })
+        .with_case("map transforms", || {
+            let m : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(2, 20)
+                .insert(3, 30).insert(4, 40);
+            let doubled = m.map_values(|v| v * 2);
+            let shifted = m.map_keys(|k| k + 10);
+            let swapped = m.map_entries(|k, v| Entry { key: v, value: k });
+            let evens = m.filter(|k, ignored| k % 2 == 0);
+            let picked = m.filter_map(|k, v| {
+                if k >= 3 { Option::Some { v + 1 } } else { Option::None }
+            });
+            expect(
+                m.fold_left(0, |acc, k, ignored| acc * 10 + k) == 1234
+                    && m.fold_right(0, |k, ignored, acc| acc * 10 + k) == 4321
+                    && doubled.len() == 4 && doubled.get(3 as i64).unwrap_or(0) == 60
+                    && shifted.len() == 4 && shifted.get(13 as i64).unwrap_or(0) == 30
+                    && !shifted.contains_key(3 as i64)
+                    && swapped.len() == 4 && swapped.get(30 as i64).unwrap_or(0) == 3
+                    && evens.len() == 2 && evens.contains_key(2 as i64)
+                    && !evens.contains_key(1 as i64)
+                    && picked.len() == 2 && picked.get(3 as i64).unwrap_or(0) == 31
+                    && !picked.contains_key(2 as i64)
+                    && m.count_if(|k, ignored| k >= 3) == 2 && m.any(|ignored, v| v == 40)
+                    && m.all(|k, v| v == k * 10) && !m.all(|k, ignored| k > 1)
+                    && entry_is(m.find(|k, ignored| k % 2 == 0), 2, 20)
+                    && m.find(|k, ignored| k > 10).is_none()
+                    && keys_sorted(m.to_list()) && entry_list_len(m.to_list_desc(), 0) == 4,
+                "map transforms failed"
+            )
+        })
+        .with_case("balance", || {
+            let ascending = insert_up(1, 2001, WavlSet::new());
+            let thinned = remove_evens(2, 2001, ascending);
+            let halved = pop_max_n(ascending, 1000);
+            let mapped = map_up(1, 2001, WavlMap::new());
+            expect(
+                ascending.len() == 2000
+                    && ascending.depth() == 11
+                    && balanced(ascending.depth(), ascending.len())
+                    && sorted_strict(ascending.to_list())
+                    && thinned.len() == 1000
+                    && thinned.depth() == 11
+                    && balanced(thinned.depth(), thinned.len())
+                    && sorted_strict(thinned.to_list())
+                    && halved.len() == 1000
+                    && halved.depth() == 10
+                    && balanced(halved.depth(), halved.len())
+                    && halved.max().unwrap_or(0) == 1000
+                    && sorted_strict(halved.to_list())
+                    && pop_min_all(ascending, 1)
+                    && pop_max_all(ascending, 2000)
+                    && mapped.depth() == 11
+                    && balanced(mapped.depth(), mapped.len())
+                    && pop_map_all(mapped, 1),
+                "balance failed"
+            )
+        })
+        .with_fuzz(
+            "set insert/remove/pop/take model & rank balance (fuzz)",
+            i64_domain().in_range(-200, 200).vec().max_len(48),
+            |ops : Vec<i64>| {
+                expect(
+                    apply_set_ops(ops, 0, WavlSet::new(), List::Nil),
+                    "WavlSet diverged from sorted-list model or violated rank balance"
+                )
+            }
+        )
+        .with_fuzz(
+            "set algebra, neighbours, range & transforms (fuzz)",
+            tuple3(
+                i64_domain().in_range(0, 31).vec().max_len(24),
+                i64_domain().in_range(0, 31).vec().max_len(24),
+                tuple2(i64_domain().in_range(-4, 36), i64_domain().in_range(-4, 36))
+            ),
+            |input : (Vec<i64>, Vec<i64>, (i64, i64))| {
+                let (xs, ys, bounds) = input;
+                let (lo, hi) = bounds;
+                let a = build_set_from_vec(xs, 0, WavlSet::new());
+                let b = build_set_from_vec(ys, 0, WavlSet::new());
+                let u = a.union(b);
+                let inter = a.intersection(b);
+                let diff = a.difference(b);
+                let sym = a.symmetric_difference(b);
+                let win = a.range(lo, hi);
+                let evens = a.filter(|x| x % 2 == 0);
+                let mapped = a.map(|x| x / 2);
+                let fl_ok = match a.floor(lo) {
+                    Option::Some(k) => k <= lo && a.contains(k) && !a.any(|x| x > k && x <= lo),
+                    Option::None => !a.any(|x| x <= lo)
+                };
+                let ce_ok = match a.ceiling(lo) {
+                    Option::Some(k) => k >= lo && a.contains(k) && !a.any(|x| x < k && x >= lo),
+                    Option::None => !a.any(|x| x >= lo)
+                };
+                let pred_ok = match a.predecessor(lo) {
+                    Option::Some(k) => k < lo && a.contains(k) && !a.any(|x| x > k && x < lo),
+                    Option::None => !a.any(|x| x < lo)
+                };
+                let succ_ok = match a.successor(lo) {
+                    Option::Some(k) => k > lo && a.contains(k) && !a.any(|x| x < k && x > lo),
+                    Option::None => !a.any(|x| x > lo)
+                };
+                let find_ok = match a.find(|x| x >= lo) {
+                    Option::Some(k) => a.ceiling(lo).unwrap_or(-999) == k,
+                    Option::None => a.ceiling(lo).is_none()
+                };
+                expect(
+                    balanced(u.depth(), u.len())
+                        && balanced(inter.depth(), inter.len())
+                        && balanced(diff.depth(), diff.len())
+                        && balanced(sym.depth(), sym.len())
+                        && balanced(win.depth(), win.len())
+                        && balanced(evens.depth(), evens.len())
+                        && balanced(mapped.depth(), mapped.len())
+                        && u.len() + inter.len() == a.len() + b.len()
+                        && sym == u.difference(inter)
+                        && diff.is_disjoint(b)
+                        && inter.is_subset(a) && inter.is_subset(b)
+                        && a.is_subset(u) && b.is_subset(u)
+                        && win.all(|x| x >= lo && x < hi)
+                        && evens.len() == a.count_if(|x| x % 2 == 0)
+                        && fl_ok && ce_ok && pred_ok && succ_ok && find_ok,
+                    "WavlSet algebra/range/neighbour/transform invariant failed"
+                )
+            }
+        )
+        .with_fuzz(
+            "map operations, model & rank balance (fuzz)",
+            tuple2(
+                i64_domain().in_range(-300, 300).vec().max_len(48),
+                i64_domain().in_range(-100, 100).vec().max_len(48)
+            ),
+            |pair : (Vec<i64>, Vec<i64>)| {
+                let (ops, vals) = pair;
+                expect(
+                    apply_map_ops(ops, vals, 0, WavlMap::new(), List::Nil),
+                    "WavlMap diverged from sorted-entry-list model or violated rank balance"
+                )
+            }
+        )
+        .with_fuzz(
+            "map algebra, neighbours, range & transforms (fuzz)",
+            tuple3(
+                tuple2(
+                    i64_domain().in_range(0, 31).vec().max_len(24),
+                    i64_domain().in_range(-50, 200).vec().max_len(24)
+                ),
+                tuple2(
+                    i64_domain().in_range(0, 31).vec().max_len(24),
+                    i64_domain().in_range(-50, 200).vec().max_len(24)
+                ),
+                tuple2(i64_domain().in_range(-4, 36), i64_domain().in_range(-4, 36))
+            ),
+            |input : ((Vec<i64>, Vec<i64>), (Vec<i64>, Vec<i64>), (i64, i64))| {
+                let (left, right, bounds) = input;
+                let (k1, v1) = left;
+                let (k2, v2) = right;
+                let (lo, hi) = bounds;
+                let m1 = build_map_from_vecs(k1, v1, 0, WavlMap::new());
+                let m2 = build_map_from_vecs(k2, v2, 0, WavlMap::new());
+                let plain_u = m1.union(m2);
+                let combined = m1.union_with(m2, |a, b| a + b);
+                let plain_inter = m1.intersection(m2);
+                let inter = m1.intersection_with(m2, |a, b| a - b);
+                let diff = m1.difference(m2);
+                let win = m1.range(lo, hi);
+                let doubled = m1.map_values(|v| v * 2);
+                let shifted = m1.map_keys(|k| k + 1);
+                let entries_mapped = m1.map_entries(|k, v| Entry { key: k + 1, value: v });
+                let filtered = m1.filter(|k, ignored| k >= lo && k < hi);
+                let fmap = m1.filter_map(|k, v| {
+                    if k % 2 == 0 { Option::Some { v + 1 } } else { Option::None }
+                });
+                let fl_ok = match m1.floor_entry(lo) {
+                    Option::Some(e) =>
+                        e.key <= lo && m1.get(e.key).unwrap_or(e.value + 1) == e.value
+                            && !m1.any(|k, ignored| k > e.key && k <= lo),
+                    Option::None => !m1.any(|k, ignored| k <= lo)
+                };
+                let ce_ok = match m1.ceiling_entry(lo) {
+                    Option::Some(e) =>
+                        e.key >= lo && m1.get(e.key).unwrap_or(e.value + 1) == e.value
+                            && !m1.any(|k, ignored| k < e.key && k >= lo),
+                    Option::None => !m1.any(|k, ignored| k >= lo)
+                };
+                let pred_ok = match m1.predecessor_entry(lo) {
+                    Option::Some(e) =>
+                        e.key < lo && m1.get(e.key).unwrap_or(e.value + 1) == e.value
+                            && !m1.any(|k, ignored| k > e.key && k < lo),
+                    Option::None => !m1.any(|k, ignored| k < lo)
+                };
+                let succ_ok = match m1.successor_entry(lo) {
+                    Option::Some(e) =>
+                        e.key > lo && m1.get(e.key).unwrap_or(e.value + 1) == e.value
+                            && !m1.any(|k, ignored| k < e.key && k > lo),
+                    Option::None => !m1.any(|k, ignored| k > lo)
+                };
+                let find_ok = match m1.find(|k, ignored| k >= lo) {
+                    Option::Some(e) => match m1.ceiling_entry(lo) {
+                        Option::Some(ce) => e.key == ce.key && e.value == ce.value,
+                        Option::None => false
+                    },
+                    Option::None => m1.ceiling_entry(lo).is_none()
+                };
+                expect(
+                    balanced(m1.depth(), m1.len())
+                        && balanced(m2.depth(), m2.len())
+                        && balanced(plain_u.depth(), plain_u.len())
+                        && balanced(combined.depth(), combined.len())
+                        && balanced(plain_inter.depth(), plain_inter.len())
+                        && balanced(inter.depth(), inter.len())
+                        && balanced(diff.depth(), diff.len())
+                        && balanced(win.depth(), win.len())
+                        && balanced(doubled.depth(), doubled.len())
+                        && balanced(shifted.depth(), shifted.len())
+                        && shifted == entries_mapped
+                        && balanced(filtered.depth(), filtered.len())
+                        && balanced(fmap.depth(), fmap.len())
+                        && keys_sorted(combined.to_list())
+                        && keys_sorted(inter.to_list())
+                        && combined.len() + inter.len() == m1.len() + m2.len()
+                        && plain_u.len() == combined.len()
+                        && plain_inter.len() == inter.len()
+                        && plain_inter.is_submap(m1)
+                        && (plain_inter.is_proper_submap(m1) == (plain_inter.len() < m1.len()))
+                        && diff.is_disjoint(m2)
+                        && win == filtered
+                        && fmap.len() == m1.count_if(|k, ignored| k % 2 == 0)
+                        && fl_ok && ce_ok && pred_ok && succ_ok && find_ok,
+                    "WavlMap algebra/range/neighbour/transform invariant failed"
+                )
+            }
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
