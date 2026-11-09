@@ -1,7 +1,7 @@
 // Each input selects one persistent List unit case through the executable's
 // dispatcher. New methods can be covered without changing existing cases.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin list %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}list
 
 // RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/len.in | %FileCheck %s --check-prefix=LEN

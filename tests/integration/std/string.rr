@@ -4,7 +4,7 @@
 // equality between strings and against literals, and multi-byte
 // characters counting by their UTF-8 length.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin string %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}string
 
 // RUN: %std_rene_build/release/string%exe_ext < %S/Inputs/string/build.in | %FileCheck %s --check-prefix=BUILD

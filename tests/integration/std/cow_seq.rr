@@ -3,7 +3,7 @@
 // out-of-bounds and empty guards, copy-on-write isolation of a retained
 // version, and shared-record elements cloned through their acquire glue.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin cow_seq %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}cow_seq
 
 // RUN: %std_rene_build/release/cow_seq%exe_ext < %S/Inputs/cow_seq/vec_basics.in | %FileCheck %s --check-prefix=VECBASICS
