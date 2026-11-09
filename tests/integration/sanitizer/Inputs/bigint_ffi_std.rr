@@ -1,20 +1,6 @@
-// UNSUPPORTED: darwin
-// std's copy-on-write collections at `Nat` and `Int` with heap values: Vec,
-// HashMap, HashSet, BTreeMap, BTreeSet, VecDeque and BinaryHeap hold their
-// elements as the owned handle `reussir_rt::rcgmp::Mpz` in the runtime's Rust
-// containers, which clone, drop and compare them by value (a heap key equal to
-// a stored one but built apart finds it). Heap values make a missed or doubled
-// release visible; the sanitizer variant (`sanitizer/bigint-ffi-std-asan.rr`)
-// checks the balance.
-
-// REQUIRES: rcgmp
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin -o %t.core.o --relocation-mode pic
-// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri --emit rri -o %t.std.rri
-// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri -o %t.std.o --relocation-mode pic
-// RUN: %rrc %s --package-name bigintffistd --extern core=%t.core.rri --extern std=%t.std.rri -o %t.o --relocation-mode pic
-// RUN: %cc %t.o %t.std.o %t.core.o %S/bigint_ffi_std.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
-// RUN: %t.exe
+// std's copy-on-write collections at `Nat` and `Int` with heap values, run
+// under AddressSanitizer by `bigint-ffi-std-asan.rr`; the unsanitized cases
+// are `std/bigint_ffi_std.rr`.
 
 import std::collections::cow::vec::Vec;
 import std::collections::cow::hashmap::HashMap;

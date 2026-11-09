@@ -1,7 +1,7 @@
 // Each input selects one Option unit case through the executable's dispatcher.
 // Adding coverage only requires a test function, a match arm, and an input run.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin option %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}option
 
 // RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/is_some.in | %FileCheck %s --check-prefix=IS-SOME

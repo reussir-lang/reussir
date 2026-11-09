@@ -15,6 +15,7 @@
     },
   },
   targets = {
+    bigint_ffi_std = { kind = 'executable, path = "bigint_ffi_std.rr" },
     cow_hash = { kind = 'executable, path = "cow_hash.rr" },
     cow_ordered = { kind = 'executable, path = "cow_ordered.rr" },
     cow_seq = { kind = 'executable, path = "cow_seq.rr" },

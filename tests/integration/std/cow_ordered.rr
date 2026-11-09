@@ -5,7 +5,7 @@
 // through core's comparison tower. Each property writes its own line so a
 // platform-specific failure names the property.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin cow_ordered %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}cow_ordered
 
 // RUN: %std_rene_build/release/cow_ordered%exe_ext < %S/Inputs/cow_ordered/map_basics.in | %FileCheck %s --check-prefix=MAPBASICS

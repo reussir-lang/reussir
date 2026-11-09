@@ -4,7 +4,7 @@
 // between the two implementations on identical inputs, clear, and the
 // valid() invariant checkers across every construction path.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin heap %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}heap
 
 // RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/pairing_basics.in | %FileCheck %s --check-prefix=PAIRING
