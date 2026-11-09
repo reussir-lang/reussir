@@ -1,34 +1,16 @@
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin hashset %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}hashset
 
-// RUN: %std_rene_build/release/hashset%exe_ext < %S/Inputs/hashset/basics.in | %FileCheck %s --check-prefix=BASICS
-// BASICS: 1
-
-// RUN: %std_rene_build/release/hashset%exe_ext < %S/Inputs/hashset/algebra.in | %FileCheck %s --check-prefix=ALGEBRA
-// ALGEBRA: 1
-
-// RUN: %std_rene_build/release/hashset%exe_ext < %S/Inputs/hashset/transforms.in | %FileCheck %s --check-prefix=TRANSFORMS
-// TRANSFORMS: 1
-
-// RUN: %std_rene_build/release/hashset%exe_ext < %S/Inputs/hashset/adaptive.in | %FileCheck %s --check-prefix=ADAPTIVE
-// ADAPTIVE: 4
-// ADAPTIVE-NEXT: 5
-// ADAPTIVE-NEXT: 4
-// ADAPTIVE-NEXT: 39
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 55
-// ADAPTIVE-NEXT: 40
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-// ADAPTIVE-NEXT: 1
-
-// RUN: %std_rene_build/release/hashset%exe_ext < %S/Inputs/hashset/churn.in | %FileCheck %s --check-prefix=CHURN
-// CHURN: 1
+// RUN: %std_rene_build/release/hashset%exe_ext | %FileCheck %s
+// CHECK:      hashset
+// CHECK-NEXT:   ✔ basics
+// CHECK-NEXT:   ✔ algebra
+// CHECK-NEXT:   ✔ transforms
+// CHECK-NEXT:   ✔ adaptive
+// CHECK-NEXT:   ✔ churn
+// CHECK-NEXT:   ✔ model equivalence (fuzz)
+// CHECK-EMPTY:
+// CHECK-NEXT: 6 examples, 0 failures
 
 import std::collections::pure::hashset::HashSet;
 import std::collections::pure::hashset::TakeResult;
@@ -37,10 +19,12 @@ import std::collections::pure::wavlset::WavlSet;
 import std::hash::Hash;
 import std::hash::Hasher;
 import std::option::Option;
-
-fn wb(value : bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
-}
+import test::domain::i64_domain;
+import test::domain::list_of;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::tree::TestTree;
 
 pub struct [value] Key {
     id : i64,
@@ -67,7 +51,7 @@ fn int_key(id : i64) -> Key {
     controlled(id, id as u64)
 }
 
-fn test_basics() {
+fn test_basics() -> Outcome {
     let empty : HashSet<Key> = HashSet::new();
     let seeded : HashSet<Key> = HashSet::with_seed(88);
     let set = empty.insert(int_key(1)).insert(int_key(2)).insert(int_key(2));
@@ -91,10 +75,13 @@ fn test_basics() {
         TakeResult::Missing(original) => original.len() == 2,
         TakeResult::Taken(_, _) => false
     };
-    wb(shape && membership && taken && missing);
+    expect(shape, "shape checks failed")
+        .and_then(|| expect(membership, "membership checks failed"))
+        .and_then(|| expect(taken, "take Taken checks failed"))
+        .and_then(|| expect(missing, "take Missing checks failed"))
 }
 
-fn test_algebra() {
+fn test_algebra() -> Outcome {
     let left : HashSet<Key> = HashSet::new()
         .insert(int_key(1)).insert(int_key(2)).insert(int_key(3));
     let right : HashSet<Key> = HashSet::with_seed(71)
@@ -119,7 +106,8 @@ fn test_algebra() {
         && subset.is_proper_subset(left) && left.is_proper_superset(subset)
         && left.is_disjoint(disjoint) && left.equals(equal)
         && left == equal && left != right;
-    wb(values && relations);
+    expect(values, "algebra values checks failed")
+        .and_then(|| expect(relations, "algebra relations checks failed"))
 }
 
 fn sample_values() -> List<Key> {
@@ -135,7 +123,7 @@ fn sample_values() -> List<Key> {
     }
 }
 
-fn test_transforms() {
+fn test_transforms() -> Outcome {
     let set : HashSet<Key> = HashSet::from_list_seeded(sample_values(), 123);
     let evens = set.filter(|value| value.id % 2 == 0);
     let parity = set.map(|value| int_key(value.id % 2));
@@ -151,7 +139,9 @@ fn test_transforms() {
             Option::Some(value) => value.id == 3,
             Option::None => false
         };
-    wb(traversal && transforms && predicates);
+    expect(traversal, "traversal checks failed")
+        .and_then(|| expect(transforms, "transforms checks failed"))
+        .and_then(|| expect(predicates, "predicates checks failed"))
 }
 
 fn insert_slots(
@@ -199,7 +189,7 @@ fn remove_collisions(
     }
 }
 
-fn test_adaptive() {
+fn test_adaptive() -> Outcome {
     let empty : HashSet<Key> = HashSet::new();
     let four = insert_slots(empty, 0, 4);
     let five = insert_slots(four, 4, 5);
@@ -209,21 +199,21 @@ fn test_adaptive() {
     let collapsed = remove_collisions(collisions, 100, 115);
     let persistent = five.contains(controlled(4, 4))
         && !demoted.contains(controlled(4, 4));
-    test_utils::io::write_i32(four.len() as i32);
-    test_utils::io::write_i32(five.len() as i32);
-    test_utils::io::write_i32(demoted.len() as i32);
-    test_utils::io::write_i32(grown.len() as i32);
-    wb(check_slots(four, 0, 4));
-    wb(check_slots(five, 0, 5));
-    wb(check_slots(demoted, 0, 4));
-    wb(check_slots(grown, 0, 4) && check_slots(grown, 5, 40));
-    wb(!demoted.contains(controlled(4, 4)));
-    test_utils::io::write_i32(collisions.len() as i32);
-    test_utils::io::write_i32(collapsed.len() as i32);
-    wb(collapsed.contains(controlled(115, 13)));
-    wb(collisions.contains(controlled(100, 13)));
-    wb(collisions.contains(controlled(115, 13)));
-    wb(persistent);
+    should_be(four.len(), 4)
+        .and_then(|| should_be(five.len(), 5))
+        .and_then(|| should_be(demoted.len(), 4))
+        .and_then(|| should_be(grown.len(), 39))
+        .and_then(|| expect(check_slots(four, 0, 4), "four slots check failed"))
+        .and_then(|| expect(check_slots(five, 0, 5), "five slots check failed"))
+        .and_then(|| expect(check_slots(demoted, 0, 4), "demoted slots check failed"))
+        .and_then(|| expect(check_slots(grown, 0, 4) && check_slots(grown, 5, 40), "grown slots check failed"))
+        .and_then(|| expect(!demoted.contains(controlled(4, 4)), "demoted should not contain removed key"))
+        .and_then(|| should_be(collisions.len(), 55))
+        .and_then(|| should_be(collapsed.len(), 40))
+        .and_then(|| expect(collapsed.contains(controlled(115, 13)), "collapsed should retain 115"))
+        .and_then(|| expect(collisions.contains(controlled(100, 13)), "collisions should retain 100"))
+        .and_then(|| expect(collisions.contains(controlled(115, 13)), "collisions should retain 115"))
+        .and_then(|| expect(persistent, "five/demoted persistence check failed"))
 }
 
 fn lcg(seed : i64) -> i64 {
@@ -263,19 +253,43 @@ fn churn(
     }
 }
 
-fn test_churn() {
+fn test_churn() -> Outcome {
     let set : HashSet<Key> = HashSet::new();
-    wb(churn(set, WavlSet::new(), 20260810, 1200));
+    expect(churn(set, WavlSet::new(), 20260810, 1200), "HashSet churn should match WavlSet")
+}
+
+fn model_equivalence(ops : List<i64>) -> Outcome {
+    let (set, model) = ops.fold_left(
+        (HashSet::new(), WavlSet::new()),
+        |state : (HashSet<Key>, WavlSet<i64>), op : i64| {
+            let (s, w) = state;
+            let k = op >> 2;
+            if (op & 3) == 0 {
+                (s.remove(int_key(k)), w.remove(k))
+            } else {
+                (s.insert(int_key(k)), w.insert(k))
+            }
+        }
+    );
+    let all_match = ops.all(|op : i64| {
+        let k = op >> 2;
+        set.contains(int_key(k)) == model.contains(k)
+    });
+    should_be(set.len(), model.len())
+        .and_then(|| expect(all_match, "HashSet and WavlSet membership should match"))
 }
 
 #[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_basics(),
-        1 => test_algebra(),
-        2 => test_transforms(),
-        3 => test_adaptive(),
-        4 => test_churn(),
-        _ => core::intrinsic::panic::panic()
-    }
+pub fn main() {
+    test::runner::run_main(TestTree::group("hashset")
+        .with_case("basics", test_basics)
+        .with_case("algebra", test_algebra)
+        .with_case("transforms", test_transforms)
+        .with_case("adaptive", test_adaptive)
+        .with_case("churn", test_churn)
+        .with_fuzz(
+            "model equivalence (fuzz)",
+            list_of(i64_domain()),
+            model_equivalence
+        ))
 }

@@ -5,42 +5,37 @@
 // resizes, seeded hashing, and shared-record values cloned through
 // their acquire glue.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin cow_hash %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}cow_hash
 
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/map_basics.in | %FileCheck %s --check-prefix=MAPBASICS
-// MAPBASICS: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/map_cow.in | %FileCheck %s --check-prefix=MAPCOW
-// MAPCOW: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/collisions.in | %FileCheck %s --check-prefix=COLLISIONS
-// COLLISIONS: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/growth.in | %FileCheck %s --check-prefix=GROWTH
-// GROWTH: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/set_basics.in | %FileCheck %s --check-prefix=SETBASICS
-// SETBASICS: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/record_values.in | %FileCheck %s --check-prefix=RECORDVALUES
-// RECORDVALUES: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/primitive_keys.in | %FileCheck %s --check-prefix=PRIMITIVEKEYS
-// PRIMITIVEKEYS: 1
-
-// RUN: %std_rene_build/release/cow_hash%exe_ext < %S/Inputs/cow_hash/str_keys.in | %FileCheck %s --check-prefix=STRKEYS
-// STRKEYS: 1
+// RUN: %std_rene_build/release/cow_hash%exe_ext | %FileCheck %s
+// CHECK:      cow_hash
+// CHECK-NEXT:   ✔ map basics
+// CHECK-NEXT:   ✔ map cow
+// CHECK-NEXT:   ✔ collisions
+// CHECK-NEXT:   ✔ growth
+// CHECK-NEXT:   ✔ set basics
+// CHECK-NEXT:   ✔ record values
+// CHECK-NEXT:   ✔ primitive keys
+// CHECK-NEXT:   ✔ str keys
+// CHECK-NEXT:   ✔ model equivalence (fuzz)
+// CHECK-EMPTY:
+// CHECK-NEXT: 9 examples, 0 failures
 
 import std::collections::cow::hashmap::HashMap;
 import std::collections::cow::hashset::HashSet;
+import std::collections::pure::list::List;
+import std::collections::pure::wavlmap::WavlMap;
 import std::hash::Hash;
 import std::hash::Hasher;
 import std::option::Option;
-
-fn wb(value : bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
-}
+import test::domain::i64_domain;
+import test::domain::list_of;
+import test::domain::tuple2;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::tree::TestTree;
 
 // A shared record key ([value] records cannot cross the FFI boundary):
 // equality is decided by `id` alone while `digest` controls the hash, so
@@ -74,7 +69,7 @@ fn value_or(map : HashMap<Key, i64>, key : i64, fallback : i64) -> i64 {
     map.get(int_key(key)).unwrap_or(fallback)
 }
 
-fn test_map_basics() {
+fn test_map_basics() -> Outcome {
     let empty : HashMap<Key, i64> = HashMap::new();
     let base : HashMap<Key, i64> = HashMap::new();
     let map = base.insert(int_key(1), 10).insert(int_key(2), 20).insert(int_key(4), 40);
@@ -82,38 +77,38 @@ fn test_map_basics() {
     let removed = replaced.remove(int_key(1));
     let missed = removed.remove(int_key(9));
     let single : HashMap<Key, i64> = HashMap::singleton(int_key(3), 33);
-    wb(empty.is_empty()
-        && map.len() == 3
-        && value_or(map, 2, 0 - 1) == 20
-        && value_or(map, 7, 0 - 1) == 0 - 1
-        && map.contains_key(int_key(4))
-        && !map.contains_key(int_key(7))
-        && replaced.len() == 3
-        && value_or(replaced, 2, 0 - 1) == 21
-        && removed.len() == 2
-        && value_or(removed, 1, 0 - 1) == 0 - 1
-        && value_or(removed, 4, 0 - 1) == 40
-        && missed.len() == 2
-        && missed.clear().is_empty()
-        && single.len() == 1);
+    expect(empty.is_empty(), "empty map should be empty")
+        .and_then(|| should_be(map.len(), 3))
+        .and_then(|| should_be(value_or(map, 2, 0 - 1), 20))
+        .and_then(|| should_be(value_or(map, 7, 0 - 1), 0 - 1))
+        .and_then(|| expect(map.contains_key(int_key(4)), "map should contain key 4"))
+        .and_then(|| expect(!map.contains_key(int_key(7)), "map should not contain key 7"))
+        .and_then(|| should_be(replaced.len(), 3))
+        .and_then(|| should_be(value_or(replaced, 2, 0 - 1), 21))
+        .and_then(|| should_be(removed.len(), 2))
+        .and_then(|| should_be(value_or(removed, 1, 0 - 1), 0 - 1))
+        .and_then(|| should_be(value_or(removed, 4, 0 - 1), 40))
+        .and_then(|| should_be(missed.len(), 2))
+        .and_then(|| expect(missed.clear().is_empty(), "cleared map should be empty"))
+        .and_then(|| should_be(single.len(), 1))
 }
 
-fn test_map_cow() {
+fn test_map_cow() -> Outcome {
     let base : HashMap<Key, i64> = HashMap::new();
     let old = base.insert(int_key(1), 10).insert(int_key(2), 20);
     // `old` stays live below, so deriving `changed` shares the runtime
     // table; the first update takes the copy-on-write clone and must leave
     // the retained version untouched.
     let changed = old.insert(int_key(3), 30).remove(int_key(1));
-    wb(old.len() == 2
-        && value_or(old, 1, 0 - 1) == 10
-        && value_or(old, 3, 0 - 1) == 0 - 1
-        && changed.len() == 2
-        && value_or(changed, 1, 0 - 1) == 0 - 1
-        && value_or(changed, 3, 0 - 1) == 30);
+    should_be(old.len(), 2)
+        .and_then(|| should_be(value_or(old, 1, 0 - 1), 10))
+        .and_then(|| should_be(value_or(old, 3, 0 - 1), 0 - 1))
+        .and_then(|| should_be(changed.len(), 2))
+        .and_then(|| should_be(value_or(changed, 1, 0 - 1), 0 - 1))
+        .and_then(|| should_be(value_or(changed, 3, 0 - 1), 30))
 }
 
-fn test_collisions() {
+fn test_collisions() -> Outcome {
     // One shared digest: the cached-hash prefilter always passes and the
     // bridged `Eq` on `id` must tell the entries apart.
     let base : HashMap<Key, i64> = HashMap::new();
@@ -122,11 +117,11 @@ fn test_collisions() {
         .insert(controlled(2, 7), 200)
         .insert(controlled(3, 7), 300);
     let removed = map.remove(controlled(1, 7));
-    wb(map.len() == 3
-        && map.get(controlled(2, 7)).unwrap_or(0 - 1) == 200
-        && removed.len() == 2
-        && removed.get(controlled(1, 7)).unwrap_or(0 - 1) == 0 - 1
-        && removed.get(controlled(3, 7)).unwrap_or(0 - 1) == 300);
+    should_be(map.len(), 3)
+        .and_then(|| should_be(map.get(controlled(2, 7)).unwrap_or(0 - 1), 200))
+        .and_then(|| should_be(removed.len(), 2))
+        .and_then(|| should_be(removed.get(controlled(1, 7)).unwrap_or(0 - 1), 0 - 1))
+        .and_then(|| should_be(removed.get(controlled(3, 7)).unwrap_or(0 - 1), 300))
 }
 
 fn fill(map : HashMap<Key, i64>, n : i64) -> HashMap<Key, i64> {
@@ -143,15 +138,16 @@ fn check(map : HashMap<Key, i64>, n : i64) -> bool {
     }
 }
 
-fn test_growth() {
+fn test_growth() -> Outcome {
     // Enough entries to resize the table repeatedly; every rehash reuses
     // the cached digests.
     let base : HashMap<Key, i64> = HashMap::new();
     let map = fill(base, 500);
-    wb(map.len() == 500 && check(map, 500));
+    should_be(map.len(), 500)
+        .and_then(|| expect(check(map, 500), "all 500 entries should match"))
 }
 
-fn test_set_basics() {
+fn test_set_basics() -> Outcome {
     let empty : HashSet<Key> = HashSet::new();
     let base : HashSet<Key> = HashSet::new();
     let old = base
@@ -161,21 +157,21 @@ fn test_set_basics() {
         .insert(int_key(4));
     let changed = old.remove(int_key(2)).insert(int_key(8));
     let seeded = HashSet::with_seed(20260822).insert(int_key(5));
-    wb(empty.is_empty()
-        && old.len() == 3
-        && old.contains(int_key(2))
-        && !old.contains(int_key(7))
-        && !old.contains(int_key(8))
-        && changed.len() == 3
-        && !changed.contains(int_key(2))
-        && changed.contains(int_key(8))
-        && old.clear().is_empty()
-        && seeded.hash_seed() == 20260822
-        && seeded.contains(int_key(5))
-        && HashSet::singleton(int_key(6)).len() == 1);
+    expect(empty.is_empty(), "empty set should be empty")
+        .and_then(|| should_be(old.len(), 3))
+        .and_then(|| expect(old.contains(int_key(2)), "old should contain 2"))
+        .and_then(|| expect(!old.contains(int_key(7)), "old should not contain 7"))
+        .and_then(|| expect(!old.contains(int_key(8)), "old should not contain 8"))
+        .and_then(|| should_be(changed.len(), 3))
+        .and_then(|| expect(!changed.contains(int_key(2)), "changed should not contain 2"))
+        .and_then(|| expect(changed.contains(int_key(8)), "changed should contain 8"))
+        .and_then(|| expect(old.clear().is_empty(), "cleared set should be empty"))
+        .and_then(|| should_be(seeded.hash_seed(), 20260822))
+        .and_then(|| expect(seeded.contains(int_key(5)), "seeded should contain 5"))
+        .and_then(|| should_be(HashSet::singleton(int_key(6)).len(), 1))
 }
 
-fn test_primitive_keys() {
+fn test_primitive_keys() -> Outcome {
     // Scalar keys and values: `std::hash`'s primitive `Hash` impls feed
     // the digest, and the scalar crosses the FFI boundary directly — no
     // equality bridge, the Rust side compares natively.
@@ -183,27 +179,27 @@ fn test_primitive_keys() {
     let map = mbase.insert(1, 10).insert(2, 20).insert(1, 11);
     let sbase : HashSet<u64> = HashSet::new();
     let set = sbase.insert(7).insert(7).insert(9);
-    wb(map.len() == 2
-        && map.get(1).unwrap_or(0 - 1) == 11
-        && map.get(2).unwrap_or(0 - 1) == 20
-        && map.get(3).unwrap_or(0 - 1) == 0 - 1
-        && set.len() == 2
-        && set.contains(7)
-        && !set.contains(8));
+    should_be(map.len(), 2)
+        .and_then(|| should_be(map.get(1).unwrap_or(0 - 1), 11))
+        .and_then(|| should_be(map.get(2).unwrap_or(0 - 1), 20))
+        .and_then(|| should_be(map.get(3).unwrap_or(0 - 1), 0 - 1))
+        .and_then(|| should_be(set.len(), 2))
+        .and_then(|| expect(set.contains(7), "set should contain 7"))
+        .and_then(|| expect(!set.contains(8), "set should not contain 8"))
 }
 
-fn test_record_values() {
+fn test_record_values() -> Outcome {
     // Shared records as values: the copy-on-write clone runs their
     // acquire glue, and both versions keep independent entries.
     let base : HashMap<Key, Key> = HashMap::new();
     let old = base.insert(int_key(1), int_key(10)).insert(int_key(2), int_key(20));
     let changed = old.insert(int_key(1), int_key(11));
-    wb(old.get(int_key(1)).unwrap_or(int_key(0 - 1)).id == 10
-        && changed.get(int_key(1)).unwrap_or(int_key(0 - 1)).id == 11
-        && changed.get(int_key(2)).unwrap_or(int_key(0 - 1)).id == 20);
+    should_be(old.get(int_key(1)).unwrap_or(int_key(0 - 1)).id, 10)
+        .and_then(|| should_be(changed.get(int_key(1)).unwrap_or(int_key(0 - 1)).id, 11))
+        .and_then(|| should_be(changed.get(int_key(2)).unwrap_or(int_key(0 - 1)).id, 20))
 }
 
-fn test_str_keys() {
+fn test_str_keys() -> Outcome {
     // String-literal keys: hashed on the Reussir side by std's
     // `Hash for str`, compared on the Rust side by the runtime `Str`'s
     // byte equality — the scalar-like crossing, no bridge wrapper.
@@ -211,26 +207,51 @@ fn test_str_keys() {
     let map = mbase.insert("apple", 1).insert("banana", 2).insert("apple", 3);
     let sbase : HashSet<str> = HashSet::new();
     let set = sbase.insert("x").insert("x").insert("y");
-    wb(map.len() == 2
-        && map.get("apple").unwrap_or(0 - 1) == 3
-        && map.get("banana").unwrap_or(0 - 1) == 2
-        && map.get("cherry").unwrap_or(0 - 1) == 0 - 1
-        && set.len() == 2
-        && set.contains("x")
-        && !set.contains("z"));
+    should_be(map.len(), 2)
+        .and_then(|| should_be(map.get("apple").unwrap_or(0 - 1), 3))
+        .and_then(|| should_be(map.get("banana").unwrap_or(0 - 1), 2))
+        .and_then(|| should_be(map.get("cherry").unwrap_or(0 - 1), 0 - 1))
+        .and_then(|| should_be(set.len(), 2))
+        .and_then(|| expect(set.contains("x"), "set should contain x"))
+        .and_then(|| expect(!set.contains("z"), "set should not contain z"))
+}
+
+fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
+    let (map, model) = ops.fold_left(
+        (HashMap::new(), WavlMap::new()),
+        |state : (HashMap<i64, i64>, WavlMap<i64, i64>), op : (i64, i64)| {
+            let (m, w) = state;
+            let (k, v) = op;
+            if (v & 3) == 0 {
+                (m.remove(k), w.remove(k))
+            } else {
+                (m.insert(k, v), w.insert(k, v))
+            }
+        }
+    );
+    let all_match = ops.all(|op : (i64, i64)| {
+        let (k, _) = op;
+        map.get(k).unwrap_or(-1) == model.get(k).unwrap_or(-1)
+            && map.contains_key(k) == model.contains_key(k)
+    });
+    should_be(map.len(), model.len())
+        .and_then(|| expect(all_match, "cow HashMap and WavlMap lookups should match"))
 }
 
 #[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_map_basics(),
-        1 => test_map_cow(),
-        2 => test_collisions(),
-        3 => test_growth(),
-        4 => test_set_basics(),
-        5 => test_record_values(),
-        6 => test_primitive_keys(),
-        7 => test_str_keys(),
-        _ => core::intrinsic::panic::panic()
-    }
+pub fn main() {
+    test::runner::run_main(TestTree::group("cow_hash")
+        .with_case("map basics", test_map_basics)
+        .with_case("map cow", test_map_cow)
+        .with_case("collisions", test_collisions)
+        .with_case("growth", test_growth)
+        .with_case("set basics", test_set_basics)
+        .with_case("record values", test_record_values)
+        .with_case("primitive keys", test_primitive_keys)
+        .with_case("str keys", test_str_keys)
+        .with_fuzz(
+            "model equivalence (fuzz)",
+            list_of(tuple2(i64_domain(), i64_domain())),
+            model_equivalence
+        ))
 }
