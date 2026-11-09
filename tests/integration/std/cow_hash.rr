@@ -241,17 +241,17 @@ fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
 #[main]
 pub fn main() {
     test::runner::run_main(TestTree::group("cow_hash")
-        .with_case("map basics", || test_map_basics())
-        .with_case("map cow", || test_map_cow())
-        .with_case("collisions", || test_collisions())
-        .with_case("growth", || test_growth())
-        .with_case("set basics", || test_set_basics())
-        .with_case("record values", || test_record_values())
-        .with_case("primitive keys", || test_primitive_keys())
-        .with_case("str keys", || test_str_keys())
+        .with_case("map basics", test_map_basics)
+        .with_case("map cow", test_map_cow)
+        .with_case("collisions", test_collisions)
+        .with_case("growth", test_growth)
+        .with_case("set basics", test_set_basics)
+        .with_case("record values", test_record_values)
+        .with_case("primitive keys", test_primitive_keys)
+        .with_case("str keys", test_str_keys)
         .with_fuzz(
             "model equivalence (fuzz)",
             list_of(tuple2(i64_domain(), i64_domain())),
-            |ops : List<(i64, i64)>| model_equivalence(ops)
+            model_equivalence
         ))
 }

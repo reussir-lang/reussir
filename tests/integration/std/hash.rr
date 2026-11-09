@@ -168,7 +168,7 @@ fn test_primitives() -> Outcome {
 #[main]
 pub fn main() {
     test::runner::run_main(TestTree::group("hash")
-        .with_case("reference vectors", || test_reference_vectors())
-        .with_case("properties", || test_properties())
-        .with_case("primitives", || test_primitives()))
+        .with_case("reference vectors", test_reference_vectors)
+        .with_case("properties", test_properties)
+        .with_case("primitives", test_primitives))
 }

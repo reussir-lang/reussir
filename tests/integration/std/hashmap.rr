@@ -355,14 +355,14 @@ fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
 #[main]
 pub fn main() {
     test::runner::run_main(TestTree::group("hashmap")
-        .with_case("basics", || test_basics())
-        .with_case("adaptive", || test_adaptive())
-        .with_case("transforms", || test_transforms())
-        .with_case("algebra", || test_algebra())
-        .with_case("churn", || test_churn())
+        .with_case("basics", test_basics)
+        .with_case("adaptive", test_adaptive)
+        .with_case("transforms", test_transforms)
+        .with_case("algebra", test_algebra)
+        .with_case("churn", test_churn)
         .with_fuzz(
             "model equivalence (fuzz)",
             list_of(tuple2(i64_domain(), i64_domain())),
-            |ops : List<(i64, i64)>| model_equivalence(ops)
+            model_equivalence
         ))
 }
