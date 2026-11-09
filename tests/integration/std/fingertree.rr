@@ -1,249 +1,93 @@
-// A downstream package instantiates every generic finger-tree operation.
-// Numeric cases cover both ends, cached measures, random access, splitting,
-// concatenation, editing, traversal, persistence, and shared payloads.
+// A downstream package instantiates every generic finger-tree operation as a
+// coverage-guided fuzz target (`fuzzer = true`).
+// Numeric unit cases cover both ends, cached measures, random access,
+// splitting, concatenation, editing, traversal, persistence, and shared
+// payloads; fuzz cases exercise arbitrary operation streams and split/concat
+// algebra against a list model.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}fingertree
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin fingertree %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}fingertree
 
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/new.in | %FileCheck %s --check-prefix=NEW
-// NEW:      1
-// NEW-NEXT: 1
-// NEW-NEXT: 1
-// NEW-NEXT: 1
-// NEW-NEXT: 1
-// NEW-NEXT: 1
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/fingertree%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/fingertree%exe_ext -runs=64 -seed=12345 -artifact_prefix=%t.
 
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/singleton.in | %FileCheck %s --check-prefix=SINGLETON
-// SINGLETON:      1
-// SINGLETON-NEXT: 7
-// SINGLETON-NEXT: 7
-// SINGLETON-NEXT: 7
-// SINGLETON-NEXT: 1
-// SINGLETON-NEXT: 7
-// SINGLETON-NEXT: 1
+// CHECK:      fingertree/new: unit
+// CHECK-NEXT: fingertree/singleton: unit
+// CHECK-NEXT: fingertree/cons: unit
+// CHECK-NEXT: fingertree/snoc: unit
+// CHECK-NEXT: fingertree/mixed ends: unit
+// CHECK-NEXT: fingertree/persistence: unit
+// CHECK-NEXT: fingertree/bulk rotations: unit
+// CHECK-NEXT: fingertree/churn: unit
+// CHECK-NEXT: fingertree/shared payload: unit
+// CHECK-NEXT: fingertree/random access: unit
+// CHECK-NEXT: fingertree/split: unit
+// CHECK-NEXT: fingertree/concat: unit
+// CHECK-NEXT: fingertree/editing: unit
+// CHECK-NEXT: fingertree/transforms: unit
+// CHECK-NEXT: fingertree/predicates: unit
+// CHECK-NEXT: fingertree/take drop: unit
+// CHECK-NEXT: fingertree/exhaustive measures: unit
+// CHECK-NEXT: fingertree/api extras: unit
+// CHECK-NEXT: fingertree/invariants: unit
+// CHECK-NEXT: fingertree/sequence model & invariants (fuzz):
+// CHECK-NEXT: fingertree/split, concat, take & drop (fuzz):
+// CHECK-NEXT: fingertree/traversal, search & higher-order ops (fuzz):
 
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/cons.in | %FileCheck %s --check-prefix=CONS
-// CONS:      1
-// CONS-NEXT: 3
-// CONS-NEXT: 1
-// CONS-NEXT: 123
-// CONS-NEXT: 321
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/snoc.in | %FileCheck %s --check-prefix=SNOC
-// SNOC:      1
-// SNOC-NEXT: 3
-// SNOC-NEXT: 1
-// SNOC-NEXT: 123
-// SNOC-NEXT: 321
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/mixed_ends.in | %FileCheck %s --check-prefix=MIXED
-// MIXED:      1
-// MIXED-NEXT: 0
-// MIXED-NEXT: 4
-// MIXED-NEXT: 1234
-// MIXED-NEXT: 43210
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/persistence.in | %FileCheck %s --check-prefix=PERSISTENCE
-// PERSISTENCE:      1
-// PERSISTENCE-NEXT: 1
-// PERSISTENCE-NEXT: 45
-// PERSISTENCE-NEXT: 3456
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/bulk_rotations.in | %FileCheck %s --check-prefix=BULK
-// BULK:      1
-// BULK-NEXT: 1
-// BULK-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/churn.in | %FileCheck %s --check-prefix=CHURN
-// CHURN: 6112
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/shared_payload.in | %FileCheck %s --check-prefix=SHARED
-// SHARED:      1
-// SHARED-NEXT: 5
-// SHARED-NEXT: 7
-// SHARED-NEXT: 11
-// SHARED-NEXT: 7
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/random_access.in | %FileCheck %s --check-prefix=RANDOM
-// RANDOM:      0
-// RANDOM-NEXT: 31
-// RANDOM-NEXT: 63
-// RANDOM-NEXT: 64
-// RANDOM-NEXT: 127
-// RANDOM-NEXT: 1
-// RANDOM-NEXT: 640
-// RANDOM-NEXT: 641
-// RANDOM-NEXT: 64
-// RANDOM-NEXT: 1
-// RANDOM-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/split.in | %FileCheck %s --check-prefix=SPLIT
-// SPLIT:      1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 36
-// SPLIT-NEXT: 37
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 71
-// SPLIT-NEXT: 72
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-// SPLIT-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/concat.in | %FileCheck %s --check-prefix=CONCAT
-// CONCAT:      1
-// CONCAT-NEXT: 1
-// CONCAT-NEXT: 1
-// CONCAT-NEXT: 1
-// CONCAT-NEXT: 64
-// CONCAT-NEXT: 66
-// CONCAT-NEXT: 1
-// CONCAT-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/editing.in | %FileCheck %s --check-prefix=EDITING
-// EDITING:      1
-// EDITING-NEXT: 36
-// EDITING-NEXT: 700
-// EDITING-NEXT: 37
-// EDITING-NEXT: 800
-// EDITING-NEXT: 900
-// EDITING-NEXT: 700
-// EDITING-NEXT: 1
-// EDITING-NEXT: 1
-// EDITING-NEXT: 1
-// EDITING-NEXT: 1
-// EDITING-NEXT: 1
-// EDITING-NEXT: 49
-// EDITING-NEXT: 51
-// EDITING-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/transforms.in | %FileCheck %s --check-prefix=TRANSFORMS
-// TRANSFORMS:      1
-// TRANSFORMS-NEXT: 1234
-// TRANSFORMS-NEXT: 4321
-// TRANSFORMS-NEXT: 2468
-// TRANSFORMS-NEXT: 1234
-// TRANSFORMS-NEXT: 4321
-// TRANSFORMS-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/predicates.in | %FileCheck %s --check-prefix=PREDICATES
-// PREDICATES:      1
-// PREDICATES-NEXT: 2468
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 6
-// PREDICATES-NEXT: 6
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-// PREDICATES-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/take_drop.in | %FileCheck %s --check-prefix=TAKE_DROP
-// TAKE_DROP:      1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-// TAKE_DROP-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/exhaustive_measures.in | %FileCheck %s --check-prefix=EXHAUSTIVE
-// EXHAUSTIVE:      1
-// EXHAUSTIVE-NEXT: 1
-// EXHAUSTIVE-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/api_extras.in | %FileCheck %s --check-prefix=API_EXTRAS
-// API_EXTRAS:      1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 123
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-// API_EXTRAS-NEXT: 1
-
-// RUN: %std_rene_build/release/fingertree%exe_ext < %S/Inputs/fingertree/invariants.in | %FileCheck %s --check-prefix=INVARIANTS
-// INVARIANTS:      1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-// INVARIANTS-NEXT: 1
-
+import std::collections::cow::vec::Vec;
 import std::collections::pure::fingertree::FingerTree;
 import std::collections::pure::fingertree::RemoveResult;
 import std::collections::pure::fingertree::ViewLeft;
 import std::collections::pure::fingertree::ViewRight;
 import std::collections::pure::list::List;
 import std::option::Option;
+import test::domain::i32_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u64_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::fail;
+import test::expect::pass;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
 
 fn empty_tree() -> FingerTree<i32> {
     FingerTree::new()
 }
 
-fn write_bool(value : bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
-}
-
-fn test_new() {
+fn test_new() -> Outcome {
     let tree = empty_tree();
-    write_bool(tree.is_empty());
-    write_bool(tree.len() == 0);
-    write_bool(tree.front().is_none());
-    write_bool(tree.back().is_none());
-    write_bool(match tree.view_left() {
-        ViewLeft::Empty => true,
-        ViewLeft::Cons(_, _) => false
-    });
-    write_bool(match tree.view_right() {
-        ViewRight::Empty => true,
-        ViewRight::Snoc(_, _) => false
-    });
+    expect(tree.is_empty(), "empty tree should be empty")
+        .and_then(|| should_be(tree.len(), 0))
+        .and_then(|| expect(tree.front().is_none(), "empty front should be None"))
+        .and_then(|| expect(tree.back().is_none(), "empty back should be None"))
+        .and_then(|| match tree.view_left() {
+            ViewLeft::Empty => pass(),
+            ViewLeft::Cons(_, _) => fail("empty view_left should be Empty")
+        })
+        .and_then(|| match tree.view_right() {
+            ViewRight::Empty => pass(),
+            ViewRight::Snoc(_, _) => fail("empty view_right should be Empty")
+        })
 }
 
-fn test_singleton() {
+fn test_singleton() -> Outcome {
     let tree : FingerTree<i32> = FingerTree::singleton(7);
-    write_bool(tree.len() == 1);
-    test_utils::io::write_i32(tree.front().unwrap_or(-1));
-    test_utils::io::write_i32(tree.back().unwrap_or(-1));
-    match tree.view_left() {
-        ViewLeft::Cons(value, rest) => {
-            test_utils::io::write_i32(value);
-            write_bool(rest.is_empty());
-        },
-        ViewLeft::Empty => core::intrinsic::panic::panic()
-    };
-    match tree.view_right() {
-        ViewRight::Snoc(rest, value) => {
-            test_utils::io::write_i32(value);
-            write_bool(rest.is_empty());
-        },
-        ViewRight::Empty => core::intrinsic::panic::panic()
-    }
+    should_be(tree.len(), 1)
+        .and_then(|| should_be(tree.front().unwrap_or(-1), 7))
+        .and_then(|| should_be(tree.back().unwrap_or(-1), 7))
+        .and_then(|| match tree.view_left() {
+            ViewLeft::Cons(value, rest) =>
+                should_be(value, 7).and_then(|| expect(rest.is_empty(), "rest after view_left should be empty")),
+            ViewLeft::Empty => fail("singleton view_left should be Cons")
+        })
+        .and_then(|| match tree.view_right() {
+            ViewRight::Snoc(rest, value) =>
+                should_be(value, 7).and_then(|| expect(rest.is_empty(), "rest after view_right should be empty")),
+            ViewRight::Empty => fail("singleton view_right should be Snoc")
+        })
 }
 
 fn drain_left_decimal(
@@ -278,40 +122,40 @@ fn drain_right_decimal(
     }
 }
 
-fn test_cons() {
+fn test_cons() -> Outcome {
     let tree = empty_tree().cons(3).cons(2).cons(1);
-    test_utils::io::write_i32(tree.front().unwrap_or(-1));
-    test_utils::io::write_i32(tree.back().unwrap_or(-1));
-    write_bool(tree.len() == 3);
-    test_utils::io::write_i32(drain_left_decimal(3, tree, 0));
-    test_utils::io::write_i32(drain_right_decimal(3, tree, 0));
+    should_be(tree.front().unwrap_or(-1), 1)
+        .and_then(|| should_be(tree.back().unwrap_or(-1), 3))
+        .and_then(|| should_be(tree.len(), 3))
+        .and_then(|| should_be(drain_left_decimal(3, tree, 0), 123))
+        .and_then(|| should_be(drain_right_decimal(3, tree, 0), 321))
 }
 
-fn test_snoc() {
+fn test_snoc() -> Outcome {
     let tree = empty_tree().snoc(1).snoc(2).snoc(3);
-    test_utils::io::write_i32(tree.front().unwrap_or(-1));
-    test_utils::io::write_i32(tree.back().unwrap_or(-1));
-    write_bool(tree.len() == 3);
-    test_utils::io::write_i32(drain_left_decimal(3, tree, 0));
-    test_utils::io::write_i32(drain_right_decimal(3, tree, 0));
+    should_be(tree.front().unwrap_or(-1), 1)
+        .and_then(|| should_be(tree.back().unwrap_or(-1), 3))
+        .and_then(|| should_be(tree.len(), 3))
+        .and_then(|| should_be(drain_left_decimal(3, tree, 0), 123))
+        .and_then(|| should_be(drain_right_decimal(3, tree, 0), 321))
 }
 
-fn test_mixed_ends() {
+fn test_mixed_ends() -> Outcome {
     let tree = empty_tree().snoc(2).cons(1).snoc(3).cons(0).snoc(4);
-    write_bool(tree.len() == 5);
-    test_utils::io::write_i32(tree.front().unwrap_or(-1));
-    test_utils::io::write_i32(tree.back().unwrap_or(-1));
-    test_utils::io::write_i32(drain_left_decimal(5, tree, 0));
-    test_utils::io::write_i32(drain_right_decimal(5, tree, 0));
+    should_be(tree.len(), 5)
+        .and_then(|| should_be(tree.front().unwrap_or(-1), 0))
+        .and_then(|| should_be(tree.back().unwrap_or(-1), 4))
+        .and_then(|| should_be(drain_left_decimal(5, tree, 0), 1234))
+        .and_then(|| should_be(drain_right_decimal(5, tree, 0), 43210))
 }
 
-fn test_persistence() {
+fn test_persistence() -> Outcome {
     let base = empty_tree().snoc(4).snoc(5);
     let extended = base.cons(3).snoc(6);
-    write_bool(base.len() == 2);
-    write_bool(extended.len() == 4);
-    test_utils::io::write_i32(drain_left_decimal(2, base, 0));
-    test_utils::io::write_i32(drain_left_decimal(4, extended, 0));
+    should_be(base.len(), 2)
+        .and_then(|| should_be(extended.len(), 4))
+        .and_then(|| should_be(drain_left_decimal(2, base, 0), 45))
+        .and_then(|| should_be(drain_left_decimal(4, extended, 0), 3456))
 }
 
 fn build(next : i32, end : i32, tree : FingerTree<i32>) -> FingerTree<i32> {
@@ -352,11 +196,11 @@ fn verify_right(expected : i32, tree : FingerTree<i32>) -> bool {
     }
 }
 
-fn test_bulk_rotations() {
+fn test_bulk_rotations() -> Outcome {
     let tree = build(0, 64, empty_tree());
-    write_bool(tree.len() == 64);
-    write_bool(verify_left(0, 64, tree));
-    write_bool(verify_right(63, tree));
+    should_be(tree.len(), 64)
+        .and_then(|| expect(verify_left(0, 64, tree), "verify_left 0..64 failed"))
+        .and_then(|| expect(verify_right(63, tree), "verify_right 63..0 failed"))
 }
 
 fn drain_sum(tree : FingerTree<i32>, checksum : i32) -> i32 {
@@ -387,8 +231,8 @@ fn churn(
     }
 }
 
-fn test_churn() {
-    test_utils::io::write_i32(churn(0, 64, build(0, 64, empty_tree()), 0));
+fn test_churn() -> Outcome {
+    should_be(churn(0, 64, build(0, 64, empty_tree()), 0), 6112)
 }
 
 struct Item {
@@ -399,119 +243,114 @@ fn empty_item_tree() -> FingerTree<Item> {
     FingerTree::new()
 }
 
-fn test_shared_payload() {
+fn test_shared_payload() -> Outcome {
     let tree = empty_item_tree()
         .snoc(Item { value: 7 })
         .snoc(Item { value: 11 })
         .cons(Item { value: 5 });
-    write_bool(tree.len() == 3);
-    match tree.view_left() {
-        ViewLeft::Cons(first, rest) => {
-            test_utils::io::write_i32(first.value);
-            test_utils::io::write_i32(rest.front().unwrap_or_panic().value);
-        },
-        ViewLeft::Empty => core::intrinsic::panic::panic()
-    };
-    match tree.view_right() {
-        ViewRight::Snoc(rest, last) => {
-            test_utils::io::write_i32(last.value);
-            test_utils::io::write_i32(rest.back().unwrap_or_panic().value);
-        },
-        ViewRight::Empty => core::intrinsic::panic::panic()
-    }
+    should_be(tree.len(), 3)
+        .and_then(|| match tree.view_left() {
+            ViewLeft::Cons(first, rest) =>
+                should_be(first.value, 5)
+                    .and_then(|| should_be(rest.front().unwrap_or_panic().value, 7)),
+            ViewLeft::Empty => fail("expected non-empty view_left")
+        })
+        .and_then(|| match tree.view_right() {
+            ViewRight::Snoc(rest, last) =>
+                should_be(last.value, 11)
+                    .and_then(|| should_be(rest.back().unwrap_or_panic().value, 7)),
+            ViewRight::Empty => fail("expected non-empty view_right")
+        })
 }
 
-fn test_random_access() {
+fn test_random_access() -> Outcome {
     let tree = build(0, 128, empty_tree());
-    test_utils::io::write_i32(tree.get(0).unwrap_or(-1));
-    test_utils::io::write_i32(tree.get(31).unwrap_or(-1));
-    test_utils::io::write_i32(tree.get(63).unwrap_or(-1));
-    test_utils::io::write_i32(tree.get(64).unwrap_or(-1));
-    test_utils::io::write_i32(tree.get(127).unwrap_or(-1));
-    write_bool(tree.get(128).is_none());
-
     let replaced = tree.set(64, 640);
     let adjusted = replaced.adjust(64, |value| value + 1);
-    test_utils::io::write_i32(replaced.get(64).unwrap_or(-1));
-    test_utils::io::write_i32(adjusted.get(64).unwrap_or(-1));
-    test_utils::io::write_i32(tree.get(64).unwrap_or(-1));
-    write_bool(adjusted.set(999, 0).get(64).unwrap_or(-1) == 641);
-    write_bool(adjusted.adjust(999, |value| value + 1).len() == 128);
+    should_be(tree.get(0).unwrap_or(-1), 0)
+        .and_then(|| should_be(tree.get(31).unwrap_or(-1), 31))
+        .and_then(|| should_be(tree.get(63).unwrap_or(-1), 63))
+        .and_then(|| should_be(tree.get(64).unwrap_or(-1), 64))
+        .and_then(|| should_be(tree.get(127).unwrap_or(-1), 127))
+        .and_then(|| expect(tree.get(128).is_none(), "out-of-bounds get should be None"))
+        .and_then(|| should_be(replaced.get(64).unwrap_or(-1), 640))
+        .and_then(|| should_be(adjusted.get(64).unwrap_or(-1), 641))
+        .and_then(|| should_be(tree.get(64).unwrap_or(-1), 64))
+        .and_then(|| should_be(adjusted.set(999, 0).get(64).unwrap_or(-1), 641))
+        .and_then(|| should_be(adjusted.adjust(999, |value| value + 1).len(), 128))
 }
 
-fn test_split() {
+fn test_split() -> Outcome {
     let tree = build(0, 128, empty_tree());
     let at37 = tree.split_at(37);
-    write_bool(at37.left.len() == 37);
-    write_bool(at37.right.len() == 91);
-    write_bool(verify_left(0, 37, at37.left));
-    write_bool(verify_left(37, 128, at37.right));
-    test_utils::io::write_i32(at37.left.back().unwrap_or(-1));
-    test_utils::io::write_i32(at37.right.front().unwrap_or(-1));
-    write_bool(verify_left(0, 128, at37.left.concat(at37.right)));
     let measured = tree.split(|measure| measure >= 73);
-    write_bool(measured.left.len() == 72);
-    write_bool(measured.right.len() == 56);
-    test_utils::io::write_i32(measured.left.back().unwrap_or(-1));
-    test_utils::io::write_i32(measured.right.front().unwrap_or(-1));
     let at_start = tree.split_at(0);
-    write_bool(at_start.left.is_empty());
-    write_bool(at_start.right.len() == 128);
     let past_end = tree.split_at(999);
-    write_bool(past_end.left.len() == 128);
-    write_bool(past_end.right.is_empty());
     let never = tree.split(|measure| measure < 0);
-    write_bool(never.left.len() == 128);
-    write_bool(never.right.is_empty());
     let always = tree.split(|measure| measure >= 0);
-    write_bool(always.left.is_empty());
-    write_bool(always.right.len() == 128);
+    should_be(at37.left.len(), 37)
+        .and_then(|| should_be(at37.right.len(), 91))
+        .and_then(|| expect(verify_left(0, 37, at37.left), "at37.left contents failed"))
+        .and_then(|| expect(verify_left(37, 128, at37.right), "at37.right contents failed"))
+        .and_then(|| should_be(at37.left.back().unwrap_or(-1), 36))
+        .and_then(|| should_be(at37.right.front().unwrap_or(-1), 37))
+        .and_then(|| expect(verify_left(0, 128, at37.left.concat(at37.right)), "rejoined at37 failed"))
+        .and_then(|| should_be(measured.left.len(), 72))
+        .and_then(|| should_be(measured.right.len(), 56))
+        .and_then(|| should_be(measured.left.back().unwrap_or(-1), 71))
+        .and_then(|| should_be(measured.right.front().unwrap_or(-1), 72))
+        .and_then(|| expect(at_start.left.is_empty(), "at_start.left should be empty"))
+        .and_then(|| should_be(at_start.right.len(), 128))
+        .and_then(|| should_be(past_end.left.len(), 128))
+        .and_then(|| expect(past_end.right.is_empty(), "past_end.right should be empty"))
+        .and_then(|| should_be(never.left.len(), 128))
+        .and_then(|| expect(never.right.is_empty(), "never.right should be empty"))
+        .and_then(|| expect(always.left.is_empty(), "always.left should be empty"))
+        .and_then(|| should_be(always.right.len(), 128))
 }
 
-fn test_concat() {
+fn test_concat() -> Outcome {
     let left = build(0, 65, empty_tree());
     let middle : FingerTree<i32> = FingerTree::singleton(65);
     let right = build(66, 137, empty_tree());
     let joined = left.concat(middle).concat(right);
-    write_bool(joined.len() == 137);
-    write_bool(verify_left(0, 137, joined));
-    write_bool(left.len() == 65);
-    write_bool(right.len() == 71);
-    test_utils::io::write_i32(left.back().unwrap_or(-1));
-    test_utils::io::write_i32(right.front().unwrap_or(-1));
-    write_bool(verify_left(0, 65, left.concat(empty_tree())));
-    write_bool(verify_left(66, 137, empty_tree().concat(right)));
+    should_be(joined.len(), 137)
+        .and_then(|| expect(verify_left(0, 137, joined), "joined contents failed"))
+        .and_then(|| should_be(left.len(), 65))
+        .and_then(|| should_be(right.len(), 71))
+        .and_then(|| should_be(left.back().unwrap_or(-1), 64))
+        .and_then(|| should_be(right.front().unwrap_or(-1), 66))
+        .and_then(|| expect(verify_left(0, 65, left.concat(empty_tree())), "left.concat(empty) failed"))
+        .and_then(|| expect(verify_left(66, 137, empty_tree().concat(right)), "empty.concat(right) failed"))
 }
 
-fn test_editing() {
+fn test_editing() -> Outcome {
     let tree = build(0, 100, empty_tree());
     let inserted = tree.insert_at(37, 700);
-    write_bool(inserted.len() == 101);
-    test_utils::io::write_i32(inserted.get(36).unwrap_or(-1));
-    test_utils::io::write_i32(inserted.get(37).unwrap_or(-1));
-    test_utils::io::write_i32(inserted.get(38).unwrap_or(-1));
-    test_utils::io::write_i32(inserted.insert_at(0, 800).front().unwrap_or(-1));
-    test_utils::io::write_i32(inserted.insert_at(999, 900).back().unwrap_or(-1));
-    match inserted.remove_at(37) {
-        RemoveResult::Removed(value, rest) => {
-            test_utils::io::write_i32(value);
-            write_bool(rest.len() == 100);
-            write_bool(verify_left(0, 100, rest));
-        },
-        RemoveResult::OutOfBounds(_) => core::intrinsic::panic::panic()
-    };
-    match tree.remove_at(1000) {
-        RemoveResult::OutOfBounds(original) => {
-            write_bool(original.len() == 100);
-            write_bool(verify_left(0, 100, original));
-        },
-        RemoveResult::Removed(_, _) => core::intrinsic::panic::panic()
-    };
     let deleted = tree.delete_at(50);
-    write_bool(deleted.len() == 99);
-    test_utils::io::write_i32(deleted.get(49).unwrap_or(-1));
-    test_utils::io::write_i32(deleted.get(50).unwrap_or(-1));
-    write_bool(tree.delete_at(1000).len() == 100);
+    should_be(inserted.len(), 101)
+        .and_then(|| should_be(inserted.get(36).unwrap_or(-1), 36))
+        .and_then(|| should_be(inserted.get(37).unwrap_or(-1), 700))
+        .and_then(|| should_be(inserted.get(38).unwrap_or(-1), 37))
+        .and_then(|| should_be(inserted.insert_at(0, 800).front().unwrap_or(-1), 800))
+        .and_then(|| should_be(inserted.insert_at(999, 900).back().unwrap_or(-1), 900))
+        .and_then(|| match inserted.remove_at(37) {
+            RemoveResult::Removed(value, rest) =>
+                should_be(value, 700)
+                    .and_then(|| should_be(rest.len(), 100))
+                    .and_then(|| expect(verify_left(0, 100, rest), "rest after remove_at(37) failed")),
+            RemoveResult::OutOfBounds(_) => fail("remove_at(37) should not be OutOfBounds")
+        })
+        .and_then(|| match tree.remove_at(1000) {
+            RemoveResult::OutOfBounds(original) =>
+                should_be(original.len(), 100)
+                    .and_then(|| expect(verify_left(0, 100, original), "original after OutOfBounds failed")),
+            RemoveResult::Removed(_, _) => fail("remove_at(1000) should be OutOfBounds")
+        })
+        .and_then(|| should_be(deleted.len(), 99))
+        .and_then(|| should_be(deleted.get(49).unwrap_or(-1), 49))
+        .and_then(|| should_be(deleted.get(50).unwrap_or(-1), 51))
+        .and_then(|| should_be(tree.delete_at(1000).len(), 100))
 }
 
 fn list_decimal(values : List<i32>, acc : i32) -> i32 {
@@ -521,7 +360,7 @@ fn list_decimal(values : List<i32>, acc : i32) -> i32 {
     }
 }
 
-fn test_transforms() {
+fn test_transforms() -> Outcome {
     let values = List::Cons {
         1,
         List::Cons {
@@ -530,56 +369,46 @@ fn test_transforms() {
         }
     };
     let tree = FingerTree::from_list(values);
-    write_bool(tree.len() == 4);
-    test_utils::io::write_i32(list_decimal(tree.to_list(), 0));
-    test_utils::io::write_i32(drain_left_decimal(4, tree.reverse(), 0));
-    test_utils::io::write_i32(
-        drain_left_decimal(4, tree.map(|value| value * 2), 0)
-    );
-    test_utils::io::write_i32(
-        tree.fold_left(0, |acc, value| acc * 10 + value)
-    );
-    test_utils::io::write_i32(
-        tree.fold_right(0, |value, acc| acc * 10 + value)
-    );
-    write_bool(drain_left_decimal(4, tree, 0) == 1234);
+    should_be(tree.len(), 4)
+        .and_then(|| should_be(list_decimal(tree.to_list(), 0), 1234))
+        .and_then(|| should_be(drain_left_decimal(4, tree.reverse(), 0), 4321))
+        .and_then(|| should_be(drain_left_decimal(4, tree.map(|value| value * 2), 0), 2468))
+        .and_then(|| should_be(tree.fold_left(0, |acc, value| acc * 10 + value), 1234))
+        .and_then(|| should_be(tree.fold_right(0, |value, acc| acc * 10 + value), 4321))
+        .and_then(|| should_be(drain_left_decimal(4, tree, 0), 1234))
 }
 
-fn test_predicates() {
+fn test_predicates() -> Outcome {
     let tree = build(0, 10, empty_tree());
     let evens = tree.filter(|value| value % 2 == 0);
-    write_bool(evens.len() == 5);
-    test_utils::io::write_i32(drain_left_decimal(5, evens, 0));
-    write_bool(tree.count_if(|value| value >= 5) == 5);
-    test_utils::io::write_i32(
-        tree.find_first(|value| value >= 6).unwrap_or(-1)
-    );
-    test_utils::io::write_i32(
-        tree.find_last(|value| value < 7).unwrap_or(-1)
-    );
-    write_bool(tree.find_first(|value| value < 0).is_none());
-    write_bool(tree.find_last(|value| value < 0).is_none());
-    write_bool(tree.any(|value| value == 9));
-    write_bool(!tree.any(|value| value == 10));
-    write_bool(tree.all(|value| value < 10));
-    write_bool(!tree.all(|value| value < 9));
-    write_bool(tree.contains(5));
-    write_bool(!tree.contains(10));
+    should_be(evens.len(), 5)
+        .and_then(|| should_be(drain_left_decimal(5, evens, 0), 2468))
+        .and_then(|| should_be(tree.count_if(|value| value >= 5), 5))
+        .and_then(|| should_be(tree.find_first(|value| value >= 6).unwrap_or(-1), 6))
+        .and_then(|| should_be(tree.find_last(|value| value < 7).unwrap_or(-1), 6))
+        .and_then(|| expect(tree.find_first(|value| value < 0).is_none(), "find_first < 0 should be None"))
+        .and_then(|| expect(tree.find_last(|value| value < 0).is_none(), "find_last < 0 should be None"))
+        .and_then(|| expect(tree.any(|value| value == 9), "any == 9 should hold"))
+        .and_then(|| expect(!tree.any(|value| value == 10), "any == 10 should be false"))
+        .and_then(|| expect(tree.all(|value| value < 10), "all < 10 should hold"))
+        .and_then(|| expect(!tree.all(|value| value < 9), "all < 9 should be false"))
+        .and_then(|| expect(tree.contains(5), "contains(5) should hold"))
+        .and_then(|| expect(!tree.contains(10), "contains(10) should be false"))
 }
 
-fn test_take_drop() {
+fn test_take_drop() -> Outcome {
     let tree = build(0, 20, empty_tree());
     let first = tree.take(7);
     let rest = tree.drop(7);
-    write_bool(first.len() == 7);
-    write_bool(rest.len() == 13);
-    write_bool(verify_left(0, 7, first));
-    write_bool(verify_left(7, 20, rest));
-    write_bool(tree.take(0).is_empty());
-    write_bool(tree.drop(0).len() == 20);
-    write_bool(tree.take(999).len() == 20);
-    write_bool(tree.drop(999).is_empty());
-    write_bool(verify_left(0, 20, first.concat(rest)));
+    should_be(first.len(), 7)
+        .and_then(|| should_be(rest.len(), 13))
+        .and_then(|| expect(verify_left(0, 7, first), "take(7) contents failed"))
+        .and_then(|| expect(verify_left(7, 20, rest), "drop(7) contents failed"))
+        .and_then(|| expect(tree.take(0).is_empty(), "take(0) should be empty"))
+        .and_then(|| should_be(tree.drop(0).len(), 20))
+        .and_then(|| should_be(tree.take(999).len(), 20))
+        .and_then(|| expect(tree.drop(999).is_empty(), "drop(999) should be empty"))
+        .and_then(|| expect(verify_left(0, 20, first.concat(rest)), "take(7).concat(drop(7)) failed"))
 }
 
 fn verify_all_gets(index : i32, end : i32, tree : FingerTree<i32>) -> bool {
@@ -636,37 +465,40 @@ fn verify_all_measured_splits(
     }
 }
 
-fn test_exhaustive_measures() {
+fn test_exhaustive_measures() -> Outcome {
     let tree = build(0, 128, empty_tree());
-    write_bool(verify_all_gets(0, 128, tree));
-    write_bool(verify_all_index_splits(0, 128, tree));
-    write_bool(verify_all_measured_splits(0, 128, tree));
+    expect(verify_all_gets(0, 128, tree), "verify_all_gets failed")
+        .and_then(|| expect(verify_all_index_splits(0, 128, tree), "verify_all_index_splits failed"))
+        .and_then(|| expect(verify_all_measured_splits(0, 128, tree), "verify_all_measured_splits failed"))
 }
 
-fn test_api_extras() {
+fn test_api_extras() -> Outcome {
     let tree = build(0, 10, empty_tree());
-    write_bool(tree.clear().is_empty());
-    write_bool(tree.equals(build(0, 10, empty_tree())));
-    write_bool(tree == build(0, 10, empty_tree()));
-    write_bool(tree != build(0, 9, empty_tree()));
-    write_bool(tree != tree.set(3, 33));
-    test_utils::io::write_i32(drain_left_decimal(
-        4,
-        tree.filter_map(|value| {
-            if value % 3 == 0 {
-                Option::Some { value / 3 }
-            } else {
-                Option::None
-            }
-        }),
-        0
-    ));
-    write_bool(tree.find_index(|value| value >= 6).unwrap_or(999) == 6);
-    write_bool(tree.find_last_index(|value| value < 7).unwrap_or(999) == 6);
-    write_bool(tree.find_index(|value| value < 0).is_none());
-    write_bool(tree.find_last_index(|value| value > 100).is_none());
-    write_bool(tree.index_of(4).unwrap_or(999) == 4);
-    write_bool(tree.index_of(42).is_none());
+    expect(tree.clear().is_empty(), "clear should be empty")
+        .and_then(|| expect(tree.equals(build(0, 10, empty_tree())), "equals should hold"))
+        .and_then(|| expect(tree == build(0, 10, empty_tree()), "== should hold"))
+        .and_then(|| expect(tree != build(0, 9, empty_tree()), "!= shorter tree should hold"))
+        .and_then(|| expect(tree != tree.set(3, 33), "!= modified tree should hold"))
+        .and_then(|| should_be(
+            drain_left_decimal(
+                4,
+                tree.filter_map(|value| {
+                    if value % 3 == 0 {
+                        Option::Some { value / 3 }
+                    } else {
+                        Option::None
+                    }
+                }),
+                0
+            ),
+            123
+        ))
+        .and_then(|| should_be(tree.find_index(|value| value >= 6).unwrap_or(999), 6))
+        .and_then(|| should_be(tree.find_last_index(|value| value < 7).unwrap_or(999), 6))
+        .and_then(|| expect(tree.find_index(|value| value < 0).is_none(), "find_index < 0 should be None"))
+        .and_then(|| expect(tree.find_last_index(|value| value > 100).is_none(), "find_last_index > 100 should be None"))
+        .and_then(|| should_be(tree.index_of(4).unwrap_or(999), 4))
+        .and_then(|| expect(tree.index_of(42).is_none(), "index_of(42) should be None"))
 }
 
 fn churn_tree(remaining : i32, tree : FingerTree<i32>) -> FingerTree<i32> {
@@ -681,46 +513,366 @@ fn churn_tree(remaining : i32, tree : FingerTree<i32>) -> FingerTree<i32> {
     }
 }
 
-fn test_invariants() {
+fn test_invariants() -> Outcome {
     let tree = build(0, 100, empty_tree());
-    write_bool(tree.valid());
-    write_bool(churn_tree(150, tree).valid());
-    write_bool(tree.set(50, 500).valid());
-    write_bool(tree.adjust(51, |value| value + 1).valid());
-    write_bool(tree.insert_at(37, 999).valid());
-    write_bool(tree.delete_at(37).valid());
     let parts = tree.split_at(63);
-    write_bool(parts.left.valid());
-    write_bool(parts.right.valid());
-    write_bool(parts.left.concat(parts.right).valid());
-    write_bool(tree.reverse().valid());
-    write_bool(tree.map(|value| value * 2).valid());
-    write_bool(tree.filter(|value| value % 2 == 0).valid());
-    write_bool(empty_tree().valid());
+    expect(tree.valid(), "initial tree valid")
+        .and_then(|| expect(churn_tree(150, tree).valid(), "churned tree valid"))
+        .and_then(|| expect(tree.set(50, 500).valid(), "set tree valid"))
+        .and_then(|| expect(tree.adjust(51, |value| value + 1).valid(), "adjust tree valid"))
+        .and_then(|| expect(tree.insert_at(37, 999).valid(), "insert_at tree valid"))
+        .and_then(|| expect(tree.delete_at(37).valid(), "delete_at tree valid"))
+        .and_then(|| expect(parts.left.valid(), "split left valid"))
+        .and_then(|| expect(parts.right.valid(), "split right valid"))
+        .and_then(|| expect(parts.left.concat(parts.right).valid(), "concat valid"))
+        .and_then(|| expect(tree.reverse().valid(), "reverse valid"))
+        .and_then(|| expect(tree.map(|value| value * 2).valid(), "map valid"))
+        .and_then(|| expect(tree.filter(|value| value % 2 == 0).valid(), "filter valid"))
+        .and_then(|| expect(empty_tree().valid(), "empty valid"))
 }
 
-#[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_new(),
-        1 => test_singleton(),
-        2 => test_cons(),
-        3 => test_snoc(),
-        4 => test_mixed_ends(),
-        5 => test_persistence(),
-        6 => test_bulk_rotations(),
-        7 => test_churn(),
-        8 => test_shared_payload(),
-        9 => test_random_access(),
-        10 => test_split(),
-        11 => test_concat(),
-        12 => test_editing(),
-        13 => test_transforms(),
-        14 => test_predicates(),
-        15 => test_take_drop(),
-        16 => test_exhaustive_measures(),
-        17 => test_api_extras(),
-        18 => test_invariants(),
-        _ => core::intrinsic::panic::panic()
+fn list_snoc(list : List<i32>, value : i32) -> List<i32> {
+    match list {
+        List::Nil => List::Cons { value, List::Nil },
+        List::Cons(h, t) => List::Cons { h, list_snoc(t, value) }
     }
 }
+
+fn list_pop_right(list : List<i32>) -> List<i32> {
+    match list {
+        List::Nil => List::Nil,
+        List::Cons(_, List::Nil) => List::Nil,
+        List::Cons(h, t) => List::Cons { h, list_pop_right(t) }
+    }
+}
+
+fn list_insert_at(list : List<i32>, idx : u64, value : i32) -> List<i32> {
+    if idx == 0 {
+        List::Cons { value, list }
+    } else {
+        match list {
+            List::Nil => List::Cons { value, List::Nil },
+            List::Cons(h, t) => List::Cons { h, list_insert_at(t, idx - 1, value) }
+        }
+    }
+}
+
+fn list_delete_at(list : List<i32>, idx : u64) -> List<i32> {
+    match list {
+        List::Nil => List::Nil,
+        List::Cons(h, t) => if idx == 0 { t } else { List::Cons { h, list_delete_at(t, idx - 1) } }
+    }
+}
+
+fn list_set_at(list : List<i32>, idx : u64, value : i32) -> List<i32> {
+    match list {
+        List::Nil => List::Nil,
+        List::Cons(h, t) => if idx == 0 {
+            List::Cons { value, t }
+        } else {
+            List::Cons { h, list_set_at(t, idx - 1, value) }
+        }
+    }
+}
+
+fn list_get(list : List<i32>, idx : u64) -> Option<i32> {
+    match list {
+        List::Nil => Option::None,
+        List::Cons(h, t) => if idx == 0 {
+            Option::Some { h }
+        } else {
+            list_get(t, idx - 1)
+        }
+    }
+}
+
+fn list_adjust_at(list : List<i32>, idx : u64, delta : i32) -> List<i32> {
+    match list {
+        List::Nil => List::Nil,
+        List::Cons(h, t) => if idx == 0 {
+            List::Cons { h + delta, t }
+        } else {
+            List::Cons { h, list_adjust_at(t, idx - 1, delta) }
+        }
+    }
+}
+
+fn list_equal(a : List<i32>, b : List<i32>) -> bool {
+    match a {
+        List::Nil => b.is_nil(),
+        List::Cons(x, xs) => match b {
+            List::Nil => false,
+            List::Cons(y, ys) => x == y && list_equal(xs, ys)
+        }
+    }
+}
+
+fn apply_seq_ops(
+    ops : Vec<i32>,
+    idx : u64,
+    tree : FingerTree<i32>,
+    model : List<i32>
+) -> bool {
+    if !tree.valid() {
+        false
+    } else {
+        if idx >= ops.len() {
+            tree.len() == model.len()
+                && tree.is_empty() == model.is_nil()
+                && tree.front().unwrap_or(-999999) == model.head().unwrap_or(-999999)
+                && list_equal(tree.to_list(), model)
+                && list_equal(tree.fold_right(List::Nil, |x, acc| List::Cons { x, acc }), model)
+                && list_equal(tree.fold_left(List::Nil, |acc, x| List::Cons { x, acc }), model.reverse())
+                && FingerTree::from_list(model) == tree
+        } else {
+            let op = ops.get(idx).unwrap_or(0);
+            let kind = ((op as u64) % 10) as i32;
+            let val = op >> 4;
+            let n = tree.len();
+            if kind == 0 {
+                apply_seq_ops(ops, idx + 1, tree.cons(val), List::Cons { val, model })
+            } else {
+                if kind == 1 {
+                    apply_seq_ops(ops, idx + 1, tree.snoc(val), list_snoc(model, val))
+                } else {
+                    if kind == 2 {
+                        let next_tree = match tree.view_left() {
+                            ViewLeft::Empty => empty_tree(),
+                            ViewLeft::Cons(_, rest) => rest
+                        };
+                        apply_seq_ops(ops, idx + 1, next_tree, model.tail())
+                    } else {
+                        if kind == 3 {
+                            let next_tree = match tree.view_right() {
+                                ViewRight::Empty => empty_tree(),
+                                ViewRight::Snoc(rest, _) => rest
+                            };
+                            apply_seq_ops(ops, idx + 1, next_tree, list_pop_right(model))
+                        } else {
+                            if kind == 4 {
+                                let pos = ((val as u64) & 1023) % (n + 1);
+                                apply_seq_ops(
+                                    ops,
+                                    idx + 1,
+                                    tree.insert_at(pos, val),
+                                    list_insert_at(model, pos, val)
+                                )
+                            } else {
+                                if kind == 5 {
+                                    if n == 0 {
+                                        apply_seq_ops(ops, idx + 1, tree.delete_at(0), model)
+                                    } else {
+                                        let pos = ((val as u64) & 1023) % n;
+                                        apply_seq_ops(
+                                            ops,
+                                            idx + 1,
+                                            tree.delete_at(pos),
+                                            list_delete_at(model, pos)
+                                        )
+                                    }
+                                } else {
+                                    if kind == 6 {
+                                        if n == 0 {
+                                            match tree.remove_at(0) {
+                                                RemoveResult::OutOfBounds(rest) =>
+                                                    apply_seq_ops(ops, idx + 1, rest, model),
+                                                RemoveResult::Removed(_, _) => false
+                                            }
+                                        } else {
+                                            let pos = ((val as u64) & 1023) % n;
+                                            let expected = list_get(model, pos).unwrap_or(-999999);
+                                            match tree.remove_at(pos) {
+                                                RemoveResult::Removed(got, rest) =>
+                                                    got == expected && apply_seq_ops(
+                                                        ops,
+                                                        idx + 1,
+                                                        rest,
+                                                        list_delete_at(model, pos)
+                                                    ),
+                                                RemoveResult::OutOfBounds(_) => false
+                                            }
+                                        }
+                                    } else {
+                                        if kind == 7 {
+                                            if n == 0 {
+                                                apply_seq_ops(ops, idx + 1, tree.set(0, val), model)
+                                            } else {
+                                                let pos = ((val as u64) & 1023) % n;
+                                                apply_seq_ops(
+                                                    ops,
+                                                    idx + 1,
+                                                    tree.set(pos, val),
+                                                    list_set_at(model, pos, val)
+                                                )
+                                            }
+                                        } else {
+                                            if kind == 8 {
+                                                if n == 0 {
+                                                    apply_seq_ops(ops, idx + 1, tree.adjust(0, |x| x + val), model)
+                                                } else {
+                                                    let pos = ((val as u64) & 1023) % n;
+                                                    apply_seq_ops(
+                                                        ops,
+                                                        idx + 1,
+                                                        tree.adjust(pos, |x| x + val),
+                                                        list_adjust_at(model, pos, val)
+                                                    )
+                                                }
+                                            } else {
+                                                apply_seq_ops(ops, idx + 1, tree.reverse(), model.reverse())
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn tree_from_vec(xs : Vec<i32>, idx : u64, acc : FingerTree<i32>) -> FingerTree<i32> {
+    if idx >= xs.len() {
+        acc
+    } else {
+        let v = xs.get(idx).unwrap_or(0);
+        let next = if (idx & 1) == 0 { acc.snoc(v) } else { acc.cons(v) };
+        tree_from_vec(xs, idx + 1, next)
+    }
+}
+
+fn fuzz_sequence_model(ops : Vec<i32>) -> Outcome {
+    expect(
+        apply_seq_ops(ops, 0, empty_tree(), List::Nil),
+        "FingerTree diverged from List model or violated invariants"
+    )
+}
+
+fn fuzz_split_concat(input : (Vec<i32>, Vec<i32>, u64)) -> Outcome {
+    let (xs, ys, k) = input;
+    let a = tree_from_vec(xs, 0, empty_tree());
+    let b = tree_from_vec(ys, 0, empty_tree());
+    let joined = a.concat(b);
+    let parts = joined.split_at(k);
+    let measured = joined.split(|m| m > k);
+    let rev = joined.reverse();
+    expect(
+        a.valid()
+            && b.valid()
+            && joined.valid()
+            && joined.len() == a.len() + b.len()
+            && parts.left.valid()
+            && parts.right.valid()
+            && parts.left == joined.take(k)
+            && parts.right == joined.drop(k)
+            && parts.left.concat(parts.right) == joined
+            && measured.left.valid()
+            && measured.right.valid()
+            && measured.left == parts.left
+            && measured.right == parts.right
+            && rev.valid()
+            && rev.reverse() == joined,
+        "FingerTree split/concat/take/drop/reverse invariant failed"
+    )
+}
+
+fn fuzz_traversal_search(input : (Vec<i32>, i32)) -> Outcome {
+    let (xs, needle) = input;
+    let tree = tree_from_vec(xs, 0, empty_tree());
+    let model = tree.to_list();
+    let mapped = tree.map(|x| x * 3 + 1);
+    let filtered = tree.filter(|x| x >= needle);
+    let fmapped = tree.filter_map(|x| {
+        if (x & 1) == 0 {
+            Option::Some { x / 2 }
+        } else {
+            Option::None
+        }
+    });
+    let idx_ok = match tree.index_of(needle) {
+        Option::Some(idx) => tree.get(idx).unwrap_or(needle + 1) == needle,
+        Option::None => !tree.contains(needle)
+    };
+    let first_idx_ok = match tree.find_index(|x| x >= needle) {
+        Option::Some(idx) =>
+            tree.get(idx).unwrap_or(needle - 1) >= needle
+                && (idx == 0 || tree.take(idx).all(|x| x < needle)),
+        Option::None => tree.all(|x| x < needle)
+    };
+    let last_idx_ok = match tree.find_last_index(|x| x >= needle) {
+        Option::Some(idx) =>
+            tree.get(idx).unwrap_or(needle - 1) >= needle
+                && tree.drop(idx + 1).all(|x| x < needle),
+        Option::None => tree.all(|x| x < needle)
+    };
+    expect(
+        mapped.valid()
+            && list_equal(mapped.to_list(), model.map(|x| x * 3 + 1))
+            && filtered.valid()
+            && list_equal(filtered.to_list(), model.filter(|x| x >= needle))
+            && fmapped.valid()
+            && tree.contains(needle) == model.contains(needle)
+            && tree.any(|x| x > needle) == model.any(|x| x > needle)
+            && tree.all(|x| x <= needle) == model.all(|x| x <= needle)
+            && tree.count_if(|x| x >= needle) == model.count_if(|x| x >= needle)
+            && tree.find_first(|x| x >= needle).unwrap_or(-999999)
+                == model.find_first(|x| x >= needle).unwrap_or(-999999)
+            && idx_ok
+            && first_idx_ok
+            && last_idx_ok,
+        "FingerTree traversal/search/higher-order invariant failed"
+    )
+}
+
+fn suite() -> TestTree {
+    TestTree::group("fingertree")
+        .with_case("new", test_new)
+        .with_case("singleton", test_singleton)
+        .with_case("cons", test_cons)
+        .with_case("snoc", test_snoc)
+        .with_case("mixed ends", test_mixed_ends)
+        .with_case("persistence", test_persistence)
+        .with_case("bulk rotations", test_bulk_rotations)
+        .with_case("churn", test_churn)
+        .with_case("shared payload", test_shared_payload)
+        .with_case("random access", test_random_access)
+        .with_case("split", test_split)
+        .with_case("concat", test_concat)
+        .with_case("editing", test_editing)
+        .with_case("transforms", test_transforms)
+        .with_case("predicates", test_predicates)
+        .with_case("take drop", test_take_drop)
+        .with_case("exhaustive measures", test_exhaustive_measures)
+        .with_case("api extras", test_api_extras)
+        .with_case("invariants", test_invariants)
+        .with_fuzz(
+            "sequence model & invariants (fuzz)",
+            i32_domain().in_range(-2048, 2048).vec().max_len(64),
+            fuzz_sequence_model
+        )
+        .with_fuzz(
+            "split, concat, take & drop (fuzz)",
+            tuple3(
+                i32_domain().in_range(-100, 100).vec().max_len(48),
+                i32_domain().in_range(-100, 100).vec().max_len(48),
+                u64_domain().in_range(0, 64)
+            ),
+            fuzz_split_concat
+        )
+        .with_fuzz(
+            "traversal, search & higher-order ops (fuzz)",
+            tuple2(
+                i32_domain().in_range(-64, 64).vec().max_len(48),
+                i32_domain().in_range(-64, 64)
+            ),
+            fuzz_traversal_search
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
