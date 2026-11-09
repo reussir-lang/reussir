@@ -1,98 +1,73 @@
-// A downstream executable package exercises the generic Hood-Melville queue.
-// Each input selects one public-API or incremental-rotation case.
+// A downstream executable package exercises the generic Hood-Melville queue
+// through the `test` framework.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin rtqueue %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}rtqueue
 
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/new.in | %FileCheck %s --check-prefix=NEW
-// NEW:      1
-// NEW-NEXT: 1
-// NEW-NEXT: 1
-// NEW-NEXT: 1
+// RUN: %std_rene_build/release/rtqueue%exe_ext | %FileCheck %s
+// CHECK:      rtqueue
+// CHECK-NEXT:   ✔ new
+// CHECK-NEXT:   ✔ snoc
+// CHECK-NEXT:   ✔ uncons
+// CHECK-NEXT:   ✔ persistence
+// CHECK-NEXT:   ✔ bulk rotation
+// CHECK-NEXT:   ✔ interleaved rotation
+// CHECK-NEXT:   ✔ shared payload
+// CHECK-NEXT:   ✔ fifo (fuzz)
+// CHECK-EMPTY:
+// CHECK-NEXT: 8 examples, 0 failures
 
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/snoc.in | %FileCheck %s --check-prefix=SNOC
-// SNOC:      10
-// SNOC-NEXT: 1
-// SNOC-NEXT: 0
-
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/uncons.in | %FileCheck %s --check-prefix=UNCONS
-// UNCONS:      1
-// UNCONS-NEXT: 2
-// UNCONS-NEXT: 3
-// UNCONS-NEXT: 1
-
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/persistence.in | %FileCheck %s --check-prefix=PERSISTENCE
-// PERSISTENCE:      1
-// PERSISTENCE-NEXT: 1
-// PERSISTENCE-NEXT: 4
-// PERSISTENCE-NEXT: 4
-// PERSISTENCE-NEXT: 456
-
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/bulk_rotation.in | %FileCheck %s --check-prefix=BULK
-// BULK:      1
-// BULK-NEXT: 0
-// BULK-NEXT: 1234567
-
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/interleaved_rotation.in | %FileCheck %s --check-prefix=INTERLEAVED
-// INTERLEAVED: 8128
-
-// RUN: %std_rene_build/release/rtqueue%exe_ext < %S/Inputs/rtqueue/shared_payload.in | %FileCheck %s --check-prefix=SHARED
-// SHARED:      7
-// SHARED-NEXT: 11
-// SHARED-NEXT: 1
-
+import std::collections::pure::list::List;
 import std::collections::pure::rtqueue::Pop;
 import std::collections::pure::rtqueue::Queue;
+import test::domain::i32_domain;
+import test::domain::list_of;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::fail;
+import test::expect::pass;
+import test::expect::should_be;
+import test::tree::TestTree;
 
 fn empty_queue() -> Queue<i32> {
     Queue::new()
 }
 
-fn write_bool(value : bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
-}
-
-fn test_new() {
+fn test_new() -> Outcome {
     let queue = empty_queue();
-    write_bool(queue.is_empty());
-    write_bool(queue.len() == 0);
-    write_bool(queue.front().is_none());
-    write_bool(match queue.uncons() {
-        Pop::Empty => true,
-        Pop::Pop(_, _) => false
-    });
+    expect(queue.is_empty(), "empty queue should report is_empty")
+        .and_then(|| should_be(queue.len(), 0))
+        .and_then(|| expect(queue.front().is_none(), "empty queue front should be None"))
+        .and_then(|| match queue.uncons() {
+            Pop::Empty => pass(),
+            Pop::Pop(_, _) => fail("uncons on empty queue should be Empty")
+        })
 }
 
-fn test_snoc() {
+fn test_snoc() -> Outcome {
     let queue = empty_queue().snoc(10).snoc(20).snoc(30);
-    test_utils::io::write_i32(queue.front().unwrap_or(-1));
-    write_bool(queue.len() == 3);
-    write_bool(queue.is_empty());
+    should_be(queue.front().unwrap_or(-1), 10)
+        .and_then(|| should_be(queue.len(), 3))
+        .and_then(|| expect(!queue.is_empty(), "non-empty queue should not report is_empty"))
 }
 
-fn test_uncons() {
+fn test_uncons() -> Outcome {
     let queue = empty_queue().snoc(1).snoc(2).snoc(3);
     match queue.uncons() {
-        Pop::Pop(first, rest1) => {
-            test_utils::io::write_i32(first);
-            match rest1.uncons() {
-                Pop::Pop(second, rest2) => {
-                    test_utils::io::write_i32(second);
-                    match rest2.uncons() {
-                        Pop::Pop(third, rest3) => {
-                            test_utils::io::write_i32(third);
-                            write_bool(match rest3.uncons() {
-                                Pop::Empty => true,
-                                Pop::Pop(_, _) => false
-                            });
-                        },
-                        Pop::Empty => core::intrinsic::panic::panic()
-                    }
-                },
-                Pop::Empty => core::intrinsic::panic::panic()
-            }
-        },
-        Pop::Empty => core::intrinsic::panic::panic()
+        Pop::Pop(first, rest1) =>
+            should_be(first, 1).and_then(|| match rest1.uncons() {
+                Pop::Pop(second, rest2) =>
+                    should_be(second, 2).and_then(|| match rest2.uncons() {
+                        Pop::Pop(third, rest3) =>
+                            should_be(third, 3).and_then(|| match rest3.uncons() {
+                                Pop::Empty => pass(),
+                                Pop::Pop(_, _) => fail("expected Empty after 3 uncons")
+                            }),
+                        Pop::Empty => fail("expected third element")
+                    }),
+                Pop::Empty => fail("expected second element")
+            }),
+        Pop::Empty => fail("expected first element")
     }
 }
 
@@ -108,14 +83,14 @@ fn drain_decimal(remaining : i32, queue : Queue<i32>, acc : i32) -> i32 {
     }
 }
 
-fn test_persistence() {
+fn test_persistence() -> Outcome {
     let base = empty_queue().snoc(4).snoc(5);
     let extended = base.snoc(6);
-    write_bool(base.len() == 2);
-    write_bool(extended.len() == 3);
-    test_utils::io::write_i32(base.front().unwrap_or(-1));
-    test_utils::io::write_i32(extended.front().unwrap_or(-1));
-    test_utils::io::write_i32(drain_decimal(3, extended, 0));
+    should_be(base.len(), 2)
+        .and_then(|| should_be(extended.len(), 3))
+        .and_then(|| should_be(base.front().unwrap_or(-1), 4))
+        .and_then(|| should_be(extended.front().unwrap_or(-1), 4))
+        .and_then(|| should_be(drain_decimal(3, extended, 0), 456))
 }
 
 fn build(next : i32, end : i32, queue : Queue<i32>) -> Queue<i32> {
@@ -126,11 +101,11 @@ fn build(next : i32, end : i32, queue : Queue<i32>) -> Queue<i32> {
     }
 }
 
-fn test_bulk_rotation() {
+fn test_bulk_rotation() -> Outcome {
     let queue = build(0, 8, empty_queue());
-    write_bool(queue.len() == 8);
-    test_utils::io::write_i32(queue.front().unwrap_or(-1));
-    test_utils::io::write_i32(drain_decimal(8, queue, 0));
+    should_be(queue.len(), 8)
+        .and_then(|| should_be(queue.front().unwrap_or(-1), 0))
+        .and_then(|| should_be(drain_decimal(8, queue, 0), 1234567))
 }
 
 fn drain_sum(remaining : i32, queue : Queue<i32>, acc : i32) -> i32 {
@@ -156,8 +131,8 @@ fn pump(index : i32, rounds : i32, queue : Queue<i32>, acc : i32) -> i32 {
     }
 }
 
-fn test_interleaved_rotation() {
-    test_utils::io::write_i32(pump(0, 64, empty_queue(), 0));
+fn test_interleaved_rotation() -> Outcome {
+    should_be(pump(0, 64, empty_queue(), 0), 8128)
 }
 
 struct Item {
@@ -168,33 +143,49 @@ fn empty_item_queue() -> Queue<Item> {
     Queue::new()
 }
 
-fn test_shared_payload() {
+fn test_shared_payload() -> Outcome {
     let queue = empty_item_queue().snoc(Item { value: 7 }).snoc(Item { value: 11 });
     match queue.uncons() {
-        Pop::Pop(first, rest1) => {
-            test_utils::io::write_i32(first.value);
-            match rest1.uncons() {
-                Pop::Pop(second, rest2) => {
-                    test_utils::io::write_i32(second.value);
-                    write_bool(rest2.is_empty());
-                },
-                Pop::Empty => core::intrinsic::panic::panic()
-            }
-        },
-        Pop::Empty => core::intrinsic::panic::panic()
+        Pop::Pop(first, rest1) =>
+            should_be(first.value, 7).and_then(|| match rest1.uncons() {
+                Pop::Pop(second, rest2) =>
+                    should_be(second.value, 11)
+                        .and_then(|| expect(rest2.is_empty(), "queue should be empty after draining items")),
+                Pop::Empty => fail("expected second item")
+            }),
+        Pop::Empty => fail("expected first item")
     }
 }
 
-#[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_new(),
-        1 => test_snoc(),
-        2 => test_uncons(),
-        3 => test_persistence(),
-        4 => test_bulk_rotation(),
-        5 => test_interleaved_rotation(),
-        6 => test_shared_payload(),
-        _ => core::intrinsic::panic::panic()
+fn check_drain(items : List<i32>, queue : Queue<i32>) -> Outcome {
+    match items {
+        List::Nil => match queue.uncons() {
+            Pop::Empty => pass(),
+            Pop::Pop(_, _) => fail("queue not empty after draining all items")
+        },
+        List::Cons(expected, rest_items) => match queue.uncons() {
+            Pop::Pop(actual, rest_queue) =>
+                should_be(actual, expected).and_then(|| check_drain(rest_items, rest_queue)),
+            Pop::Empty => fail("queue emptied before all items were drained")
+        }
     }
+}
+
+fn test_fifo(items : List<i32>) -> Outcome {
+    let queue = items.fold_left(empty_queue(), |q : Queue<i32>, x : i32| q.snoc(x));
+    should_be(queue.len(), items.len())
+        .and_then(|| check_drain(items, queue))
+}
+
+#[main]
+pub fn main() {
+    test::runner::run_main(TestTree::group("rtqueue")
+        .with_case("new", test_new)
+        .with_case("snoc", test_snoc)
+        .with_case("uncons", test_uncons)
+        .with_case("persistence", test_persistence)
+        .with_case("bulk rotation", test_bulk_rotation)
+        .with_case("interleaved rotation", test_interleaved_rotation)
+        .with_case("shared payload", test_shared_payload)
+        .with_fuzz("fifo (fuzz)", list_of(i32_domain()), test_fifo))
 }
