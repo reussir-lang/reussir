@@ -743,36 +743,114 @@ fn tree_from_vec(xs : Vec<i32>, idx : u64, acc : FingerTree<i32>) -> FingerTree<
     }
 }
 
+fn fuzz_sequence_model(ops : Vec<i32>) -> Outcome {
+    expect(
+        apply_seq_ops(ops, 0, empty_tree(), List::Nil),
+        "FingerTree diverged from List model or violated invariants"
+    )
+}
+
+fn fuzz_split_concat(input : (Vec<i32>, Vec<i32>, u64)) -> Outcome {
+    let (xs, ys, k) = input;
+    let a = tree_from_vec(xs, 0, empty_tree());
+    let b = tree_from_vec(ys, 0, empty_tree());
+    let joined = a.concat(b);
+    let parts = joined.split_at(k);
+    let measured = joined.split(|m| m > k);
+    let rev = joined.reverse();
+    expect(
+        a.valid()
+            && b.valid()
+            && joined.valid()
+            && joined.len() == a.len() + b.len()
+            && parts.left.valid()
+            && parts.right.valid()
+            && parts.left == joined.take(k)
+            && parts.right == joined.drop(k)
+            && parts.left.concat(parts.right) == joined
+            && measured.left.valid()
+            && measured.right.valid()
+            && measured.left == parts.left
+            && measured.right == parts.right
+            && rev.valid()
+            && rev.reverse() == joined,
+        "FingerTree split/concat/take/drop/reverse invariant failed"
+    )
+}
+
+fn fuzz_traversal_search(input : (Vec<i32>, i32)) -> Outcome {
+    let (xs, needle) = input;
+    let tree = tree_from_vec(xs, 0, empty_tree());
+    let model = tree.to_list();
+    let mapped = tree.map(|x| x * 3 + 1);
+    let filtered = tree.filter(|x| x >= needle);
+    let fmapped = tree.filter_map(|x| {
+        if (x & 1) == 0 {
+            Option::Some { x / 2 }
+        } else {
+            Option::None
+        }
+    });
+    let idx_ok = match tree.index_of(needle) {
+        Option::Some(idx) => tree.get(idx).unwrap_or(needle + 1) == needle,
+        Option::None => !tree.contains(needle)
+    };
+    let first_idx_ok = match tree.find_index(|x| x >= needle) {
+        Option::Some(idx) =>
+            tree.get(idx).unwrap_or(needle - 1) >= needle
+                && (idx == 0 || tree.take(idx).all(|x| x < needle)),
+        Option::None => tree.all(|x| x < needle)
+    };
+    let last_idx_ok = match tree.find_last_index(|x| x >= needle) {
+        Option::Some(idx) =>
+            tree.get(idx).unwrap_or(needle - 1) >= needle
+                && tree.drop(idx + 1).all(|x| x < needle),
+        Option::None => tree.all(|x| x < needle)
+    };
+    expect(
+        mapped.valid()
+            && list_equal(mapped.to_list(), model.map(|x| x * 3 + 1))
+            && filtered.valid()
+            && list_equal(filtered.to_list(), model.filter(|x| x >= needle))
+            && fmapped.valid()
+            && tree.contains(needle) == model.contains(needle)
+            && tree.any(|x| x > needle) == model.any(|x| x > needle)
+            && tree.all(|x| x <= needle) == model.all(|x| x <= needle)
+            && tree.count_if(|x| x >= needle) == model.count_if(|x| x >= needle)
+            && tree.find_first(|x| x >= needle).unwrap_or(-999999)
+                == model.find_first(|x| x >= needle).unwrap_or(-999999)
+            && idx_ok
+            && first_idx_ok
+            && last_idx_ok,
+        "FingerTree traversal/search/higher-order invariant failed"
+    )
+}
+
 fn suite() -> TestTree {
     TestTree::group("fingertree")
-        .with_case("new", || test_new())
-        .with_case("singleton", || test_singleton())
-        .with_case("cons", || test_cons())
-        .with_case("snoc", || test_snoc())
-        .with_case("mixed ends", || test_mixed_ends())
-        .with_case("persistence", || test_persistence())
-        .with_case("bulk rotations", || test_bulk_rotations())
-        .with_case("churn", || test_churn())
-        .with_case("shared payload", || test_shared_payload())
-        .with_case("random access", || test_random_access())
-        .with_case("split", || test_split())
-        .with_case("concat", || test_concat())
-        .with_case("editing", || test_editing())
-        .with_case("transforms", || test_transforms())
-        .with_case("predicates", || test_predicates())
-        .with_case("take drop", || test_take_drop())
-        .with_case("exhaustive measures", || test_exhaustive_measures())
-        .with_case("api extras", || test_api_extras())
-        .with_case("invariants", || test_invariants())
+        .with_case("new", test_new)
+        .with_case("singleton", test_singleton)
+        .with_case("cons", test_cons)
+        .with_case("snoc", test_snoc)
+        .with_case("mixed ends", test_mixed_ends)
+        .with_case("persistence", test_persistence)
+        .with_case("bulk rotations", test_bulk_rotations)
+        .with_case("churn", test_churn)
+        .with_case("shared payload", test_shared_payload)
+        .with_case("random access", test_random_access)
+        .with_case("split", test_split)
+        .with_case("concat", test_concat)
+        .with_case("editing", test_editing)
+        .with_case("transforms", test_transforms)
+        .with_case("predicates", test_predicates)
+        .with_case("take drop", test_take_drop)
+        .with_case("exhaustive measures", test_exhaustive_measures)
+        .with_case("api extras", test_api_extras)
+        .with_case("invariants", test_invariants)
         .with_fuzz(
             "sequence model & invariants (fuzz)",
             i32_domain().in_range(-2048, 2048).vec().max_len(64),
-            |ops : Vec<i32>| {
-                expect(
-                    apply_seq_ops(ops, 0, empty_tree(), List::Nil),
-                    "FingerTree diverged from List model or violated invariants"
-                )
-            }
+            fuzz_sequence_model
         )
         .with_fuzz(
             "split, concat, take & drop (fuzz)",
@@ -781,33 +859,7 @@ fn suite() -> TestTree {
                 i32_domain().in_range(-100, 100).vec().max_len(48),
                 u64_domain().in_range(0, 64)
             ),
-            |input : (Vec<i32>, Vec<i32>, u64)| {
-                let (xs, ys, k) = input;
-                let a = tree_from_vec(xs, 0, empty_tree());
-                let b = tree_from_vec(ys, 0, empty_tree());
-                let joined = a.concat(b);
-                let parts = joined.split_at(k);
-                let measured = joined.split(|m| m > k);
-                let rev = joined.reverse();
-                expect(
-                    a.valid()
-                        && b.valid()
-                        && joined.valid()
-                        && joined.len() == a.len() + b.len()
-                        && parts.left.valid()
-                        && parts.right.valid()
-                        && parts.left == joined.take(k)
-                        && parts.right == joined.drop(k)
-                        && parts.left.concat(parts.right) == joined
-                        && measured.left.valid()
-                        && measured.right.valid()
-                        && measured.left == parts.left
-                        && measured.right == parts.right
-                        && rev.valid()
-                        && rev.reverse() == joined,
-                    "FingerTree split/concat/take/drop/reverse invariant failed"
-                )
-            }
+            fuzz_split_concat
         )
         .with_fuzz(
             "traversal, search & higher-order ops (fuzz)",
@@ -815,53 +867,7 @@ fn suite() -> TestTree {
                 i32_domain().in_range(-64, 64).vec().max_len(48),
                 i32_domain().in_range(-64, 64)
             ),
-            |input : (Vec<i32>, i32)| {
-                let (xs, needle) = input;
-                let tree = tree_from_vec(xs, 0, empty_tree());
-                let model = tree.to_list();
-                let mapped = tree.map(|x| x * 3 + 1);
-                let filtered = tree.filter(|x| x >= needle);
-                let fmapped = tree.filter_map(|x| {
-                    if (x & 1) == 0 {
-                        Option::Some { x / 2 }
-                    } else {
-                        Option::None
-                    }
-                });
-                let idx_ok = match tree.index_of(needle) {
-                    Option::Some(idx) => tree.get(idx).unwrap_or(needle + 1) == needle,
-                    Option::None => !tree.contains(needle)
-                };
-                let first_idx_ok = match tree.find_index(|x| x >= needle) {
-                    Option::Some(idx) =>
-                        tree.get(idx).unwrap_or(needle - 1) >= needle
-                            && (idx == 0 || tree.take(idx).all(|x| x < needle)),
-                    Option::None => tree.all(|x| x < needle)
-                };
-                let last_idx_ok = match tree.find_last_index(|x| x >= needle) {
-                    Option::Some(idx) =>
-                        tree.get(idx).unwrap_or(needle - 1) >= needle
-                            && tree.drop(idx + 1).all(|x| x < needle),
-                    Option::None => tree.all(|x| x < needle)
-                };
-                expect(
-                    mapped.valid()
-                        && list_equal(mapped.to_list(), model.map(|x| x * 3 + 1))
-                        && filtered.valid()
-                        && list_equal(filtered.to_list(), model.filter(|x| x >= needle))
-                        && fmapped.valid()
-                        && tree.contains(needle) == model.contains(needle)
-                        && tree.any(|x| x > needle) == model.any(|x| x > needle)
-                        && tree.all(|x| x <= needle) == model.all(|x| x <= needle)
-                        && tree.count_if(|x| x >= needle) == model.count_if(|x| x >= needle)
-                        && tree.find_first(|x| x >= needle).unwrap_or(-999999)
-                            == model.find_first(|x| x >= needle).unwrap_or(-999999)
-                        && idx_ok
-                        && first_idx_ok
-                        && last_idx_ok,
-                    "FingerTree traversal/search/higher-order invariant failed"
-                )
-            }
+            fuzz_traversal_search
         )
 }
 
