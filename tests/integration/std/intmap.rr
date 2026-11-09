@@ -1,49 +1,67 @@
 // RUN: %rene build --manifest-path %S/rene.ncl --bin intmap --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: release{{[/\\]}}intmap
 // RUN: %std_rene_build/release/intmap%exe_ext | %FileCheck %s
-// CHECK: 1
-// CHECK-NEXT: 1
-// CHECK-NEXT: 1
-// CHECK-NEXT: 1
-// CHECK-NEXT: 1
+// CHECK:      intmap
+// CHECK-NEXT:   ✔ basics
+// CHECK-NEXT:   ✔ signed keys
+// CHECK-NEXT:   ✔ powers of two
+// CHECK-NEXT:   ✔ churn
+// CHECK-NEXT:   ✔ generic values
+// CHECK-NEXT:   ✔ model equivalence (fuzz)
+// CHECK-EMPTY:
+// CHECK-NEXT: 6 examples, 0 failures
 
 import std::collections::pure::intmap::IntMap;
+import std::collections::pure::list::List;
 import std::collections::pure::wavlmap::WavlMap;
 import std::option::Option;
+import test::domain::i64_domain;
+import test::domain::list_of;
+import test::domain::tuple2;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::tree::TestTree;
 
-fn check(value : bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
-}
-
-fn basics() -> bool {
+fn basics() -> Outcome {
     let empty : IntMap<i64> = IntMap::new();
     let one : IntMap<i64> = IntMap::singleton(4, 40);
     let two = one.insert(8, 80);
     let replaced = two.insert(4, 400);
     let removed = replaced.remove(8);
-    empty.is_empty() && empty.remove(3).is_empty() && empty.get(3).is_none()
-        && empty.get_or(3, 99) == 99 && !empty.contains_key(3)
-        && !one.is_empty() && !one.contains_key(8) && one.get_or(4, 0) == 40
-        && two.get_or(4, 0) == 40 && two.get_or(8, 0) == 80
-        && replaced.get_or(4, 0) == 400 && replaced.contains_key(8)
-        && removed.get_or(4, 0) == 400 && !removed.contains_key(8)
-        && removed.remove(4).is_empty() && two.remove(9).get_or(8, 0) == 80
-        && empty.fold_left(123, |acc, key, value| acc + key + value) == 123
+    expect(empty.is_empty(), "empty map should be empty")
+        .and_then(|| expect(empty.remove(3).is_empty(), "removing from empty map should stay empty"))
+        .and_then(|| expect(empty.get(3).is_none(), "empty map get should be None"))
+        .and_then(|| should_be(empty.get_or(3, 99), 99))
+        .and_then(|| expect(!empty.contains_key(3), "empty map should not contain key"))
+        .and_then(|| expect(!one.is_empty(), "singleton should not be empty"))
+        .and_then(|| expect(!one.contains_key(8), "singleton should not contain absent key"))
+        .and_then(|| should_be(one.get_or(4, 0), 40))
+        .and_then(|| should_be(two.get_or(4, 0), 40))
+        .and_then(|| should_be(two.get_or(8, 0), 80))
+        .and_then(|| should_be(replaced.get_or(4, 0), 400))
+        .and_then(|| expect(replaced.contains_key(8), "replaced map should retain other key"))
+        .and_then(|| should_be(removed.get_or(4, 0), 400))
+        .and_then(|| expect(!removed.contains_key(8), "removed key should be absent"))
+        .and_then(|| expect(removed.remove(4).is_empty(), "removing last key should yield empty map"))
+        .and_then(|| should_be(two.remove(9).get_or(8, 0), 80))
+        .and_then(|| should_be(empty.fold_left(123, |acc, key, value| acc + key + value), 123))
 }
 
-fn signed_keys() -> bool {
+fn signed_keys() -> Outcome {
     let map : IntMap<i64> = IntMap::new()
         .insert(0, 4).insert(9223372036854775807, 8)
         .insert(-9223372036854775808, 1).insert(-1, 3)
         .insert(256, 7).insert(1, 5).insert(-256, 2).insert(255, 6);
     let order : i64 = map.fold_left(0, |acc, key, value| acc * 10 + value);
     let reduced = map.remove(-9223372036854775808).remove(9223372036854775807);
-    order == 12345678 && reduced.fold_left(0, |a, k, v| a * 10 + v) == 234567
-        && map.get_or(-9223372036854775808, 0) == 1
-        && map.get_or(9223372036854775807, 0) == 8
-        && reduced.get(-9223372036854775808).is_none()
-        && map.remove(17).fold_left(0, |a, k, v| a * 10 + v) == order
-        && map.get_or(17, 91) == 91
+    should_be(order, 12345678)
+        .and_then(|| should_be(reduced.fold_left(0, |a, k, v| a * 10 + v), 234567))
+        .and_then(|| should_be(map.get_or(-9223372036854775808, 0), 1))
+        .and_then(|| should_be(map.get_or(9223372036854775807, 0), 8))
+        .and_then(|| expect(reduced.get(-9223372036854775808).is_none(), "removed min key should be None"))
+        .and_then(|| should_be(map.remove(17).fold_left(0, |a, k, v| a * 10 + v), order))
+        .and_then(|| should_be(map.get_or(17, 91), 91))
 }
 
 fn powers(map : IntMap<i64>, bit : u64) -> IntMap<i64> {
@@ -58,6 +76,12 @@ fn strip_powers(map : IntMap<i64>, bit : u64) -> bool {
         map.get_or(key, -1) == bit as i64
             && strip_powers(map.remove(key), bit + 1)
     }
+}
+
+fn powers_of_two() -> Outcome {
+    let all_bits = powers(IntMap::new(), 0);
+    should_be(all_bits.fold_left(0 as i64, |a, k, v| a + 1), 64)
+        .and_then(|| expect(strip_powers(all_bits, 0), "stripping all 64 power-of-two keys should empty map"))
 }
 
 struct [value] Order {
@@ -120,29 +144,71 @@ fn churn(
     }
 }
 
+fn test_churn() -> Outcome {
+    expect(
+        churn(IntMap::new(), WavlMap::new(), IntMap::new(), WavlMap::new(), 994, 1000),
+        "IntMap and WavlMap model should agree across 1000 churn steps"
+    )
+}
+
 enum Payload { End, Link(i64, Payload) }
 
 fn payload_sum(value : Payload) -> i64 {
     match value { End => 0, Link(head, tail) => head + payload_sum(tail) }
 }
 
-fn generic_values() -> bool {
+fn generic_values() -> Outcome {
     let original = IntMap::singleton(-4, Payload::Link { 7, Payload::End });
     let extended = original.insert(4, Payload::Link { 11, original.get_or(-4, Payload::End) });
     let replaced = extended.insert(-4, Payload::End);
-    payload_sum(original.get_or(-4, Payload::End)) == 7
-        && payload_sum(extended.get(4).unwrap_or(Payload::End)) == 18
-        && payload_sum(replaced.get_or(-4, Payload::End)) == 0
-        && payload_sum(replaced.remove(-4).get_or(4, Payload::End)) == 18
-        && payload_sum(extended.get_or(-4, Payload::End)) == 7
+    should_be(payload_sum(original.get_or(-4, Payload::End)), 7)
+        .and_then(|| should_be(payload_sum(extended.get(4).unwrap_or(Payload::End)), 18))
+        .and_then(|| should_be(payload_sum(replaced.get_or(-4, Payload::End)), 0))
+        .and_then(|| should_be(payload_sum(replaced.remove(-4).get_or(4, Payload::End)), 18))
+        .and_then(|| should_be(payload_sum(extended.get_or(-4, Payload::End)), 7))
+}
+
+fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
+    let (map, model) = ops.fold_left(
+        (IntMap::new(), WavlMap::new()),
+        |state : (IntMap<i64>, WavlMap<i64, i64>), op : (i64, i64)| {
+            let (m, w) = state;
+            let (k, v) = op;
+            if (v & 3) == 0 {
+                (m.remove(k), w.remove(k))
+            } else {
+                (m.insert(k, v), w.insert(k, v))
+            }
+        }
+    );
+    let order = map.fold_left(Order { previous: 0, count: 0, sorted: true }, |acc, key, value|
+        Order {
+            previous: key,
+            count: acc.count + 1,
+            sorted: acc.sorted && (acc.count == 0 || acc.previous < key)
+        });
+    let all_keys_match = ops.all(|op : (i64, i64)| {
+        let (k, _) = op;
+        let expected = model.get(k).unwrap_or(-1);
+        map.get(k).unwrap_or(-1) == expected && map.get_or(k, -1) == expected
+            && map.contains_key(k) == model.contains_key(k)
+    });
+    expect(order.sorted, "IntMap fold_left keys should be strictly ascending")
+        .and_then(|| should_be(order.count, model.len()))
+        .and_then(|| expect(all_keys_match, "IntMap and WavlMap lookups should match for all keys"))
 }
 
 #[main]
-pub fn entry() {
-    check(basics());
-    check(signed_keys());
-    let all_bits = powers(IntMap::new(), 0);
-    check(strip_powers(all_bits, 0) && all_bits.fold_left(0 as i64, |a, k, v| a + 1) == 64);
-    check(churn(IntMap::new(), WavlMap::new(), IntMap::new(), WavlMap::new(), 994, 1000));
-    check(generic_values());
+pub fn main() {
+    test::runner::run_main(TestTree::group("intmap")
+        .with_case("basics", basics)
+        .with_case("signed keys", signed_keys)
+        .with_case("powers of two", powers_of_two)
+        .with_case("churn", test_churn)
+        .with_case("generic values", generic_values)
+        .with_fuzz(
+            "model equivalence (fuzz)",
+            list_of(tuple2(i64_domain(), i64_domain())),
+            model_equivalence
+        ))
 }
