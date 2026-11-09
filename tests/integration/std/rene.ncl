@@ -19,7 +19,7 @@
     cow_ordered = { kind = 'executable, path = "cow_ordered.rr" },
     cow_seq = { kind = 'executable, path = "cow_seq.rr" },
     env = { kind = 'executable, path = "env.rr" },
-    fingertree = { kind = 'executable, path = "fingertree.rr" },
+    fingertree = { kind = 'executable, path = "fingertree.rr", fuzzer = true },
     format = { kind = 'executable, path = "format.rr" },
     format_cases = { kind = 'executable, path = "format_cases.rr" },
     hash = { kind = 'executable, path = "hash.rr" },
