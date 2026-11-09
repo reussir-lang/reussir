@@ -37,6 +37,6 @@
     test_runner = { kind = 'executable, path = "test_runner.rr" },
     test_tree = { kind = 'executable, path = "test_tree.rr" },
     text_view = { kind = 'executable, path = "text_view.rr" },
-    wavl = { kind = 'executable, path = "wavl.rr" },
+    wavl = { kind = 'executable, path = "wavl.rr", fuzzer = true },
   },
 }
