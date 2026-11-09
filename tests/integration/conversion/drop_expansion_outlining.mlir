@@ -2,11 +2,14 @@
 
 // A decrement of a variant whose tag is unknown releases the payload through
 // the outlined drop glue rather than a dispatch over every arm. When its token
-// feeds an acceptor, the expanded decrement stays to donate it; otherwise the
-// whole decrement becomes the outlined one.
+// feeds an acceptor, the decrement keeps donating it. Otherwise a payload the
+// glue drops through the worklist is released by a single scheduled release;
+// one dropped by direct recursion keeps its destructor call.
 
 !list = !reussir.record<variant "List" {!reussir.record<compound "List.Cons" [value] {i64, !reussir.record<variant "List">}>, !reussir.record<compound "List.Var" [value] {i64}>, !reussir.record<compound "List.Nil" [value] {}>}>
 !rclist = !reussir.rc<!list>
+!tree = !reussir.record<variant "Tree" {!reussir.record<compound "Tree.Node" [value] {!reussir.record<variant "Tree">, i64, !reussir.record<variant "Tree">}>, !reussir.record<compound "Tree.Leaf" [value] {}>}>
+!rctree = !reussir.rc<!tree>
 
 module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> } {
   // CHECK-LABEL: func.func @reused
@@ -21,10 +24,23 @@ module @test attributes { dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense
     return %r : !rclist
   }
 
-  // CHECK-LABEL: func.func @unreused
-  // CHECK-NEXT:    call @{{.*}}tail_release(%arg0)
+  // CHECK-LABEL: func.func @unreused_tree
+  // CHECK:         scf.if %{{.*}} {
+  // CHECK:           reussir.drop.run @{{.*}}REUSSIR_DROP_release{{.*}}(%arg0
+  // CHECK:         } else {
+  // CHECK:           reussir.rc.set(%arg0
+  // CHECK-NEXT:    } {reussir.expanded_decrement}
   // CHECK-NEXT:    return
-  func.func @unreused(%0: !rclist) {
+  func.func @unreused_tree(%0: !rctree) {
+    reussir.rc.dec (%0 : !rctree)
+    return
+  }
+
+  // CHECK-LABEL: func.func @unreused_list
+  // CHECK:         scf.if
+  // CHECK:           func.call @{{.*}}drop_in_place{{.*}}(%{{.*}})
+  // CHECK:           reussir.token.free
+  func.func @unreused_list(%0: !rclist) {
     reussir.rc.dec (%0 : !rclist)
     return
   }

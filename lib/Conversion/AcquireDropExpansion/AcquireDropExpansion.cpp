@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/MapVector.h>
-#include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/Twine.h>
 #include <llvm/ADT/TypeSwitch.h>
@@ -707,40 +706,12 @@ static bool mayReuseToken(mlir::Operation *site, TokenType tokenType,
   return false;
 }
 
-// Erases the now unused computation of a removed expanded decrement's
-// condition, including the count update an atomic decrement folded into it.
-static void eraseDecrementCondition(mlir::Value condition) {
-  llvm::SmallSetVector<mlir::Operation *, 8> slice;
-  llvm::SmallVector<mlir::Value> worklist{condition};
-  while (!worklist.empty()) {
-    mlir::Operation *op = worklist.pop_back_val().getDefiningOp();
-    if (!op ||
-        !llvm::isa<ReussirExpectOp, ReussirRcFetchOp, ReussirRcFetchSubOp,
-                   ReussirRcIsImmediateOp, mlir::arith::CmpIOp,
-                   mlir::arith::AndIOp, mlir::arith::XOrIOp,
-                   mlir::arith::ConstantOp>(op) ||
-        !slice.insert(op))
-      continue;
-    worklist.append(op->operand_begin(), op->operand_end());
-  }
-  llvm::SmallVector<mlir::Operation *> ops = slice.takeVector();
-  for (bool erased = true; erased;) {
-    erased = false;
-    for (mlir::Operation *&op : ops)
-      if (op && op->use_empty()) {
-        op->erase();
-        op = nullptr;
-        erased = true;
-      }
-  }
-}
-
 // An expanded decrement whose unique path releases the box only through the
 // outlined drop glue (a variant of unknown tag, see `deferToOutlining`) adds
 // nothing to the outlined decrement but its token. When no acceptor within
 // the token's reach can take it, token reuse would only free it, so the
-// decrement becomes the outlined one: its unique path is a single release
-// that drops the payload and frees the box.
+// decrement keeps its condition and shared path but releases the box on its
+// unique path with a single call that drops the payload and frees the box.
 static void outlineUnreusedDecrements(mlir::func::FuncOp func,
                                       mlir::SymbolTableCollection &symbols,
                                       bool tailRecursiveDrops) {
@@ -775,8 +746,12 @@ static void outlineUnreusedDecrements(mlir::func::FuncOp func,
       continue;
     auto record =
         llvm::dyn_cast<RecordType>(drop.getRef().getType().getElementType());
+    // Only a payload the glue already drops through the worklist: the release
+    // runs on the same scheduler. One dropped by direct recursion keeps its
+    // destructor call, which is cheaper than scheduling the release.
     if (!record || !record.isVariant() || drop.getVariant() ||
-        drop.getInlined())
+        drop.getInlined() ||
+        record.classifyRecordDrop() != RecordDropKind::Worklist)
       continue;
     mlir::TypedValue<RcType> rc = borrow.getRcPtr();
     auto tokenType = llvm::cast<TokenType>(
@@ -784,12 +759,32 @@ static void outlineUnreusedDecrements(mlir::func::FuncOp func,
     if (mayReuseToken(branch, tokenType, rc, equivalence, sizes))
       continue;
 
+    bool run = !isInsideWorklistGlue(branch);
     rewriter.setInsertionPoint(branch);
-    emitWorklistDecrement(rc, branch.getLoc(), rewriter, &symbols,
-                          !isInsideWorklistGlue(branch), tailRecursiveDrops);
-    mlir::Value condition = branch.getCondition();
+    auto outlined = mlir::scf::IfOp::create(
+        rewriter, branch.getLoc(), mlir::TypeRange{}, branch.getCondition(),
+        /*addThenBlock=*/false, /*addElseBlock=*/false);
+    outlined->setAttrs(branch->getAttrs());
+    outlined.getThenRegion().takeBody(branch.getThenRegion());
+    outlined.getElseRegion().takeBody(branch.getElseRegion());
     branch.erase();
-    eraseDecrementCondition(condition);
+
+    mlir::Block &release = outlined.getThenRegion().front();
+    while (!release.empty())
+      release.back().erase();
+    rewriter.setInsertionPointToEnd(&release);
+    emitWorklistRelease(rc, outlined.getLoc(), rewriter, &symbols, run,
+                        tailRecursiveDrops);
+    mlir::scf::YieldOp::create(rewriter, outlined.getLoc());
+
+    mlir::Operation *sharedYield =
+        outlined.getElseRegion().front().getTerminator();
+    mlir::Operation *null = sharedYield->getOperand(0).getDefiningOp();
+    rewriter.setInsertionPoint(sharedYield);
+    mlir::scf::YieldOp::create(rewriter, sharedYield->getLoc());
+    sharedYield->erase();
+    if (null && null->use_empty())
+      null->erase();
   }
 }
 
