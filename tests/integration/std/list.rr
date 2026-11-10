@@ -1,10 +1,11 @@
 // Dedicated coverage-guided fuzz driver and unit suite for the persistent
 // singly linked `List`.
 // Unit cases cover every public method on small fixed lists, plus sorting of
-// fixed, pseudorandom, and equal-key inputs. Fuzz targets check the queries
-// and transforms against a `Vec` model, `sort` against an insertion-sort
-// model on both shared and uniquely owned lists, and sort stability with
-// reference-counted boxed elements.
+// fixed, pseudorandom, and equal-key inputs and selection of every rank of
+// pseudorandom, ascending, and descending lists. Fuzz targets check the
+// queries and transforms against a `Vec` model, `sort` against an
+// insertion-sort model on both shared and uniquely owned lists, and sort
+// stability and selection with reference-counted boxed elements.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin list %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}list
@@ -30,14 +31,17 @@
 // CHECK-NEXT: list/all: unit
 // CHECK-NEXT: list/sort: unit
 // CHECK-NEXT: list/sort stability: unit
+// CHECK-NEXT: list/kth_min and kth_max: unit
 // CHECK-NEXT: list/queries & transforms against vector model (fuzz):
 // CHECK-NEXT: list/sort against insertion model & persistence (fuzz):
 // CHECK-NEXT: list/stable sort of boxed elements (fuzz):
+// CHECK-NEXT: list/selection of boxed elements against sorted order (fuzz):
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
 import std::option::Option;
 import test::domain::i64_domain;
+import test::domain::in_range_u64;
 import test::domain::tuple2;
 import test::domain::u8_domain;
 import test::expect::Outcome;
@@ -260,6 +264,41 @@ fn test_sort_stability() -> Outcome {
         .and_then(|| should_be(sorted.head().unwrap_or_panic().seq, 1))
 }
 
+// Checks every rank from `k` on against `sorted`, the sorted order of `l`
+// from that rank on.
+fn ranks_agree(l : List<i64>, sorted : List<i64>, k : u64, n : u64) -> bool {
+    match sorted {
+        List::Nil => l.kth_min(k).is_none() && l.kth_max(k).is_none(),
+        List::Cons(x, rest) =>
+            opt_eq(l.kth_min(k), Option::Some { x })
+                && opt_eq(l.kth_max(n - 1 - k), Option::Some { x })
+                && ranks_agree(l, rest, k + 1, n)
+    }
+}
+
+fn test_kth() -> Outcome {
+    let random = pseudorandom_list(600, 7, List::Nil);
+    let sorted = random.sort();
+    should_be(sample_list().kth_min(0).unwrap_or(-1), 1)
+        .and_then(|| should_be(sample_list().kth_min(2).unwrap_or(-1), 3))
+        .and_then(|| should_be(sample_list().kth_max(0).unwrap_or(-1), 3))
+        .and_then(|| should_be(sample_list().kth_max(1).unwrap_or(-1), 2))
+        .and_then(|| expect(
+            sample_list().kth_min(3).is_none() && sample_list().kth_max(3).is_none(),
+            "rank out of range"
+        ))
+        .and_then(|| expect(
+            empty_list().kth_min(0).is_none() && empty_list().kth_max(0).is_none(),
+            "selection on empty list"
+        ))
+        .and_then(|| expect(ranks_agree(random, sorted, 0, 600), "ranks of a pseudorandom list"))
+        .and_then(|| expect(ranks_agree(sorted, sorted, 0, 600), "ranks of an ascending list"))
+        .and_then(|| expect(
+            ranks_agree(sorted.reverse(), sorted, 0, 600),
+            "ranks of a descending list"
+        ))
+}
+
 fn list_from_vec(xs : Vec<i64>) -> List<i64> {
     let (_, out) = while [i = xs.len(), out = List::Nil] (i > 0) {
         (i - 1, List::Cons { xs.get(i - 1).unwrap_or(0), out })
@@ -358,6 +397,37 @@ fn fuzz_stable_sort(keys : Vec<u8>) -> Outcome {
         .and_then(|| should_be(items.len(), keys.len()))
 }
 
+fn nth_key(l : List<Item>, i : u64) -> Option<i64> {
+    match l {
+        List::Nil => Option::None,
+        List::Cons(item, rest) => if i == 0 { Option::Some { item.key } } else { nth_key(rest, i - 1) }
+    }
+}
+
+fn key_of(item : Option<Item>) -> Option<i64> {
+    item.map(|found: Item| found.key)
+}
+
+fn fuzz_select(input : (Vec<u8>, u64)) -> Outcome {
+    let (keys, k) = input;
+    let items = items_from_keys(keys);
+    let sorted = items.sort();
+    expect(
+        opt_eq(key_of(items.kth_min(k)), nth_key(sorted, k)),
+        "kth_min agrees with the ascending order"
+    )
+        .and_then(|| expect(
+            opt_eq(key_of(items.kth_max(k)), nth_key(sorted.reverse(), k)),
+            "kth_max agrees with the descending order"
+        ))
+        .and_then(|| expect(
+            opt_eq(key_of(items_from_keys(keys).kth_min(k)), nth_key(sorted, k)),
+            "uniquely owned input"
+        ))
+        .and_then(|| expect(keys_match(items, keys), "selection leaves the shared input intact"))
+        .and_then(|| should_be(items.len(), keys.len()))
+}
+
 fn suite() -> TestTree {
     TestTree::group("list")
         .with_case("len", test_len)
@@ -378,6 +448,7 @@ fn suite() -> TestTree {
         .with_case("all", test_all)
         .with_case("sort", test_sort)
         .with_case("sort stability", test_sort_stability)
+        .with_case("kth_min and kth_max", test_kth)
         .with_fuzz(
             "queries & transforms against vector model (fuzz)",
             tuple2(
@@ -395,6 +466,11 @@ fn suite() -> TestTree {
             "stable sort of boxed elements (fuzz)",
             u8_domain().in_range(0, 7).vec().max_len(96),
             fuzz_stable_sort
+        )
+        .with_fuzz(
+            "selection of boxed elements against sorted order (fuzz)",
+            tuple2(u8_domain().vec().max_len(128), in_range_u64(0, 130)),
+            fuzz_select
         )
 }
 
