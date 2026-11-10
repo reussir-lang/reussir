@@ -1,85 +1,87 @@
-// A downstream package instantiates both persistent priority queues.
-// Cases cover the public API, persistence of shared versions, heapsort
-// output order, a model-checked insert/delete-min churn, agreement
-// between the two implementations on identical inputs, clear, and the
-// valid() invariant checkers across every construction path.
+// Dedicated coverage-guided fuzz driver and unit suite for the persistent
+// priority queues (`PairingHeap` and `BinomialHeap`).
+// Unit cases cover the public API, persistence of shared versions, heapsort
+// output order, model-checked insert/delete-min churn, cross-implementation
+// agreement, `clear`, structural invariants across every construction path,
+// and reference-counted boxed payloads. Fuzz targets exercise stateful
+// operation streams with persistent snapshots/merges, cross-heap algebra, and
+// boxed-element reference counting against sorted-list multiset models.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}heap
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin heap %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}heap
 
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/pairing_basics.in | %FileCheck %s --check-prefix=PAIRING
-// PAIRING:      1
-// PAIRING-NEXT: 1
-// PAIRING-NEXT: 1
-// PAIRING-NEXT: 1
-// PAIRING-NEXT: 1
-// PAIRING-NEXT: 1
-// PAIRING-NEXT: 1
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/heap%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/heap%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/binomial_basics.in | %FileCheck %s --check-prefix=BINOMIAL
-// BINOMIAL:      1
-// BINOMIAL-NEXT: 1
-// BINOMIAL-NEXT: 1
-// BINOMIAL-NEXT: 1
-// BINOMIAL-NEXT: 1
-// BINOMIAL-NEXT: 1
-// BINOMIAL-NEXT: 1
+// CHECK:      heap/pairing basics: unit
+// CHECK-NEXT: heap/binomial basics: unit
+// CHECK-NEXT: heap/pairing sort: unit
+// CHECK-NEXT: heap/binomial sort: unit
+// CHECK-NEXT: heap/churn: unit
+// CHECK-NEXT: heap/agreement: unit
+// CHECK-NEXT: heap/api extras: unit
+// CHECK-NEXT: heap/invariants: unit
+// CHECK-NEXT: heap/shared payload: unit
+// CHECK-NEXT: heap/pairing heap operations, model & invariants (fuzz):
+// CHECK-NEXT: heap/binomial heap operations, model & invariants (fuzz):
+// CHECK-NEXT: heap/cross-heap equivalence & merge algebra (fuzz):
+// CHECK-NEXT: heap/boxed payload RC & persistent branching (fuzz):
 
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/pairing_sort.in | %FileCheck %s --check-prefix=PSORT
-// PSORT:      1
-// PSORT-NEXT: 1
-// PSORT-NEXT: 1
-
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/binomial_sort.in | %FileCheck %s --check-prefix=BSORT
-// BSORT:      1
-// BSORT-NEXT: 1
-// BSORT-NEXT: 1
-
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/churn.in | %FileCheck %s --check-prefix=CHURN
-// CHURN:      1
-// CHURN-NEXT: 1
-// CHURN-NEXT: 1
-// CHURN-NEXT: 1
-
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/agreement.in | %FileCheck %s --check-prefix=AGREE
-// AGREE:      1
-// AGREE-NEXT: 1
-
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/api_extras.in | %FileCheck %s --check-prefix=API
-// API:      1
-// API-NEXT: 1
-// API-NEXT: 1
-// API-NEXT: 1
-// API-NEXT: 1
-
-// RUN: %std_rene_build/release/heap%exe_ext < %S/Inputs/heap/invariants.in | %FileCheck %s --check-prefix=INV
-// INV:      1
-// INV-NEXT: 1
-// INV-NEXT: 1
-// INV-NEXT: 1
-// INV-NEXT: 1
-// INV-NEXT: 1
-// INV-NEXT: 1
-// INV-NEXT: 1
-
-// A downstream executable package exercises both persistent priority
-// queues. Each input selects one case; case 5 checks a pseudorandom
-// insert/delete-min sequence against a sorted-list model, and case 6
-// checks that the two heaps agree element for element after a large
-// build (they implement the same abstraction by different means).
-
-import std::option::Option;
-import std::collections::pure::pairing_heap::PairingHeap;
+import std::collections::cow::vec::Vec;
 import std::collections::pure::binomial_heap::BinomialHeap;
+import std::collections::pure::binomial_heap::Pop as BinomialPop;
 import std::collections::pure::list::List;
+import std::collections::pure::pairing_heap::PairingHeap;
+import std::collections::pure::pairing_heap::Pop as PairingPop;
+import std::option::Option;
+import test::domain::i64_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::fail;
+import test::expect::pass;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
 
-fn wb(v : bool) { test_utils::io::write_i32(if v { 1 } else { 0 }) }
+pub struct Item {
+    value : i64
+}
+
+impl PartialEq for Item {
+    fn eq(self : Self, other : Self) -> bool { self.value == other.value }
+}
+
+impl Eq for Item {}
+
+impl PartialOrd for Item {
+    fn lt(self : Self, other : Self) -> bool { self.value < other.value }
+    fn le(self : Self, other : Self) -> bool { self.value <= other.value }
+    fn gt(self : Self, other : Self) -> bool { self.value > other.value }
+    fn ge(self : Self, other : Self) -> bool { self.value >= other.value }
+}
+
+impl Ord for Item {
+    fn cmp(self : Self, other : Self) -> Ordering {
+        if self.value < other.value {
+            Ordering::Less
+        } else {
+            if self.value == other.value {
+                Ordering::Equal
+            } else {
+                Ordering::Greater
+            }
+        }
+    }
+}
 
 fn lcg(seed : i64) -> i64 {
     (seed * 1103515245 + 12345) % 2147483648
 }
 
-fn sorted_nondescending(l : List<i64>) -> bool {
+fn sorted_nondescending<T : Ord>(l : List<T>) -> bool {
     match l {
         List::Nil => true,
         List::Cons(_, List::Nil) => true,
@@ -88,7 +90,7 @@ fn sorted_nondescending(l : List<i64>) -> bool {
     }
 }
 
-fn list_eq(a : List<i64>, b : List<i64>) -> bool {
+fn list_eq<T : Eq>(a : List<T>, b : List<T>) -> bool {
     match a {
         List::Nil => b.is_nil(),
         List::Cons(x, xs) => match b {
@@ -98,7 +100,17 @@ fn list_eq(a : List<i64>, b : List<i64>) -> bool {
     }
 }
 
-fn model_insert(l : List<i64>, x : i64) -> List<i64> {
+fn opt_eq<T : Eq>(a : Option<T>, b : Option<T>) -> bool {
+    match a {
+        Option::None => b.is_none(),
+        Option::Some(x) => match b {
+            Option::None => false,
+            Option::Some(y) => x == y
+        }
+    }
+}
+
+fn model_insert<T : Ord>(l : List<T>, x : T) -> List<T> {
     match l {
         List::Nil => List::Cons { x, List::Nil },
         List::Cons(h, t) =>
@@ -110,48 +122,71 @@ fn model_insert(l : List<i64>, x : i64) -> List<i64> {
     }
 }
 
-fn model_tail(l : List<i64>) -> List<i64> {
-    match l {
-        List::Nil => List::Nil,
-        List::Cons(_, t) => t
-    }
-}
-
-fn opt_eq_head(o : Option<i64>, l : List<i64>) -> bool {
-    match o {
-        Option::None => l.is_nil(),
-        Option::Some(x) => match l {
-            List::Nil => false,
-            List::Cons(h, _) => x == h
+fn model_merge<T : Ord>(a : List<T>, b : List<T>) -> List<T> {
+    match a {
+        List::Nil => b,
+        List::Cons(x, xs) => match b {
+            List::Nil => List::Cons { x, xs },
+            List::Cons(y, ys) =>
+                if x <= y {
+                    List::Cons { x, model_merge(xs, List::Cons { y, ys }) }
+                } else {
+                    List::Cons { y, model_merge(List::Cons { x, xs }, ys) }
+                }
         }
     }
 }
 
-fn test_pairing_basics() {
+fn test_pairing_basics() -> Outcome {
     let h : PairingHeap<i64> = PairingHeap::new().insert(5).insert(1).insert(9);
-    wb(h.len() == 3 && !h.is_empty());
-    wb(h.peek_min().unwrap_or(0) == 1);
-    wb(h.delete_min().peek_min().unwrap_or(0) == 5);
-    // the original version is unaffected
-    wb(h.peek_min().unwrap_or(0) == 1 && h.len() == 3);
     let empty : PairingHeap<i64> = PairingHeap::new();
-    wb(empty.is_empty() && empty.peek_min().is_none());
-    wb(empty.delete_min().len() == 0);
-    let merged = h.merge(PairingHeap::new().insert(0 - 3));
-    wb(merged.len() == 4 && merged.peek_min().unwrap_or(0) == 0 - 3);
+    let merged = h.merge(PairingHeap::new().insert(-3));
+    expect(h.len() == 3 && !h.is_empty(), "non-empty pairing heap size/empty")
+        .and_then(|| should_be(h.peek_min().unwrap_or(0), 1))
+        .and_then(|| should_be(h.delete_min().peek_min().unwrap_or(0), 5))
+        .and_then(|| expect(
+            h.peek_min().unwrap_or(0) == 1 && h.len() == 3,
+            "original pairing heap version unaffected"
+        ))
+        .and_then(|| expect(
+            empty.is_empty() && empty.peek_min().is_none(),
+            "empty pairing heap properties"
+        ))
+        .and_then(|| should_be(empty.delete_min().len(), 0))
+        .and_then(|| match empty.pop_min() {
+            PairingPop::Empty => pass(),
+            PairingPop::Pop(_, _) => fail("empty pairing pop_min should be Empty")
+        })
+        .and_then(|| expect(
+            merged.len() == 4 && merged.peek_min().unwrap_or(0) == -3,
+            "merged pairing heap min and size"
+        ))
 }
 
-fn test_binomial_basics() {
+fn test_binomial_basics() -> Outcome {
     let h : BinomialHeap<i64> = BinomialHeap::new().insert(5).insert(1).insert(9);
-    wb(h.len() == 3 && !h.is_empty());
-    wb(h.peek_min().unwrap_or(0) == 1);
-    wb(h.delete_min().peek_min().unwrap_or(0) == 5);
-    wb(h.peek_min().unwrap_or(0) == 1 && h.len() == 3);
     let empty : BinomialHeap<i64> = BinomialHeap::new();
-    wb(empty.is_empty() && empty.peek_min().is_none());
-    wb(empty.delete_min().len() == 0);
-    let merged = h.merge(BinomialHeap::new().insert(0 - 3));
-    wb(merged.len() == 4 && merged.peek_min().unwrap_or(0) == 0 - 3);
+    let merged = h.merge(BinomialHeap::new().insert(-3));
+    expect(h.len() == 3 && !h.is_empty(), "non-empty binomial heap size/empty")
+        .and_then(|| should_be(h.peek_min().unwrap_or(0), 1))
+        .and_then(|| should_be(h.delete_min().peek_min().unwrap_or(0), 5))
+        .and_then(|| expect(
+            h.peek_min().unwrap_or(0) == 1 && h.len() == 3,
+            "original binomial heap version unaffected"
+        ))
+        .and_then(|| expect(
+            empty.is_empty() && empty.peek_min().is_none(),
+            "empty binomial heap properties"
+        ))
+        .and_then(|| should_be(empty.delete_min().len(), 0))
+        .and_then(|| match empty.pop_min() {
+            BinomialPop::Empty => pass(),
+            BinomialPop::Pop(_, _) => fail("empty binomial pop_min should be Empty")
+        })
+        .and_then(|| expect(
+            merged.len() == 4 && merged.peek_min().unwrap_or(0) == -3,
+            "merged binomial heap min and size"
+        ))
 }
 
 fn build_pairing(n : i64, seed : i64, h : PairingHeap<i64>) -> PairingHeap<i64> {
@@ -172,22 +207,22 @@ fn build_binomial(n : i64, seed : i64, h : BinomialHeap<i64>) -> BinomialHeap<i6
     }
 }
 
-fn test_pairing_sort() {
+fn test_pairing_sort() -> Outcome {
     let h = build_pairing(5000, 7, PairingHeap::new());
-    wb(h.len() == 5000);
-    wb(sorted_nondescending(h.to_sorted_list()));
-    wb(PairingHeap::from_list(h.to_sorted_list()).len() == 5000);
+    let sorted = h.to_sorted_list();
+    should_be(h.len(), 5000)
+        .and_then(|| expect(sorted_nondescending(sorted), "pairing to_sorted_list order"))
+        .and_then(|| should_be(PairingHeap::from_list(sorted).len(), 5000))
 }
 
-fn test_binomial_sort() {
+fn test_binomial_sort() -> Outcome {
     let h = build_binomial(5000, 7, BinomialHeap::new());
-    wb(h.len() == 5000);
-    wb(sorted_nondescending(h.to_sorted_list()));
-    wb(BinomialHeap::from_list(h.to_sorted_list()).len() == 5000);
+    let sorted = h.to_sorted_list();
+    should_be(h.len(), 5000)
+        .and_then(|| expect(sorted_nondescending(sorted), "binomial to_sorted_list order"))
+        .and_then(|| should_be(BinomialHeap::from_list(sorted).len(), 5000))
 }
 
-// Interleaved insert/delete-min against a sorted-list model, checking the
-// reported minimum after every step.
 fn churn_pairing(
     ops : i64,
     seed : i64,
@@ -201,13 +236,13 @@ fn churn_pairing(
         let k = s % 512;
         if s % 3 == 0 {
             let h2 = h.delete_min();
-            let m2 = model_tail(model);
-            opt_eq_head(h2.peek_min(), m2) &&
+            let m2 = model.tail();
+            opt_eq(h2.peek_min(), m2.head()) &&
                 churn_pairing(ops - 1, s, h2, m2)
         } else {
             let h2 = h.insert(k);
             let m2 = model_insert(model, k);
-            opt_eq_head(h2.peek_min(), m2) &&
+            opt_eq(h2.peek_min(), m2.head()) &&
                 churn_pairing(ops - 1, s, h2, m2)
         }
     }
@@ -226,48 +261,62 @@ fn churn_binomial(
         let k = s % 512;
         if s % 3 == 0 {
             let h2 = h.delete_min();
-            let m2 = model_tail(model);
-            opt_eq_head(h2.peek_min(), m2) &&
+            let m2 = model.tail();
+            opt_eq(h2.peek_min(), m2.head()) &&
                 churn_binomial(ops - 1, s, h2, m2)
         } else {
             let h2 = h.insert(k);
             let m2 = model_insert(model, k);
-            opt_eq_head(h2.peek_min(), m2) &&
+            opt_eq(h2.peek_min(), m2.head()) &&
                 churn_binomial(ops - 1, s, h2, m2)
         }
     }
 }
 
-fn test_churn() {
-    wb(churn_pairing(2000, 7, PairingHeap::new(), List::Nil));
-    wb(churn_binomial(2000, 7, BinomialHeap::new(), List::Nil));
-    wb(churn_pairing(2000, 31, PairingHeap::new(), List::Nil));
-    wb(churn_binomial(2000, 31, BinomialHeap::new(), List::Nil));
+fn test_churn() -> Outcome {
+    expect(churn_pairing(2000, 7, PairingHeap::new(), List::Nil), "pairing churn seed 7")
+        .and_then(|| expect(
+            churn_binomial(2000, 7, BinomialHeap::new(), List::Nil),
+            "binomial churn seed 7"
+        ))
+        .and_then(|| expect(
+            churn_pairing(2000, 31, PairingHeap::new(), List::Nil),
+            "pairing churn seed 31"
+        ))
+        .and_then(|| expect(
+            churn_binomial(2000, 31, BinomialHeap::new(), List::Nil),
+            "binomial churn seed 31"
+        ))
 }
 
-// Both heaps implement the same abstraction, so the same inputs must
-// drain to the same sequence.
-fn test_agreement() {
+fn test_agreement() -> Outcome {
     let p = build_pairing(4000, 11, PairingHeap::new());
     let b = build_binomial(4000, 11, BinomialHeap::new());
-    wb(p.len() == b.len());
-    wb(list_eq(p.to_sorted_list(), b.to_sorted_list()));
+    should_be(p.len(), b.len())
+        .and_then(|| expect(
+            list_eq(p.to_sorted_list(), b.to_sorted_list()),
+            "pairing and binomial heaps must drain identically"
+        ))
 }
 
-// clear and the empty/small cases of the invariant checkers.
-fn test_api_extras() {
+fn test_api_extras() -> Outcome {
     let p = build_pairing(100, 13, PairingHeap::new());
-    wb(p.valid());
-    wb(p.clear().is_empty() && p.clear().valid());
     let b = build_binomial(100, 13, BinomialHeap::new());
-    wb(b.valid());
-    wb(b.clear().is_empty() && b.clear().valid());
     let ep : PairingHeap<i64> = PairingHeap::new();
     let eb : BinomialHeap<i64> = BinomialHeap::new();
-    wb(ep.valid() && eb.valid());
+    expect(p.valid(), "pairing valid")
+        .and_then(|| expect(
+            p.clear().is_empty() && p.clear().valid(),
+            "pairing clear empty and valid"
+        ))
+        .and_then(|| expect(b.valid(), "binomial valid"))
+        .and_then(|| expect(
+            b.clear().is_empty() && b.clear().valid(),
+            "binomial clear empty and valid"
+        ))
+        .and_then(|| expect(ep.valid() && eb.valid(), "empty heaps valid"))
 }
 
-// valid() after every delete step of a pseudorandom insert/delete churn.
 fn churn_valid_pairing(ops : i64, seed : i64, h : PairingHeap<i64>) -> bool {
     if ops == 0 {
         h.valid()
@@ -294,39 +343,652 @@ fn churn_valid_binomial(ops : i64, seed : i64, h : BinomialHeap<i64>) -> bool {
     }
 }
 
-// Every construction path must leave a structurally valid queue.
-fn test_invariants() {
-    wb(churn_valid_pairing(300, 7, PairingHeap::new()));
-    wb(churn_valid_binomial(300, 7, BinomialHeap::new()));
+fn test_invariants() -> Outcome {
     let p = build_pairing(1000, 19, PairingHeap::new());
     let b = build_binomial(1000, 19, BinomialHeap::new());
-    wb(p.merge(build_pairing(500, 23, PairingHeap::new())).valid());
-    wb(b.merge(build_binomial(500, 23, BinomialHeap::new())).valid());
-    wb(PairingHeap::from_list(p.to_sorted_list()).valid());
-    wb(BinomialHeap::from_list(b.to_sorted_list()).valid());
-    wb(match p.pop_min() {
-        std::collections::pure::pairing_heap::Pop::Pop(_, rest) =>
-            rest.valid(),
-        std::collections::pure::pairing_heap::Pop::Empty => false
-    });
-    wb(match b.pop_min() {
-        std::collections::pure::binomial_heap::Pop::Pop(_, rest) =>
-            rest.valid(),
-        std::collections::pure::binomial_heap::Pop::Empty => false
-    })
+    expect(churn_valid_pairing(300, 7, PairingHeap::new()), "pairing churn valid")
+        .and_then(|| expect(
+            churn_valid_binomial(300, 7, BinomialHeap::new()),
+            "binomial churn valid"
+        ))
+        .and_then(|| expect(
+            p.merge(build_pairing(500, 23, PairingHeap::new())).valid(),
+            "pairing merge valid"
+        ))
+        .and_then(|| expect(
+            b.merge(build_binomial(500, 23, BinomialHeap::new())).valid(),
+            "binomial merge valid"
+        ))
+        .and_then(|| expect(
+            PairingHeap::from_list(p.to_sorted_list()).valid(),
+            "pairing from_list valid"
+        ))
+        .and_then(|| expect(
+            BinomialHeap::from_list(b.to_sorted_list()).valid(),
+            "binomial from_list valid"
+        ))
+        .and_then(|| match p.pop_min() {
+            PairingPop::Pop(_, rest) => expect(rest.valid(), "pairing pop_min rest valid"),
+            PairingPop::Empty => fail("expected non-empty pairing pop_min")
+        })
+        .and_then(|| match b.pop_min() {
+            BinomialPop::Pop(_, rest) => expect(rest.valid(), "binomial pop_min rest valid"),
+            BinomialPop::Empty => fail("expected non-empty binomial pop_min")
+        })
 }
 
-#[main]
-pub fn main() {
-    match test_utils::io::read_i32() {
-        1 => test_pairing_basics(),
-        2 => test_binomial_basics(),
-        3 => test_pairing_sort(),
-        4 => test_binomial_sort(),
-        5 => test_churn(),
-        6 => test_agreement(),
-        7 => test_api_extras(),
-        8 => test_invariants(),
-        _ => core::intrinsic::panic::panic()
+fn test_shared_payload() -> Outcome {
+    let p0 : PairingHeap<Item> = PairingHeap::new()
+        .insert(Item { value: 9 })
+        .insert(Item { value: 3 })
+        .insert(Item { value: 7 });
+    let b0 : BinomialHeap<Item> = BinomialHeap::new()
+        .insert(Item { value: 9 })
+        .insert(Item { value: 3 })
+        .insert(Item { value: 7 });
+    let p_branch = p0.insert(Item { value: 1 });
+    let b_branch = b0.insert(Item { value: 1 });
+    let p_del = p0.delete_min();
+    let b_del1 = b0.delete_min();
+    let b_del2 = b0.delete_min();
+    expect(p0.valid() && b0.valid() && p_branch.valid() && b_branch.valid(), "boxed heaps valid")
+        .and_then(|| should_be(p_branch.peek_min().unwrap_or_panic().value, 1))
+        .and_then(|| should_be(b_branch.peek_min().unwrap_or_panic().value, 1))
+        .and_then(|| should_be(p0.peek_min().unwrap_or_panic().value, 3))
+        .and_then(|| should_be(b0.peek_min().unwrap_or_panic().value, 3))
+        .and_then(|| should_be(p_del.peek_min().unwrap_or_panic().value, 7))
+        .and_then(|| should_be(b_del1.peek_min().unwrap_or_panic().value, 7))
+        .and_then(|| should_be(b_del2.peek_min().unwrap_or_panic().value, 7))
+        .and_then(|| expect(
+            list_eq(p_branch.to_sorted_list(), b_branch.to_sorted_list()),
+            "boxed payload heaps drain identically"
+        ))
+}
+
+fn pick_val(vals : Vec<i64>, idx : u64) -> i64 {
+    if vals.is_empty() {
+        0
+    } else {
+        vals.get(idx % vals.len()).unwrap_or(0)
     }
 }
+
+fn apply_pairing_ops(
+    ops : Vec<u8>,
+    vals : Vec<i64>,
+    idx : u64,
+    h : PairingHeap<i64>,
+    model : List<i64>,
+    saved_h : PairingHeap<i64>,
+    saved_model : List<i64>
+) -> bool {
+    let step_ok = h.valid()
+        && h.len() == model.len()
+        && h.is_empty() == model.is_nil()
+        && opt_eq(h.peek_min(), model.head());
+    if !step_ok {
+        false
+    } else {
+        if idx >= ops.len() {
+            saved_h.valid()
+                && saved_h.len() == saved_model.len()
+                && opt_eq(saved_h.peek_min(), saved_model.head())
+                && list_eq(h.to_sorted_list(), model)
+                && list_eq(saved_h.to_sorted_list(), saved_model)
+        } else {
+            let raw_op = ops.get(idx).unwrap_or(0);
+            let kind = raw_op % 12;
+            let val = pick_val(vals, idx);
+            if kind <= 4 {
+                let next_h = h.insert(val);
+                let next_m = model_insert(model, val);
+                h.len() == model.len()
+                    && opt_eq(h.peek_min(), model.head())
+                    && apply_pairing_ops(ops, vals, idx + 1, next_h, next_m, saved_h, saved_model)
+            } else {
+                if kind <= 6 {
+                    let next_h = h.delete_min();
+                    let next_m = model.tail();
+                    h.len() == model.len()
+                        && opt_eq(h.peek_min(), model.head())
+                        && apply_pairing_ops(ops, vals, idx + 1, next_h, next_m, saved_h, saved_model)
+                } else {
+                    if kind <= 8 {
+                        match h.pop_min() {
+                            PairingPop::Empty =>
+                                model.is_nil()
+                                    && apply_pairing_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        PairingHeap::new(),
+                                        List::Nil,
+                                        saved_h,
+                                        saved_model
+                                    ),
+                            PairingPop::Pop(got, rest) => match model {
+                                List::Nil => false,
+                                List::Cons(expected, rest_m) =>
+                                    got == expected
+                                        && apply_pairing_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            rest,
+                                            rest_m,
+                                            saved_h,
+                                            saved_model
+                                        )
+                            }
+                        }
+                    } else {
+                        if kind == 9 {
+                            apply_pairing_ops(ops, vals, idx + 1, h, model, h, model)
+                        } else {
+                            if kind == 10 {
+                                if h.len() + saved_h.len() <= 128 {
+                                    let merged_h = h.merge(saved_h);
+                                    let merged_m = model_merge(model, saved_model);
+                                    saved_h.len() == saved_model.len()
+                                        && opt_eq(saved_h.peek_min(), saved_model.head())
+                                        && apply_pairing_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            merged_h,
+                                            merged_m,
+                                            saved_h,
+                                            saved_model
+                                        )
+                                } else {
+                                    apply_pairing_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        h.delete_min(),
+                                        model.tail(),
+                                        saved_h,
+                                        saved_model
+                                    )
+                                }
+                            } else {
+                                let sub = (raw_op / 12) % 3;
+                                if sub == 0 {
+                                    apply_pairing_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        saved_h.delete_min(),
+                                        saved_model.tail(),
+                                        saved_h,
+                                        saved_model
+                                    )
+                                } else {
+                                    if sub == 1 {
+                                        let sorted = h.to_sorted_list();
+                                        list_eq(sorted, model)
+                                            && apply_pairing_ops(
+                                                ops,
+                                                vals,
+                                                idx + 1,
+                                                PairingHeap::from_list(sorted),
+                                                model,
+                                                saved_h,
+                                                saved_model
+                                            )
+                                    } else {
+                                        let cleared = h.clear();
+                                        cleared.is_empty()
+                                            && cleared.valid()
+                                            && apply_pairing_ops(
+                                                ops,
+                                                vals,
+                                                idx + 1,
+                                                cleared,
+                                                List::Nil,
+                                                saved_h,
+                                                saved_model
+                                            )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn apply_binomial_ops(
+    ops : Vec<u8>,
+    vals : Vec<i64>,
+    idx : u64,
+    h : BinomialHeap<i64>,
+    model : List<i64>,
+    saved_h : BinomialHeap<i64>,
+    saved_model : List<i64>
+) -> bool {
+    let step_ok = h.valid()
+        && h.len() == model.len()
+        && h.is_empty() == model.is_nil()
+        && opt_eq(h.peek_min(), model.head());
+    if !step_ok {
+        false
+    } else {
+        if idx >= ops.len() {
+            saved_h.valid()
+                && saved_h.len() == saved_model.len()
+                && opt_eq(saved_h.peek_min(), saved_model.head())
+                && list_eq(h.to_sorted_list(), model)
+                && list_eq(saved_h.to_sorted_list(), saved_model)
+        } else {
+            let raw_op = ops.get(idx).unwrap_or(0);
+            let kind = raw_op % 12;
+            let val = pick_val(vals, idx);
+            if kind <= 4 {
+                let next_h = h.insert(val);
+                let next_m = model_insert(model, val);
+                h.len() == model.len()
+                    && opt_eq(h.peek_min(), model.head())
+                    && apply_binomial_ops(ops, vals, idx + 1, next_h, next_m, saved_h, saved_model)
+            } else {
+                if kind <= 6 {
+                    let next_h = h.delete_min();
+                    let next_m = model.tail();
+                    h.len() == model.len()
+                        && opt_eq(h.peek_min(), model.head())
+                        && apply_binomial_ops(ops, vals, idx + 1, next_h, next_m, saved_h, saved_model)
+                } else {
+                    if kind <= 8 {
+                        match h.pop_min() {
+                            BinomialPop::Empty =>
+                                model.is_nil()
+                                    && apply_binomial_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        BinomialHeap::new(),
+                                        List::Nil,
+                                        saved_h,
+                                        saved_model
+                                    ),
+                            BinomialPop::Pop(got, rest) => match model {
+                                List::Nil => false,
+                                List::Cons(expected, rest_m) =>
+                                    got == expected
+                                        && apply_binomial_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            rest,
+                                            rest_m,
+                                            saved_h,
+                                            saved_model
+                                        )
+                            }
+                        }
+                    } else {
+                        if kind == 9 {
+                            apply_binomial_ops(ops, vals, idx + 1, h, model, h, model)
+                        } else {
+                            if kind == 10 {
+                                if h.len() + saved_h.len() <= 128 {
+                                    let merged_h = h.merge(saved_h);
+                                    let merged_m = model_merge(model, saved_model);
+                                    saved_h.len() == saved_model.len()
+                                        && opt_eq(saved_h.peek_min(), saved_model.head())
+                                        && apply_binomial_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            merged_h,
+                                            merged_m,
+                                            saved_h,
+                                            saved_model
+                                        )
+                                } else {
+                                    apply_binomial_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        h.delete_min(),
+                                        model.tail(),
+                                        saved_h,
+                                        saved_model
+                                    )
+                                }
+                            } else {
+                                let sub = (raw_op / 12) % 3;
+                                if sub == 0 {
+                                    apply_binomial_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        saved_h.delete_min(),
+                                        saved_model.tail(),
+                                        saved_h,
+                                        saved_model
+                                    )
+                                } else {
+                                    if sub == 1 {
+                                        let sorted = h.to_sorted_list();
+                                        list_eq(sorted, model)
+                                            && apply_binomial_ops(
+                                                ops,
+                                                vals,
+                                                idx + 1,
+                                                BinomialHeap::from_list(sorted),
+                                                model,
+                                                saved_h,
+                                                saved_model
+                                            )
+                                    } else {
+                                        let cleared = h.clear();
+                                        cleared.is_empty()
+                                            && cleared.valid()
+                                            && apply_binomial_ops(
+                                                ops,
+                                                vals,
+                                                idx + 1,
+                                                cleared,
+                                                List::Nil,
+                                                saved_h,
+                                                saved_model
+                                            )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn pairing_from_vec(xs : Vec<i64>, idx : u64, acc : PairingHeap<i64>) -> PairingHeap<i64> {
+    if idx >= xs.len() {
+        acc
+    } else {
+        pairing_from_vec(xs, idx + 1, acc.insert(xs.get(idx).unwrap_or(0)))
+    }
+}
+
+fn binomial_from_vec(xs : Vec<i64>, idx : u64, acc : BinomialHeap<i64>) -> BinomialHeap<i64> {
+    if idx >= xs.len() {
+        acc
+    } else {
+        binomial_from_vec(xs, idx + 1, acc.insert(xs.get(idx).unwrap_or(0)))
+    }
+}
+
+fn fuzz_pairing_model(input : (Vec<u8>, Vec<i64>)) -> Outcome {
+    let (ops, vals) = input;
+    expect(
+        apply_pairing_ops(
+            ops,
+            vals,
+            0,
+            PairingHeap::new(),
+            List::Nil,
+            PairingHeap::new(),
+            List::Nil
+        ),
+        "PairingHeap diverged from sorted-list multiset model or violated invariants"
+    )
+}
+
+fn fuzz_binomial_model(input : (Vec<u8>, Vec<i64>)) -> Outcome {
+    let (ops, vals) = input;
+    expect(
+        apply_binomial_ops(
+            ops,
+            vals,
+            0,
+            BinomialHeap::new(),
+            List::Nil,
+            BinomialHeap::new(),
+            List::Nil
+        ),
+        "BinomialHeap diverged from sorted-list multiset model or violated invariants"
+    )
+}
+
+fn fuzz_cross_heap_algebra(input : (Vec<i64>, Vec<i64>, List<i64>)) -> Outcome {
+    let (xs, ys, zs) = input;
+    let p1 = pairing_from_vec(xs, 0, PairingHeap::new());
+    let b1 = binomial_from_vec(xs, 0, BinomialHeap::new());
+    let p2 = pairing_from_vec(ys, 0, PairingHeap::new());
+    let b2 = binomial_from_vec(ys, 0, BinomialHeap::new());
+    let p3 = PairingHeap::from_list(zs);
+    let b3 = BinomialHeap::from_list(zs);
+    let pm12 = p1.merge(p2);
+    let pm21 = p2.merge(p1);
+    let bm12 = b1.merge(b2);
+    let bm21 = b2.merge(b1);
+    let p_assoc_l = pm12.merge(p3);
+    let p_assoc_r = p1.merge(p2.merge(p3));
+    let b_assoc_l = bm12.merge(b3);
+    let b_assoc_r = b1.merge(b2.merge(b3));
+    let p_id_l = PairingHeap::new().merge(p1);
+    let p_id_r = p1.merge(PairingHeap::new());
+    let b_id_l = BinomialHeap::new().merge(b1);
+    let b_id_r = b1.merge(BinomialHeap::new());
+    let s1 = p1.to_sorted_list();
+    let s3 = p3.to_sorted_list();
+    let sm12 = pm12.to_sorted_list();
+    let s_assoc = p_assoc_l.to_sorted_list();
+    expect(
+        p1.valid() && b1.valid()
+            && p2.valid() && b2.valid()
+            && p3.valid() && b3.valid()
+            && pm12.valid() && pm21.valid()
+            && bm12.valid() && bm21.valid()
+            && p_assoc_l.valid() && p_assoc_r.valid()
+            && b_assoc_l.valid() && b_assoc_r.valid()
+            && p_id_l.valid() && p_id_r.valid()
+            && b_id_l.valid() && b_id_r.valid()
+            && p1.len() == b1.len()
+            && p3.len() == zs.len() && b3.len() == zs.len()
+            && opt_eq(p1.peek_min(), b1.peek_min())
+            && opt_eq(pm12.peek_min(), bm12.peek_min())
+            && sorted_nondescending(s1)
+            && sorted_nondescending(s3)
+            && sorted_nondescending(sm12)
+            && list_eq(s1, b1.to_sorted_list())
+            && list_eq(s3, b3.to_sorted_list())
+            && list_eq(sm12, pm21.to_sorted_list())
+            && list_eq(sm12, bm12.to_sorted_list())
+            && list_eq(sm12, bm21.to_sorted_list())
+            && list_eq(s_assoc, p_assoc_r.to_sorted_list())
+            && list_eq(s_assoc, b_assoc_l.to_sorted_list())
+            && list_eq(s_assoc, b_assoc_r.to_sorted_list())
+            && list_eq(s1, p_id_l.to_sorted_list())
+            && list_eq(s1, p_id_r.to_sorted_list())
+            && list_eq(s1, b_id_l.to_sorted_list())
+            && list_eq(s1, b_id_r.to_sorted_list()),
+        "cross-heap equivalence or merge commutativity/associativity/identity failed"
+    )
+}
+
+fn apply_boxed_ops(
+    ops : Vec<u8>,
+    vals : Vec<i64>,
+    idx : u64,
+    ph : PairingHeap<Item>,
+    bh : BinomialHeap<Item>,
+    saved_p : PairingHeap<Item>,
+    saved_b : BinomialHeap<Item>
+) -> bool {
+    let step_ok = ph.valid()
+        && bh.valid()
+        && ph.len() == bh.len()
+        && ph.is_empty() == bh.is_empty()
+        && opt_eq(ph.peek_min(), bh.peek_min());
+    if !step_ok {
+        false
+    } else {
+        if idx >= ops.len() {
+            saved_p.valid()
+                && saved_b.valid()
+                && saved_p.len() == saved_b.len()
+                && opt_eq(saved_p.peek_min(), saved_b.peek_min())
+                && list_eq(ph.to_sorted_list(), bh.to_sorted_list())
+                && list_eq(saved_p.to_sorted_list(), saved_b.to_sorted_list())
+        } else {
+            let raw_op = ops.get(idx).unwrap_or(0);
+            let kind = raw_op % 10;
+            let item = Item { value: pick_val(vals, idx) };
+            if kind <= 4 {
+                apply_boxed_ops(
+                    ops,
+                    vals,
+                    idx + 1,
+                    ph.insert(item),
+                    bh.insert(item),
+                    saved_p,
+                    saved_b
+                )
+            } else {
+                if kind <= 6 {
+                    apply_boxed_ops(
+                        ops,
+                        vals,
+                        idx + 1,
+                        ph.delete_min(),
+                        bh.delete_min(),
+                        saved_p,
+                        saved_b
+                    )
+                } else {
+                    if kind == 7 {
+                        match ph.pop_min() {
+                            PairingPop::Empty => match bh.pop_min() {
+                                BinomialPop::Empty =>
+                                    apply_boxed_ops(
+                                        ops,
+                                        vals,
+                                        idx + 1,
+                                        PairingHeap::new(),
+                                        BinomialHeap::new(),
+                                        saved_p,
+                                        saved_b
+                                    ),
+                                BinomialPop::Pop(_, _) => false
+                            },
+                            PairingPop::Pop(px, prest) => match bh.pop_min() {
+                                BinomialPop::Empty => false,
+                                BinomialPop::Pop(bx, brest) =>
+                                    px == bx
+                                        && apply_boxed_ops(
+                                            ops,
+                                            vals,
+                                            idx + 1,
+                                            prest,
+                                            brest,
+                                            saved_p,
+                                            saved_b
+                                        )
+                            }
+                        }
+                    } else {
+                        if kind == 8 {
+                            apply_boxed_ops(ops, vals, idx + 1, ph, bh, ph, bh)
+                        } else {
+                            if ph.len() + saved_p.len() <= 96 {
+                                apply_boxed_ops(
+                                    ops,
+                                    vals,
+                                    idx + 1,
+                                    ph.merge(saved_p),
+                                    bh.merge(saved_b),
+                                    saved_p.delete_min(),
+                                    saved_b.delete_min()
+                                )
+                            } else {
+                                apply_boxed_ops(
+                                    ops,
+                                    vals,
+                                    idx + 1,
+                                    PairingHeap::from_list(ph.to_sorted_list()),
+                                    BinomialHeap::from_list(bh.to_sorted_list()),
+                                    saved_p.clear(),
+                                    saved_b.clear()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn fuzz_boxed_payload(input : (Vec<u8>, Vec<i64>)) -> Outcome {
+    let (ops, vals) = input;
+    expect(
+        apply_boxed_ops(
+            ops,
+            vals,
+            0,
+            PairingHeap::new(),
+            BinomialHeap::new(),
+            PairingHeap::new(),
+            BinomialHeap::new()
+        ),
+        "boxed Item payload heaps diverged or violated invariants"
+    )
+}
+
+fn suite() -> TestTree {
+    TestTree::group("heap")
+        .with_case("pairing basics", test_pairing_basics)
+        .with_case("binomial basics", test_binomial_basics)
+        .with_case("pairing sort", test_pairing_sort)
+        .with_case("binomial sort", test_binomial_sort)
+        .with_case("churn", test_churn)
+        .with_case("agreement", test_agreement)
+        .with_case("api extras", test_api_extras)
+        .with_case("invariants", test_invariants)
+        .with_case("shared payload", test_shared_payload)
+        .with_fuzz(
+            "pairing heap operations, model & invariants (fuzz)",
+            tuple2(
+                u8_domain().vec().max_len(64),
+                i64_domain().in_range(-32, 32).vec().max_len(64)
+            ),
+            fuzz_pairing_model
+        )
+        .with_fuzz(
+            "binomial heap operations, model & invariants (fuzz)",
+            tuple2(
+                u8_domain().vec().max_len(64),
+                i64_domain().in_range(-32, 32).vec().max_len(64)
+            ),
+            fuzz_binomial_model
+        )
+        .with_fuzz(
+            "cross-heap equivalence & merge algebra (fuzz)",
+            tuple3(
+                i64_domain().in_range(-64, 64).vec().max_len(48),
+                i64_domain().in_range(-64, 64).vec().max_len(48),
+                i64_domain().in_range(-64, 64).list().max_len(32)
+            ),
+            fuzz_cross_heap_algebra
+        )
+        .with_fuzz(
+            "boxed payload RC & persistent branching (fuzz)",
+            tuple2(
+                u8_domain().vec().max_len(48),
+                i64_domain().in_range(-24, 24).vec().max_len(48)
+            ),
+            fuzz_boxed_payload
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
