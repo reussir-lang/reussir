@@ -1,3 +1,4 @@
+import core::intrinsic::array;
 import std::option::Option;
 
 pub enum List<T> {
@@ -111,6 +112,126 @@ impl<T> List<T> {
 
 enum [value] Helper<X, Y> { Pair(X, Y) }
 
+// Selection works on a flat copy of the list: `kth_min` and `kth_max` return
+// one element, so there is no list to rebuild, and an array gives the
+// partition constant-time access to both ends of a range. The array is
+// threaded linearly through the helpers below, so every `set` is in place.
+
+fn fill_array<T>(a : [T; ?], list : List<T>, i : i64) -> [T; ?] {
+    match list {
+        List::Nil => a,
+        List::Cons(x, rest) => fill_array(array::set(a, i, x), rest, i + 1)
+    }
+}
+
+fn swap<T>(a : [T; ?], i : i64, j : i64) -> [T; ?] {
+    let x = array::get(a, i);
+    let y = array::get(a, j);
+    array::set(array::set(a, i, y), j, x)
+}
+
+// Sinks `a[j]` into the sorted range `a[lo..j]`.
+fn sink<T : Ord>(a : [T; ?], lo : i64, j : i64) -> [T; ?] {
+    if j > lo && array::get(a, j - 1) > array::get(a, j) {
+        sink(swap(a, j - 1, j), lo, j - 1)
+    } else {
+        a
+    }
+}
+
+// Insertion sort of `a[lo..=hi]`, given that `a[lo..j]` is sorted.
+fn insertion_sort<T : Ord>(a : [T; ?], lo : i64, hi : i64, j : i64) -> [T; ?] {
+    if j > hi {
+        a
+    } else {
+        insertion_sort(sink(a, lo, j), lo, hi, j + 1)
+    }
+}
+
+fn lesser<T : Ord>(x : T, y : T) -> T {
+    if y < x { y } else { x }
+}
+
+fn greater<T : Ord>(x : T, y : T) -> T {
+    if y < x { x } else { y }
+}
+
+fn median_of_three<T : Ord>(x : T, y : T, z : T) -> T {
+    greater(lesser(x, y), lesser(greater(x, y), z))
+}
+
+// Moves the median of every full group of five in `a[i..=hi]` to `a[next]`,
+// `a[next + 1]`, ... and returns the index past the last median.
+fn gather_medians<T : Ord>(a : [T; ?], hi : i64, i : i64, next : i64) -> ([T; ?], i64) {
+    if i + 4 > hi {
+        (a, next)
+    } else {
+        let sorted = insertion_sort(a, i, i + 4, i + 1);
+        gather_medians(swap(sorted, i + 2, next), hi, i + 5, next + 1)
+    }
+}
+
+// The median of the medians of groups of five. At least three tenths of
+// `a[lo..=hi]`, less a few elements, lie on each side of it.
+fn median_of_medians<T : Ord>(a : [T; ?], lo : i64, hi : i64) -> ([T; ?], T) {
+    let (gathered, end) = gather_medians(a, hi, lo, lo);
+    select(gathered, lo, end - 1, lo + (end - lo) / 2, false)
+}
+
+// Three-way partition of `a[i..=gt]` around `pivot`, given that the part of
+// the range before `lt` is below the pivot, `a[lt..i]` equals it, and the
+// part after `gt` is above it. Returns the bounds of the elements equal to
+// the pivot.
+fn partition<T : Ord>(a : [T; ?], pivot : T, lt : i64, i : i64, gt : i64) -> ([T; ?], i64, i64) {
+    if i > gt {
+        (a, lt, gt)
+    } else {
+        let x = array::get(a, i);
+        match x.cmp(pivot) {
+            Ordering::Less => partition(
+                array::set(array::set(a, i, array::get(a, lt)), lt, x),
+                pivot, lt + 1, i + 1, gt
+            ),
+            Ordering::Equal => partition(a, pivot, lt, i + 1, gt),
+            Ordering::Greater => partition(
+                array::set(array::set(a, i, array::get(a, gt)), gt, x),
+                pivot, lt, i, gt - 1
+            )
+        }
+    }
+}
+
+// Returns the element that sorting `a[lo..=hi]` would place at index `k`,
+// together with the permuted array. A median of three is the usual pivot.
+// When a partition discards less than an eighth of its range, the next pivot
+// is a median of medians (`careful`), which is guaranteed to discard about
+// three tenths, so the worst case stays linear.
+fn select<T : Ord>(a : [T; ?], lo : i64, hi : i64, k : i64, careful : bool) -> ([T; ?], T) {
+    if hi - lo < 16 {
+        let sorted = insertion_sort(a, lo, hi, lo + 1);
+        let found = array::get(sorted, k);
+        (sorted, found)
+    } else {
+        let (a, pivot) = if careful {
+            median_of_medians(a, lo, hi)
+        } else {
+            let pivot = median_of_three(
+                array::get(a, lo),
+                array::get(a, lo + (hi - lo) / 2),
+                array::get(a, hi)
+            );
+            (a, pivot)
+        };
+        let (a, lt, gt) = partition(a, pivot, lo, lo, hi);
+        if k >= lt && k <= gt {
+            (a, pivot)
+        } else {
+            let (lo2, hi2) = if k < lt { (lo, lt - 1) } else { (gt + 1, hi) };
+            select(a, lo2, hi2, k, (hi2 - lo2) * 8 > (hi - lo) * 7)
+        }
+    }
+}
+
 impl<T : Ord> List<T> {
    fn min_impl(self : Self, candidate : Option<T>) -> Option<T> {
        match (Helper::Pair {self, candidate}) {
@@ -199,6 +320,34 @@ impl<T : Ord> List<T> {
                let (middle, rest) = back.sort_prefix(n - half);
                (front.rev_merge(middle, List::Nil), rest)
            }
+       }
+   }
+   // The element of rank `k` among the `n` elements of the list.
+   fn select_rank(self : Self, n : u64, k : u64) -> Option<T> {
+       match self {
+           Cons(first, _) if k < n => {
+               let a = fill_array(array::splat<[T; ?]>(n, first), self, 0);
+               let (_, found) = select(a, 0, (n as i64) - 1, k as i64, false);
+               Option::Some { found }
+           },
+           _ => Option::None
+       }
+   }
+   /// Returns the element that would be at index `k` if the list were sorted
+   /// in ascending order, so `kth_min(0)` is the minimum; `None` when `k` is
+   /// out of range. O(n), using a temporary array of the elements.
+   pub fn kth_min(self : Self, k : u64) -> Option<T> {
+       self.select_rank(self.len(), k)
+   }
+   /// Returns the element that would be at index `k` if the list were sorted
+   /// in descending order, so `kth_max(0)` is the maximum; `None` when `k` is
+   /// out of range. O(n), using a temporary array of the elements.
+   pub fn kth_max(self : Self, k : u64) -> Option<T> {
+       let n = self.len();
+       if k < n {
+           self.select_rank(n, n - 1 - k)
+       } else {
+           Option::None
        }
    }
    /// Sorts the list in ascending order with a stable merge sort: equal
