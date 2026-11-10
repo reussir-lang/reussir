@@ -27,7 +27,7 @@
     hashset = { kind = 'executable, path = "hashset.rr" },
     heap = { kind = 'executable, path = "heap.rr", fuzzer = true },
     intmap = { kind = 'executable, path = "intmap.rr" },
-    list = { kind = 'executable, path = "list.rr" },
+    list = { kind = 'executable, path = "list.rr", fuzzer = true },
     option = { kind = 'executable, path = "option.rr" },
     random = { kind = 'executable, path = "random.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
