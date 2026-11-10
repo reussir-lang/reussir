@@ -1,82 +1,73 @@
-// Each input selects one persistent List unit case through the executable's
-// dispatcher. New methods can be covered without changing existing cases.
+// Dedicated coverage-guided fuzz driver and unit suite for the persistent
+// singly linked `List`.
+// Unit cases cover every public method on small fixed lists, plus sorting of
+// fixed, pseudorandom, and equal-key inputs. Fuzz targets check the queries
+// and transforms against a `Vec` model, `sort` against an insertion-sort
+// model on both shared and uniquely owned lists, and sort stability with
+// reference-counted boxed elements.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}list
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin list %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}list
 
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/len.in | %FileCheck %s --check-prefix=LEN
-// LEN:      1
-// LEN-NEXT: 1
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/list%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/list%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/head.in | %FileCheck %s --check-prefix=HEAD
-// HEAD:      3
-// HEAD-NEXT: -1
+// CHECK:      list/len: unit
+// CHECK-NEXT: list/head: unit
+// CHECK-NEXT: list/tail: unit
+// CHECK-NEXT: list/is_nil: unit
+// CHECK-NEXT: list/is_cons: unit
+// CHECK-NEXT: list/reverse: unit
+// CHECK-NEXT: list/map: unit
+// CHECK-NEXT: list/min: unit
+// CHECK-NEXT: list/max: unit
+// CHECK-NEXT: list/contains: unit
+// CHECK-NEXT: list/fold_left: unit
+// CHECK-NEXT: list/count_if: unit
+// CHECK-NEXT: list/find_first: unit
+// CHECK-NEXT: list/filter: unit
+// CHECK-NEXT: list/any: unit
+// CHECK-NEXT: list/all: unit
+// CHECK-NEXT: list/sort: unit
+// CHECK-NEXT: list/sort stability: unit
+// CHECK-NEXT: list/queries & transforms against vector model (fuzz):
+// CHECK-NEXT: list/sort against insertion model & persistence (fuzz):
+// CHECK-NEXT: list/stable sort of boxed elements (fuzz):
 
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/tail.in | %FileCheck %s --check-prefix=TAIL
-// TAIL:      1
-// TAIL-NEXT: 1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/is_nil.in | %FileCheck %s --check-prefix=IS-NIL
-// IS-NIL:      1
-// IS-NIL-NEXT: 0
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/is_cons.in | %FileCheck %s --check-prefix=IS-CONS
-// IS-CONS:      0
-// IS-CONS-NEXT: 1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/reverse.in | %FileCheck %s --check-prefix=REVERSE
-// REVERSE:      2
-// REVERSE-NEXT: 1
-// REVERSE-NEXT: 3
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/map.in | %FileCheck %s --check-prefix=MAP
-// MAP:      4
-// MAP-NEXT: 2
-// MAP-NEXT: 3
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/min.in | %FileCheck %s --check-prefix=MIN
-// MIN:      1
-// MIN-NEXT: -1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/max.in | %FileCheck %s --check-prefix=MAX
-// MAX:      3
-// MAX-NEXT: 2
-// MAX-NEXT: -1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/contains.in | %FileCheck %s --check-prefix=CONTAINS
-// CONTAINS:      1
-// CONTAINS-NEXT: 0
-// CONTAINS-NEXT: 0
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/fold_left.in | %FileCheck %s --check-prefix=FOLD-LEFT
-// FOLD-LEFT:      312
-// FOLD-LEFT-NEXT: 7
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/count_if.in | %FileCheck %s --check-prefix=COUNT-IF
-// COUNT-IF:      1
-// COUNT-IF-NEXT: 1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/find_first.in | %FileCheck %s --check-prefix=FIND-FIRST
-// FIND-FIRST:      1
-// FIND-FIRST-NEXT: -1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/filter.in | %FileCheck %s --check-prefix=FILTER
-// FILTER:      3
-// FILTER-NEXT: 1
-// FILTER-NEXT: 1
-// FILTER-NEXT: 1
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/any.in | %FileCheck %s --check-prefix=ANY
-// ANY:      1
-// ANY-NEXT: 0
-// ANY-NEXT: 0
-
-// RUN: %std_rene_build/release/list%exe_ext < %S/Inputs/list/all.in | %FileCheck %s --check-prefix=ALL
-// ALL:      1
-// ALL-NEXT: 0
-// ALL-NEXT: 1
-
+import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
+import std::option::Option;
+import test::domain::i64_domain;
+import test::domain::tuple2;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// Ordered by `key` alone, so `seq` tells equal elements apart.
+pub struct Item {
+    key : i64,
+    seq : u64
+}
+
+impl PartialEq for Item {
+    fn eq(self : Self, other : Self) -> bool { self.key == other.key }
+}
+
+impl Eq for Item {}
+
+impl PartialOrd for Item {
+    fn lt(self : Self, other : Self) -> bool { self.key < other.key }
+    fn le(self : Self, other : Self) -> bool { self.key <= other.key }
+    fn gt(self : Self, other : Self) -> bool { self.key > other.key }
+    fn ge(self : Self, other : Self) -> bool { self.key >= other.key }
+}
+
+impl Ord for Item {
+    fn cmp(self : Self, other : Self) -> Ordering { self.key.cmp(other.key) }
+}
 
 fn sample_list() -> List<i32> {
     List::Cons {
@@ -89,135 +80,326 @@ fn empty_list() -> List<i32> {
     List::Nil
 }
 
-fn write_bool(value: bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
+fn list3(a : i32, b : i32, c : i32) -> List<i32> {
+    List::Cons { a, List::Cons { b, List::Cons { c, List::Nil } } }
 }
 
-fn test_len() {
-    write_bool(empty_list().len() == 0);
-    write_bool(sample_list().len() == 3);
-}
-
-fn test_head() {
-    test_utils::io::write_i32(sample_list().head().unwrap_or(-1));
-    test_utils::io::write_i32(empty_list().head().unwrap_or(-1));
-}
-
-fn test_tail() {
-    test_utils::io::write_i32(sample_list().tail().head().unwrap_or(-1));
-    write_bool(empty_list().tail().is_nil());
-}
-
-fn test_is_nil() {
-    write_bool(empty_list().is_nil());
-    write_bool(sample_list().is_nil());
-}
-
-fn test_is_cons() {
-    write_bool(empty_list().is_cons());
-    write_bool(sample_list().is_cons());
-}
-
-fn test_reverse() {
-    test_utils::io::write_i32(sample_list().reverse().head().unwrap_or(-1));
-    test_utils::io::write_i32(
-        sample_list().reverse().tail().head().unwrap_or(-1)
-    );
-    test_utils::io::write_i32(
-        sample_list().reverse().tail().tail().head().unwrap_or(-1)
-    );
-}
-
-fn test_map() {
-    let increment = |x: i32| x + 1;
-    test_utils::io::write_i32(sample_list().map(increment).head().unwrap_or(-1));
-    test_utils::io::write_i32(
-        sample_list().map(increment).tail().head().unwrap_or(-1)
-    );
-    test_utils::io::write_i32(
-        sample_list().map(increment).tail().tail().head().unwrap_or(-1)
-    );
-}
-
-fn test_min() {
-    test_utils::io::write_i32(sample_list().min().unwrap_or(-1));
-    test_utils::io::write_i32(empty_list().min().unwrap_or(-1));
-}
-
-fn test_max() {
-    test_utils::io::write_i32(sample_list().max().unwrap_or(-1));
-    test_utils::io::write_i32(sample_list().tail().max().unwrap_or(-1));
-    test_utils::io::write_i32(empty_list().max().unwrap_or(-1));
-}
-
-fn test_contains() {
-    write_bool(sample_list().contains(1));
-    write_bool(sample_list().contains(9));
-    write_bool(empty_list().contains(1));
-}
-
-fn test_fold_left() {
-    test_utils::io::write_i32(
-        sample_list().fold_left(0, |acc: i32, x: i32| acc * 10 + x)
-    );
-    test_utils::io::write_i32(
-        empty_list().fold_left(7, |acc: i32, x: i32| acc + x)
-    );
-}
-
-fn test_count_if() {
-    write_bool(sample_list().count_if(|x: i32| x >= 2) == 2);
-    write_bool(empty_list().count_if(|x: i32| x >= 2) == 0);
-}
-
-fn test_find_first() {
-    test_utils::io::write_i32(
-        sample_list().find_first(|x: i32| x < 3).unwrap_or(-1)
-    );
-    test_utils::io::write_i32(
-        sample_list().find_first(|x: i32| x > 3).unwrap_or(-1)
-    );
-}
-
-fn test_filter() {
-    let filtered = sample_list().filter(|x: i32| x % 2 != 0);
-    test_utils::io::write_i32(filtered.head().unwrap_or(-1));
-    test_utils::io::write_i32(filtered.tail().head().unwrap_or(-1));
-    write_bool(filtered.tail().tail().is_nil());
-    write_bool(empty_list().filter(|x: i32| x > 0).is_nil());
-}
-
-fn test_any() {
-    write_bool(sample_list().any(|x: i32| x < 2));
-    write_bool(sample_list().any(|x: i32| x > 3));
-    write_bool(empty_list().any(|x: i32| x > 0));
-}
-
-fn test_all() {
-    write_bool(sample_list().all(|x: i32| x > 0));
-    write_bool(sample_list().all(|x: i32| x < 3));
-    write_bool(empty_list().all(|x: i32| x > 0));
-}
-
-#[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_len(),
-        1 => test_head(),
-        2 => test_tail(),
-        3 => test_is_nil(),
-        4 => test_is_cons(),
-        5 => test_reverse(),
-        6 => test_map(),
-        7 => test_min(),
-        8 => test_max(),
-        9 => test_contains(),
-        10 => test_fold_left(),
-        11 => test_count_if(),
-        12 => test_find_first(),
-        13 => test_filter(),
-        14 => test_any(),
-        15 => test_all(),
-        _ => core::intrinsic::panic::panic()
+fn list_eq<T : Eq>(a : List<T>, b : List<T>) -> bool {
+    match a {
+        List::Nil => b.is_nil(),
+        List::Cons(x, xs) => match b {
+            List::Nil => false,
+            List::Cons(y, ys) => x == y && list_eq(xs, ys)
+        }
     }
 }
+
+fn opt_eq<T : Eq>(a : Option<T>, b : Option<T>) -> bool {
+    match a {
+        Option::None => b.is_none(),
+        Option::Some(x) => match b {
+            Option::None => false,
+            Option::Some(y) => x == y
+        }
+    }
+}
+
+fn sorted_nondescending<T : Ord>(l : List<T>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a <= b && sorted_nondescending(List::Cons { b, rest })
+    }
+}
+
+fn lcg(seed : i64) -> i64 {
+    (seed * 1103515245 + 12345) % 2147483648
+}
+
+fn pseudorandom_list(n : u64, seed : i64, acc : List<i64>) -> List<i64> {
+    if n == 0 {
+        acc
+    } else {
+        let s = lcg(seed);
+        pseudorandom_list(n - 1, s, List::Cons { s % 1000, acc })
+    }
+}
+
+fn test_len() -> Outcome {
+    should_be(empty_list().len(), 0)
+        .and_then(|| should_be(sample_list().len(), 3))
+}
+
+fn test_head() -> Outcome {
+    should_be(sample_list().head().unwrap_or(-1), 3)
+        .and_then(|| should_be(empty_list().head().unwrap_or(-1), -1))
+}
+
+fn test_tail() -> Outcome {
+    should_be(sample_list().tail().head().unwrap_or(-1), 1)
+        .and_then(|| expect(empty_list().tail().is_nil(), "tail of empty list is empty"))
+}
+
+fn test_is_nil() -> Outcome {
+    expect(empty_list().is_nil(), "empty list is nil")
+        .and_then(|| expect(!sample_list().is_nil(), "non-empty list is not nil"))
+}
+
+fn test_is_cons() -> Outcome {
+    expect(!empty_list().is_cons(), "empty list is not cons")
+        .and_then(|| expect(sample_list().is_cons(), "non-empty list is cons"))
+}
+
+fn test_reverse() -> Outcome {
+    expect(list_eq(sample_list().reverse(), list3(2, 1, 3)), "reverse order")
+        .and_then(|| expect(empty_list().reverse().is_nil(), "reverse of empty list"))
+}
+
+fn test_map() -> Outcome {
+    let increment = |x: i32| x + 1;
+    expect(list_eq(sample_list().map(increment), list3(4, 2, 3)), "map increments")
+        .and_then(|| expect(empty_list().map(increment).is_nil(), "map of empty list"))
+}
+
+fn test_min() -> Outcome {
+    should_be(sample_list().min().unwrap_or(-1), 1)
+        .and_then(|| should_be(empty_list().min().unwrap_or(-1), -1))
+}
+
+fn test_max() -> Outcome {
+    should_be(sample_list().max().unwrap_or(-1), 3)
+        .and_then(|| should_be(sample_list().tail().max().unwrap_or(-1), 2))
+        .and_then(|| should_be(empty_list().max().unwrap_or(-1), -1))
+}
+
+fn test_contains() -> Outcome {
+    expect(sample_list().contains(1), "contains present element")
+        .and_then(|| expect(!sample_list().contains(9), "contains absent element"))
+        .and_then(|| expect(!empty_list().contains(1), "contains on empty list"))
+}
+
+fn test_fold_left() -> Outcome {
+    should_be(sample_list().fold_left(0, |acc: i32, x: i32| acc * 10 + x), 312)
+        .and_then(|| should_be(empty_list().fold_left(7, |acc: i32, x: i32| acc + x), 7))
+}
+
+fn test_count_if() -> Outcome {
+    should_be(sample_list().count_if(|x: i32| x >= 2), 2)
+        .and_then(|| should_be(empty_list().count_if(|x: i32| x >= 2), 0))
+}
+
+fn test_find_first() -> Outcome {
+    should_be(sample_list().find_first(|x: i32| x < 3).unwrap_or(-1), 1)
+        .and_then(|| should_be(sample_list().find_first(|x: i32| x > 3).unwrap_or(-1), -1))
+}
+
+fn test_filter() -> Outcome {
+    let odd = sample_list().filter(|x: i32| x % 2 != 0);
+    expect(
+        list_eq(odd, List::Cons { 3, List::Cons { 1, List::Nil } }),
+        "filter keeps matching elements in order"
+    )
+        .and_then(|| expect(
+            empty_list().filter(|x: i32| x > 0).is_nil(),
+            "filter of empty list"
+        ))
+}
+
+fn test_any() -> Outcome {
+    expect(sample_list().any(|x: i32| x < 2), "any with a match")
+        .and_then(|| expect(!sample_list().any(|x: i32| x > 3), "any without a match"))
+        .and_then(|| expect(!empty_list().any(|x: i32| x > 0), "any on empty list"))
+}
+
+fn test_all() -> Outcome {
+    expect(sample_list().all(|x: i32| x > 0), "all matching")
+        .and_then(|| expect(!sample_list().all(|x: i32| x < 3), "all with a mismatch"))
+        .and_then(|| expect(empty_list().all(|x: i32| x > 0), "all on empty list"))
+}
+
+fn test_sort() -> Outcome {
+    let random = pseudorandom_list(5000, 7, List::Nil);
+    let sorted = random.sort();
+    expect(list_eq(sample_list().sort(), list3(1, 2, 3)), "sort of three elements")
+        .and_then(|| expect(empty_list().sort().is_nil(), "sort of empty list"))
+        .and_then(|| expect(
+            list_eq(List::Cons { 5, empty_list() }.sort(), List::Cons { 5, List::Nil }),
+            "sort of one element"
+        ))
+        .and_then(|| expect(list_eq(list3(2, 1, 2).sort(), list3(1, 2, 2)), "sort with duplicates"))
+        .and_then(|| expect(sorted_nondescending(sorted), "pseudorandom sort order"))
+        .and_then(|| should_be(sorted.len(), 5000))
+        .and_then(|| should_be(random.len(), 5000))
+        .and_then(|| expect(list_eq(sorted.sort(), sorted), "sort of sorted list"))
+        .and_then(|| expect(list_eq(sorted.reverse().sort(), sorted), "sort of descending list"))
+}
+
+fn stable(l : List<Item>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            (a.key < b.key || a.key == b.key && a.seq < b.seq)
+                && stable(List::Cons { b, rest })
+    }
+}
+
+fn items_from_keys(keys : Vec<u8>) -> List<Item> {
+    let (_, out) = while [i = keys.len(), out = List::Nil] (i > 0) {
+        (i - 1, List::Cons { Item { key: keys.get(i - 1).unwrap_or(0) as i64, seq: i - 1 }, out })
+    };
+    out
+}
+
+fn test_sort_stability() -> Outcome {
+    let keys = Vec::new().push(1 as u8).push(0 as u8).push(1 as u8).push(0 as u8).push(1 as u8);
+    let sorted = items_from_keys(keys).sort();
+    should_be(sorted.len(), 5)
+        .and_then(|| expect(stable(sorted), "equal keys keep their input order"))
+        .and_then(|| should_be(sorted.head().unwrap_or_panic().seq, 1))
+}
+
+fn list_from_vec(xs : Vec<i64>) -> List<i64> {
+    let (_, out) = while [i = xs.len(), out = List::Nil] (i > 0) {
+        (i - 1, List::Cons { xs.get(i - 1).unwrap_or(0), out })
+    };
+    out
+}
+
+fn fold_step(acc : i64, x : i64) -> i64 {
+    (acc * 31 + x) % 1000003
+}
+
+fn fuzz_queries(input : (Vec<i64>, i64)) -> Outcome {
+    let (xs, pivot) = input;
+    let n = xs.len();
+    let first = xs.get(0).unwrap_or(0);
+    let (_, lo, hi, seen, folded, below, shifted, reversed) = while [
+        i = (0 as u64), lo = first, hi = first, seen = false, folded = (0 as i64),
+        below = Vec::new(), shifted = Vec::new(), reversed = Vec::new()
+    ] (i < n) {
+        let x = xs.get(i).unwrap_or(0);
+        (
+            i + 1,
+            if x < lo { x } else { lo },
+            if x > hi { x } else { hi },
+            seen || x == pivot,
+            fold_step(folded, x),
+            if x < pivot { below.push(x) } else { below },
+            shifted.push(x + pivot),
+            reversed.push(xs.get(n - 1 - i).unwrap_or(0))
+        )
+    };
+    let l = list_from_vec(xs);
+    let is_below = |x: i64| x < pivot;
+    should_be(l.len(), n)
+        .and_then(|| expect(
+            l.is_nil() == xs.is_empty() && l.is_cons() != xs.is_empty(),
+            "is_nil/is_cons"
+        ))
+        .and_then(|| expect(
+            opt_eq(l.head(), xs.get(0)) && opt_eq(l.tail().head(), xs.get(1)),
+            "head/tail"
+        ))
+        .and_then(|| expect(list_eq(l.reverse(), list_from_vec(reversed)), "reverse"))
+        .and_then(|| expect(
+            list_eq(l.map(|x: i64| x + pivot), list_from_vec(shifted)),
+            "map"
+        ))
+        .and_then(|| should_be(l.fold_left(0, fold_step), folded))
+        .and_then(|| expect(
+            opt_eq(l.min(), if xs.is_empty() { Option::None } else { Option::Some { lo } })
+                && opt_eq(l.max(), if xs.is_empty() { Option::None } else { Option::Some { hi } }),
+            "min/max"
+        ))
+        .and_then(|| should_be(l.contains(pivot), seen))
+        .and_then(|| should_be(l.count_if(is_below), below.len()))
+        .and_then(|| expect(opt_eq(l.find_first(is_below), below.get(0)), "find_first"))
+        .and_then(|| expect(list_eq(l.filter(is_below), list_from_vec(below)), "filter"))
+        .and_then(|| should_be(l.any(is_below), !below.is_empty()))
+        .and_then(|| should_be(l.all(is_below), below.len() == n))
+}
+
+fn model_insert(l : List<i64>, x : i64) -> List<i64> {
+    match l {
+        List::Nil => List::Cons { x, List::Nil },
+        List::Cons(h, t) =>
+            if x <= h {
+                List::Cons { x, List::Cons { h, t } }
+            } else {
+                List::Cons { h, model_insert(t, x) }
+            }
+    }
+}
+
+fn fuzz_sort(xs : Vec<i64>) -> Outcome {
+    let l = list_from_vec(xs);
+    let model = l.fold_left(List::Nil, model_insert);
+    let sorted = l.sort();
+    expect(list_eq(sorted, model), "sort of a shared list")
+        .and_then(|| expect(list_eq(l, list_from_vec(xs)), "sort leaves the shared input intact"))
+        .and_then(|| expect(list_eq(list_from_vec(xs).sort(), model), "sort of a uniquely owned list"))
+        .and_then(|| expect(list_eq(sorted.sort(), model), "sort of sorted list"))
+        .and_then(|| expect(list_eq(sorted.reverse().sort(), model), "sort of descending list"))
+}
+
+fn keys_match(l : List<Item>, keys : Vec<u8>) -> bool {
+    l.all(|item: Item| opt_eq(keys.get(item.seq), Option::Some { item.key as u8 }))
+}
+
+fn fuzz_stable_sort(keys : Vec<u8>) -> Outcome {
+    let items = items_from_keys(keys);
+    let sorted = items.sort();
+    should_be(sorted.len(), keys.len())
+        .and_then(|| expect(stable(sorted), "keys ascend and equal keys keep their input order"))
+        .and_then(|| expect(keys_match(sorted, keys), "every element keeps its key"))
+        .and_then(|| expect(stable(items_from_keys(keys).sort()), "uniquely owned input"))
+        .and_then(|| should_be(items.len(), keys.len()))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("list")
+        .with_case("len", test_len)
+        .with_case("head", test_head)
+        .with_case("tail", test_tail)
+        .with_case("is_nil", test_is_nil)
+        .with_case("is_cons", test_is_cons)
+        .with_case("reverse", test_reverse)
+        .with_case("map", test_map)
+        .with_case("min", test_min)
+        .with_case("max", test_max)
+        .with_case("contains", test_contains)
+        .with_case("fold_left", test_fold_left)
+        .with_case("count_if", test_count_if)
+        .with_case("find_first", test_find_first)
+        .with_case("filter", test_filter)
+        .with_case("any", test_any)
+        .with_case("all", test_all)
+        .with_case("sort", test_sort)
+        .with_case("sort stability", test_sort_stability)
+        .with_fuzz(
+            "queries & transforms against vector model (fuzz)",
+            tuple2(
+                i64_domain().in_range(-16, 16).vec().max_len(48),
+                i64_domain().in_range(-16, 16)
+            ),
+            fuzz_queries
+        )
+        .with_fuzz(
+            "sort against insertion model & persistence (fuzz)",
+            i64_domain().in_range(-32, 32).vec().max_len(96),
+            fuzz_sort
+        )
+        .with_fuzz(
+            "stable sort of boxed elements (fuzz)",
+            u8_domain().in_range(0, 7).vec().max_len(96),
+            fuzz_stable_sort
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
