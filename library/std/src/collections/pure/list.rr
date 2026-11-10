@@ -133,6 +133,85 @@ impl<T : Ord> List<T> {
    pub fn max(self : Self) -> Option<T> {
        self.max_impl(Option::None)
    }
+   // Merges two ascending lists onto `acc` in descending order. Each step
+   // builds its cells before the tail call, so the cells the match just
+   // freed are reused. Equal elements keep the reverse of their input order.
+   fn rev_merge(self : Self, other : Self, acc : Self) -> Self {
+       match self {
+           Nil => other.reverse_impl(acc),
+           Cons(x, xs) => match other {
+               Nil => List::Cons { x, xs }.reverse_impl(acc),
+               Cons(y, ys) => if x <= y {
+                   xs.rev_merge(List::Cons { y, ys }, List::Cons { x, acc })
+               } else {
+                   List::Cons { x, xs }.rev_merge(ys, List::Cons { y, acc })
+               }
+           }
+       }
+   }
+   // The mirror of `rev_merge`: merges two descending lists onto `acc` in
+   // ascending order, restoring the input order of equal elements.
+   fn rev_merge_desc(self : Self, other : Self, acc : Self) -> Self {
+       match self {
+           Nil => other.reverse_impl(acc),
+           Cons(x, xs) => match other {
+               Nil => List::Cons { x, xs }.reverse_impl(acc),
+               Cons(y, ys) => if x > y {
+                   xs.rev_merge_desc(List::Cons { y, ys }, List::Cons { x, acc })
+               } else {
+                   List::Cons { x, xs }.rev_merge_desc(ys, List::Cons { y, acc })
+               }
+           }
+       }
+   }
+   // Sorts the first `n >= 1` elements in ascending order and returns them
+   // with the unsorted remainder. The halves are sorted in descending order
+   // so that the reversing merge yields the ascending result directly.
+   fn sort_prefix(self : Self, n : u64) -> (Self, Self) {
+       match self {
+           Cons(x, rest) if n == 1 => (List::Cons { x, List::Nil }, rest),
+           Cons(x, Cons(y, rest)) if n == 2 => if x <= y {
+               (List::Cons { x, List::Cons { y, List::Nil } }, rest)
+           } else {
+               (List::Cons { y, List::Cons { x, List::Nil } }, rest)
+           },
+           whole => {
+               let half = n / 2;
+               let (front, back) = whole.sort_prefix_desc(half);
+               let (middle, rest) = back.sort_prefix_desc(n - half);
+               (front.rev_merge_desc(middle, List::Nil), rest)
+           }
+       }
+   }
+   // `sort_prefix` with the sorted prefix in descending order, equal
+   // elements reversed.
+   fn sort_prefix_desc(self : Self, n : u64) -> (Self, Self) {
+       match self {
+           Cons(x, rest) if n == 1 => (List::Cons { x, List::Nil }, rest),
+           Cons(x, Cons(y, rest)) if n == 2 => if x > y {
+               (List::Cons { x, List::Cons { y, List::Nil } }, rest)
+           } else {
+               (List::Cons { y, List::Cons { x, List::Nil } }, rest)
+           },
+           whole => {
+               let half = n / 2;
+               let (front, back) = whole.sort_prefix(half);
+               let (middle, rest) = back.sort_prefix(n - half);
+               (front.rev_merge(middle, List::Nil), rest)
+           }
+       }
+   }
+   /// Sorts the list in ascending order with a stable merge sort: equal
+   /// elements keep their relative order.
+   pub fn sort(self : Self) -> Self {
+       let n = self.len();
+       if n < 2 {
+           self
+       } else {
+           let (sorted, _) = self.sort_prefix(n);
+           sorted
+       }
+   }
 }
 
 impl<T : Eq> List<T> {
