@@ -31,7 +31,7 @@
     option = { kind = 'executable, path = "option.rr" },
     random = { kind = 'executable, path = "random.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
-    string = { kind = 'executable, path = "string.rr" },
+    string = { kind = 'executable, path = "string.rr", fuzzer = true },
     test_cli = { kind = 'executable, path = "test_cli.rr" },
     test_fuzz = { kind = 'executable, path = "test_fuzz.rr", fuzzer = true },
     test_runner = { kind = 'executable, path = "test_runner.rr" },
