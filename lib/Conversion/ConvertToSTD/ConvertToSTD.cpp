@@ -617,6 +617,14 @@ public:
         remaining.push_back(idx);
     }
 
+    // Keep one tag switch when TBI peeling would leave another dispatch.
+    if (!peeled.empty() && remaining.size() > 1 &&
+        encoding.getValue() == kSpecialPtrTagTBI) {
+      remaining.append(peeled.begin(), peeled.end());
+      llvm::sort(remaining);
+      peeled.clear();
+    }
+
     if (peeled.empty()) {
       auto dispatch = emitTagDispatch(op, rewriter, remaining);
       rewriter.replaceOp(op, dispatch->getResults());
