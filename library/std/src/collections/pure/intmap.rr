@@ -66,8 +66,9 @@ struct [value] PoppedEntry<V> {
 // For a non-zero branch `prefix`, `prefix ^ (prefix & (prefix - 1))` is its
 // branching bit and `(u ^ prefix) > (prefix ^ (prefix - 1))` holds when `u`
 // differs from `prefix` above that bit. The helpers below stay generic and
-// directly self-recursive so downstream instantiations inline bit arithmetic,
-// apply TRMC, and reuse uniquely owned spine nodes in place.
+// directly self-recursive so downstream instantiations inline bit arithmetic
+// and reuse uniquely owned spine nodes. TRMC applies when the recursive result
+// is a constructor field; result inspection and branch collapse still recurse.
 
 // The two representatives differ above their subtrees' branching bits.
 fn join<V>(k : u64, a : IntMap<V>, q : u64, b : IntMap<V>) -> IntMap<V> {
@@ -226,30 +227,6 @@ fn insert_at<V>(map : IntMap<V>, key : i64, u : u64, value : V) -> IntMap<V> {
     }
 }
 
-fn insert_in_bin<V>(
-    prefix : u64,
-    left : IntMap<V>,
-    right : IntMap<V>,
-    key : i64,
-    value : V
-) -> IntMap<V> {
-    let u = (key as u64) ^ (1 << 63);
-    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
-        join(
-            u,
-            IntMap::Tip { key, value },
-            prefix,
-            IntMap::Bin { prefix, left, right }
-        )
-    } else {
-        if u < prefix {
-            IntMap::Bin { prefix, insert_at(left, key, u, value), right }
-        } else {
-            IntMap::Bin { prefix, left, insert_at(right, key, u, value) }
-        }
-    }
-}
-
 fn insert_result_at<V>(
     map : IntMap<V>,
     key : i64,
@@ -338,38 +315,6 @@ fn insert_if_absent_at<V>(
     }
 }
 
-fn insert_if_absent_in_bin<V>(
-    prefix : u64,
-    left : IntMap<V>,
-    right : IntMap<V>,
-    key : i64,
-    value : V
-) -> IntMap<V> {
-    let u = (key as u64) ^ (1 << 63);
-    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
-        join(
-            u,
-            IntMap::Tip { key, value },
-            prefix,
-            IntMap::Bin { prefix, left, right }
-        )
-    } else {
-        if u < prefix {
-            IntMap::Bin {
-                prefix,
-                insert_if_absent_at(left, key, u, value),
-                right
-            }
-        } else {
-            IntMap::Bin {
-                prefix,
-                left,
-                insert_if_absent_at(right, key, u, value)
-            }
-        }
-    }
-}
-
 fn insert_with_at<V>(
     map : IntMap<V>,
     key : i64,
@@ -407,39 +352,6 @@ fn insert_with_at<V>(
     }
 }
 
-fn insert_with_in_bin<V>(
-    prefix : u64,
-    left : IntMap<V>,
-    right : IntMap<V>,
-    key : i64,
-    value : V,
-    combine : (V, V) -> V
-) -> IntMap<V> {
-    let u = (key as u64) ^ (1 << 63);
-    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
-        join(
-            u,
-            IntMap::Tip { key, value },
-            prefix,
-            IntMap::Bin { prefix, left, right }
-        )
-    } else {
-        if u < prefix {
-            IntMap::Bin {
-                prefix,
-                insert_with_at(left, key, u, value, combine),
-                right
-            }
-        } else {
-            IntMap::Bin {
-                prefix,
-                left,
-                insert_with_at(right, key, u, value, combine)
-            }
-        }
-    }
-}
-
 fn insert_with_left_at<V>(
     map : IntMap<V>,
     key : i64,
@@ -474,39 +386,6 @@ fn insert_with_left_at<V>(
                     }
                 }
             }
-    }
-}
-
-fn insert_with_left_in_bin<V>(
-    prefix : u64,
-    left : IntMap<V>,
-    right : IntMap<V>,
-    key : i64,
-    left_value : V,
-    combine : (V, V) -> V
-) -> IntMap<V> {
-    let u = (key as u64) ^ (1 << 63);
-    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
-        join(
-            u,
-            IntMap::Tip { key, left_value },
-            prefix,
-            IntMap::Bin { prefix, left, right }
-        )
-    } else {
-        if u < prefix {
-            IntMap::Bin {
-                prefix,
-                insert_with_left_at(left, key, u, left_value, combine),
-                right
-            }
-        } else {
-            IntMap::Bin {
-                prefix,
-                left,
-                insert_with_left_at(right, key, u, left_value, combine)
-            }
-        }
     }
 }
 
@@ -927,179 +806,6 @@ fn from_list_impl<V>(values : List<Entry<V>>, acc : IntMap<V>) -> IntMap<V> {
         List::Nil => acc,
         List::Cons(entry, rest) =>
             from_list_impl(rest, acc.insert(entry.key, entry.value))
-    }
-}
-
-fn union_bin_left<V>(
-    p1 : u64,
-    l1 : IntMap<V>,
-    r1 : IntMap<V>,
-    other : IntMap<V>
-) -> IntMap<V> {
-    match other {
-        IntMap::Empty => IntMap::Bin { p1, l1, r1 },
-        IntMap::Tip(k, v) => insert_in_bin(p1, l1, r1, k, v),
-        IntMap::Bin(p2, l2, r2) => union_bins(p1, l1, r1, p2, l2, r2)
-    }
-}
-
-fn union_bin_right<V>(
-    map : IntMap<V>,
-    p2 : u64,
-    l2 : IntMap<V>,
-    r2 : IntMap<V>
-) -> IntMap<V> {
-    match map {
-        IntMap::Empty => IntMap::Bin { p2, l2, r2 },
-        IntMap::Tip(k, v) => insert_if_absent_in_bin(p2, l2, r2, k, v),
-        IntMap::Bin(p1, l1, r1) => union_bins(p1, l1, r1, p2, l2, r2)
-    }
-}
-
-fn union_bins<V>(
-    p1 : u64,
-    l1 : IntMap<V>,
-    r1 : IntMap<V>,
-    p2 : u64,
-    l2 : IntMap<V>,
-    r2 : IntMap<V>
-) -> IntMap<V> {
-    if p1 == p2 {
-        IntMap::Bin { p1, l1.union(l2), r1.union(r2) }
-    } else {
-        let m1 = p1 ^ (p1 - 1);
-        let m2 = p2 ^ (p2 - 1);
-        if m1 > m2 {
-            if (p2 ^ p1) > m1 {
-                let left_bin = IntMap::Bin { p1, l1, r1 };
-                let right_bin = IntMap::Bin { p2, l2, r2 };
-                join(p1, left_bin, p2, right_bin)
-            } else {
-                if p2 < p1 {
-                    IntMap::Bin { p1, union_bin_right(l1, p2, l2, r2), r1 }
-                } else {
-                    IntMap::Bin { p1, l1, union_bin_right(r1, p2, l2, r2) }
-                }
-            }
-        } else {
-            if m2 > m1 {
-                if (p1 ^ p2) > m2 {
-                    let left_bin = IntMap::Bin { p1, l1, r1 };
-                    let right_bin = IntMap::Bin { p2, l2, r2 };
-                    join(p1, left_bin, p2, right_bin)
-                } else {
-                    if p1 < p2 {
-                        IntMap::Bin { p2, union_bin_left(p1, l1, r1, l2), r2 }
-                    } else {
-                        IntMap::Bin { p2, l2, union_bin_left(p1, l1, r1, r2) }
-                    }
-                }
-            } else {
-                let left_bin = IntMap::Bin { p1, l1, r1 };
-                let right_bin = IntMap::Bin { p2, l2, r2 };
-                join(p1, left_bin, p2, right_bin)
-            }
-        }
-    }
-}
-
-fn union_with_bin_left<V>(
-    p1 : u64,
-    l1 : IntMap<V>,
-    r1 : IntMap<V>,
-    other : IntMap<V>,
-    combine : (V, V) -> V
-) -> IntMap<V> {
-    match other {
-        IntMap::Empty => IntMap::Bin { p1, l1, r1 },
-        IntMap::Tip(k, right_val) =>
-            insert_with_in_bin(p1, l1, r1, k, right_val, combine),
-        IntMap::Bin(p2, l2, r2) =>
-            union_bins_with(p1, l1, r1, p2, l2, r2, combine)
-    }
-}
-
-fn union_with_bin_right<V>(
-    map : IntMap<V>,
-    p2 : u64,
-    l2 : IntMap<V>,
-    r2 : IntMap<V>,
-    combine : (V, V) -> V
-) -> IntMap<V> {
-    match map {
-        IntMap::Empty => IntMap::Bin { p2, l2, r2 },
-        IntMap::Tip(k, left_val) =>
-            insert_with_left_in_bin(p2, l2, r2, k, left_val, combine),
-        IntMap::Bin(p1, l1, r1) =>
-            union_bins_with(p1, l1, r1, p2, l2, r2, combine)
-    }
-}
-
-fn union_bins_with<V>(
-    p1 : u64,
-    l1 : IntMap<V>,
-    r1 : IntMap<V>,
-    p2 : u64,
-    l2 : IntMap<V>,
-    r2 : IntMap<V>,
-    combine : (V, V) -> V
-) -> IntMap<V> {
-    if p1 == p2 {
-        IntMap::Bin {
-            p1,
-            l1.union_with(l2, combine),
-            r1.union_with(r2, combine)
-        }
-    } else {
-        let m1 = p1 ^ (p1 - 1);
-        let m2 = p2 ^ (p2 - 1);
-        if m1 > m2 {
-            if (p2 ^ p1) > m1 {
-                let left_bin = IntMap::Bin { p1, l1, r1 };
-                let right_bin = IntMap::Bin { p2, l2, r2 };
-                join(p1, left_bin, p2, right_bin)
-            } else {
-                if p2 < p1 {
-                    IntMap::Bin {
-                        p1,
-                        union_with_bin_right(l1, p2, l2, r2, combine),
-                        r1
-                    }
-                } else {
-                    IntMap::Bin {
-                        p1,
-                        l1,
-                        union_with_bin_right(r1, p2, l2, r2, combine)
-                    }
-                }
-            }
-        } else {
-            if m2 > m1 {
-                if (p1 ^ p2) > m2 {
-                    let left_bin = IntMap::Bin { p1, l1, r1 };
-                    let right_bin = IntMap::Bin { p2, l2, r2 };
-                    join(p1, left_bin, p2, right_bin)
-                } else {
-                    if p1 < p2 {
-                        IntMap::Bin {
-                            p2,
-                            union_with_bin_left(p1, l1, r1, l2, combine),
-                            r2
-                        }
-                    } else {
-                        IntMap::Bin {
-                            p2,
-                            l2,
-                            union_with_bin_left(p1, l1, r1, r2, combine)
-                        }
-                    }
-                }
-            } else {
-                let left_bin = IntMap::Bin { p1, l1, r1 };
-                let right_bin = IntMap::Bin { p2, l2, r2 };
-                join(p1, left_bin, p2, right_bin)
-            }
-        }
     }
 }
 
@@ -1877,10 +1583,74 @@ impl<V> IntMap<V> {
     /// Inserts every entry from `other`; values from `other` win on duplicate
     /// keys. O(n + m).
     pub fn union(self : Self, other : Self) -> Self {
+        // Keep branch matches and reconstruction together for token reuse.
         match other {
             IntMap::Empty => self,
             IntMap::Tip(key, value) => self.insert(key, value),
-            IntMap::Bin(p2, l2, r2) => union_bin_right(self, p2, l2, r2)
+            IntMap::Bin(p2, l2, r2) => match self {
+                IntMap::Empty => IntMap::Bin { p2, l2, r2 },
+                IntMap::Tip(k, v) => insert_if_absent_at(
+                    IntMap::Bin { p2, l2, r2 },
+                    k,
+                    (k as u64) ^ (1 << 63),
+                    v
+                ),
+                IntMap::Bin(p1, l1, r1) => {
+                    if p1 == p2 {
+                        IntMap::Bin { p1, l1.union(l2), r1.union(r2) }
+                    } else {
+                        let m1 = p1 ^ (p1 - 1);
+                        let m2 = p2 ^ (p2 - 1);
+                        if m1 > m2 {
+                            if (p2 ^ p1) > m1 {
+                                let left_bin = IntMap::Bin { p1, l1, r1 };
+                                let right_bin = IntMap::Bin { p2, l2, r2 };
+                                join(p1, left_bin, p2, right_bin)
+                            } else {
+                                if p2 < p1 {
+                                    IntMap::Bin {
+                                        p1,
+                                        l1.union(IntMap::Bin { p2, l2, r2 }),
+                                        r1
+                                    }
+                                } else {
+                                    IntMap::Bin {
+                                        p1,
+                                        l1,
+                                        r1.union(IntMap::Bin { p2, l2, r2 })
+                                    }
+                                }
+                            }
+                        } else {
+                            if m2 > m1 {
+                                if (p1 ^ p2) > m2 {
+                                    let left_bin = IntMap::Bin { p1, l1, r1 };
+                                    let right_bin = IntMap::Bin { p2, l2, r2 };
+                                    join(p1, left_bin, p2, right_bin)
+                                } else {
+                                    if p1 < p2 {
+                                        IntMap::Bin {
+                                            p2,
+                                            (IntMap::Bin { p1, l1, r1 }).union(l2),
+                                            r2
+                                        }
+                                    } else {
+                                        IntMap::Bin {
+                                            p2,
+                                            l2,
+                                            (IntMap::Bin { p1, l1, r1 }).union(r2)
+                                        }
+                                    }
+                                }
+                            } else {
+                                let left_bin = IntMap::Bin { p1, l1, r1 };
+                                let right_bin = IntMap::Bin { p2, l2, r2 };
+                                join(p1, left_bin, p2, right_bin)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1890,8 +1660,75 @@ impl<V> IntMap<V> {
         match other {
             IntMap::Empty => self,
             IntMap::Tip(key, value) => self.insert_with(key, value, combine),
-            IntMap::Bin(p2, l2, r2) =>
-                union_with_bin_right(self, p2, l2, r2, combine)
+            IntMap::Bin(p2, l2, r2) => match self {
+                IntMap::Empty => IntMap::Bin { p2, l2, r2 },
+                IntMap::Tip(k, v) => insert_with_left_at(
+                    IntMap::Bin { p2, l2, r2 },
+                    k,
+                    (k as u64) ^ (1 << 63),
+                    v,
+                    combine
+                ),
+                IntMap::Bin(p1, l1, r1) => {
+                    if p1 == p2 {
+                        IntMap::Bin {
+                            p1,
+                            l1.union_with(l2, combine),
+                            r1.union_with(r2, combine)
+                        }
+                    } else {
+                        let m1 = p1 ^ (p1 - 1);
+                        let m2 = p2 ^ (p2 - 1);
+                        if m1 > m2 {
+                            if (p2 ^ p1) > m1 {
+                                let left_bin = IntMap::Bin { p1, l1, r1 };
+                                let right_bin = IntMap::Bin { p2, l2, r2 };
+                                join(p1, left_bin, p2, right_bin)
+                            } else {
+                                if p2 < p1 {
+                                    IntMap::Bin {
+                                        p1,
+                                        l1.union_with(IntMap::Bin { p2, l2, r2 }, combine),
+                                        r1
+                                    }
+                                } else {
+                                    IntMap::Bin {
+                                        p1,
+                                        l1,
+                                        r1.union_with(IntMap::Bin { p2, l2, r2 }, combine)
+                                    }
+                                }
+                            }
+                        } else {
+                            if m2 > m1 {
+                                if (p1 ^ p2) > m2 {
+                                    let left_bin = IntMap::Bin { p1, l1, r1 };
+                                    let right_bin = IntMap::Bin { p2, l2, r2 };
+                                    join(p1, left_bin, p2, right_bin)
+                                } else {
+                                    if p1 < p2 {
+                                        IntMap::Bin {
+                                            p2,
+                                            (IntMap::Bin { p1, l1, r1 }).union_with(l2, combine),
+                                            r2
+                                        }
+                                    } else {
+                                        IntMap::Bin {
+                                            p2,
+                                            l2,
+                                            (IntMap::Bin { p1, l1, r1 }).union_with(r2, combine)
+                                        }
+                                    }
+                                }
+                            } else {
+                                let left_bin = IntMap::Bin { p1, l1, r1 };
+                                let right_bin = IntMap::Bin { p2, l2, r2 };
+                                join(p1, left_bin, p2, right_bin)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
