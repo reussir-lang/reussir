@@ -403,7 +403,8 @@ public:
       return unique;
     };
     // An immediate owns no memory (see emitDecrement).
-    if (usesNullaryImmediates(type, module)) {
+    if (module->hasAttr(kSpecialPtrTagAttr) &&
+        type.mayCarrySpecialPointerTag()) {
       mlir::Value immediate =
           ReussirRcIsImmediateOp::create(builder, loc, i1, child);
       mlir::Value yes = mlir::arith::ConstantIntOp::create(builder, loc, i1, 1);
@@ -754,7 +755,7 @@ void emitWorklistDecrement(mlir::Value rc, mlir::Location loc,
       emitTailDropRelease(rc, loc, module, rewriter, symbols))
     return;
   mlir::OpBuilder::InsertionGuard guard(rewriter);
-  if (usesNullaryImmediates(type, module)) {
+  if (module->hasAttr(kSpecialPtrTagAttr) && type.mayCarrySpecialPointerTag()) {
     mlir::Value immediate =
         ReussirRcIsImmediateOp::create(rewriter, loc, rewriter.getI1Type(), rc);
     auto branch = mlir::scf::IfOp::create(rewriter, loc, immediate, true);

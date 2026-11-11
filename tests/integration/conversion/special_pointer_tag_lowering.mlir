@@ -6,7 +6,7 @@
 // and its low bits hold the address of the per-tag dummy box
 // `{refcount = 2, tag}`. TBI makes loads through the tagged value land in
 // the dummy box. Refcount reads remain plain loads; record.tag decodes
-// the top byte for every constructor of an eligible type.
+// the top byte for immediates and loads the header for ordinary boxes.
 // `rc.set`, which could decay the dummy's refcount to 1, skips a tagged
 // access behind an unlikely branch (a select-steered store address would
 // data-depend on the count and serialize every rc op against its load).
@@ -53,14 +53,20 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return %cnt : index
   }
 
-  // Every constructor's tag is available without a load or branch.
+  // Decode immediate tags; the likely ordinary-box path reads the header.
   // CHECK-LABEL: define i64 @tag(ptr %0)
-  // CHECK-NOT: load
-  // CHECK-NOT: br
   // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
   // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
+  // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
   // CHECK: %[[DECODED:.+]] = sub i64 %[[TOP]], 1
-  // CHECK-NEXT: ret i64 %[[DECODED]]
+  // CHECK: br i1 %[[ISTAG]], label %[[CONT:.+]], label %[[LOAD:.+]], !prof ![[TAG_WEIGHTS:[0-9]+]]
+  // CHECK: [[LOAD]]:
+  // CHECK: %[[TAG:.+]] = load i32, ptr
+  // CHECK: %[[WIDE:.+]] = zext i32 %[[TAG]] to i64
+  // CHECK: br label %[[CONT]]
+  // CHECK: [[CONT]]:
+  // CHECK: %[[RESULT:.+]] = phi i64 [ %[[WIDE]], %[[LOAD]] ], [ %[[DECODED]], %{{.+}} ]
+  // CHECK: ret i64 %[[RESULT]]
   func.func @tag(%ref: !reussir.ref<!list shared>) -> index {
     %tag = reussir.record.tag(%ref : !reussir.ref<!list shared>) : index
     return %tag : index
@@ -73,7 +79,7 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
   // CHECK: %[[NARROW:.+]] = trunc i64 %1 to i32
   // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
   // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
-  // CHECK: %[[ISTAG:.+]] = icmp eq i64 %[[TOP]], 2
+  // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
   // CHECK: br i1 %[[ISTAG]], label %[[CONT:.+]], label %[[STORE:.+]], !prof
   // CHECK: [[STORE]]:
   // CHECK: store i32 %[[NARROW]], ptr %0
@@ -93,7 +99,7 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
   // CHECK: %[[GE:.+]] = icmp uge i32 %[[OLD]], 1
   // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
   // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
-  // CHECK: %[[ISTAG:.+]] = icmp eq i64 %[[TOP]], 2
+  // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
   // CHECK: %[[OK:.+]] = or i1 %[[GE]], %[[ISTAG]]
   // CHECK: call void @llvm.assume(i1 %[[OK]])
   func.func @inc(%rc: !rclist) {
@@ -101,3 +107,5 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return
   }
 }
+
+// CHECK: ![[TAG_WEIGHTS]] = !{!"branch_weights", i32 1, i32 2000}

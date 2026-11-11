@@ -100,10 +100,9 @@ namespace {
 // pointing at a per-tag dummy box with a well-formed shared header.
 // Refcount accesses can use that header; TBI tag reads decode the pointer's
 // top byte. The attribute selects one of two encodings:
-//   * `tbi` (aarch64): every encodable variant pointer has top byte = tag + 1;
-//     low bits hold the allocated object or nullary dummy address;
+//   * `tbi` (aarch64): top byte = tag + 1, low bits = the dummy address;
 //     the hardware ignores the top byte on data accesses. The dummy count is
-//     initialized to 2 and guards recognize the type's nullary tags. Foreign code
+//     initialized to 2 and guards test the pointer's top byte. Foreign code
 //     may decode `tag = top - 1` without dereferencing.
 //   * `immortal` (any target, including 32-bit ones like wasm32): the
 //     immediate *is* the dummy address — no pointer bit tricks. For a w-bit
@@ -221,64 +220,23 @@ mlir::Value tagScratchAddr(mlir::ModuleOp module, mlir::Location loc,
   return mlir::LLVM::AddressOfOp::create(builder, loc, global);
 }
 
-// The constructor's encoded top byte.
+// `ptr`'s top byte as an i64 (zero for any real heap pointer).
 mlir::Value topByteOf(mlir::Value ptr, mlir::Location loc,
                       mlir::OpBuilder &builder) {
-  auto raw =
-      mlir::LLVM::PtrToIntOp::create(builder, loc, builder.getI64Type(), ptr);
-  auto shift =
-      mlir::LLVM::ConstantOp::create(builder, loc, builder.getI64Type(), 56);
-  return mlir::LLVM::LShrOp::create(builder, loc, raw, shift);
+  auto i64Ty = builder.getI64Type();
+  auto raw = mlir::LLVM::PtrToIntOp::create(builder, loc, i64Ty, ptr);
+  auto c56 = mlir::LLVM::ConstantOp::create(builder, loc, i64Ty,
+                                            builder.getI64IntegerAttr(56));
+  return mlir::LLVM::LShrOp::create(builder, loc, raw, c56);
 }
 
-mlir::Value isTaggedImmediate(mlir::Value topByte, RcType type,
-                              mlir::Location loc, mlir::OpBuilder &builder) {
-  auto variant = llvm::cast<RecordType>(type.getElementType());
-  mlir::Value result;
-  for (size_t tag = 0; tag < variant.getMembers().size(); ++tag) {
-    if (!variant.isNullaryArm(tag))
-      continue;
-    auto encoded = mlir::LLVM::ConstantOp::create(
-        builder, loc, builder.getI64Type(), tag + 1);
-    auto same = mlir::LLVM::ICmpOp::create(
-        builder, loc, mlir::LLVM::ICmpPredicate::eq, topByte, encoded);
-    result =
-        result
-            ? mlir::LLVM::OrOp::create(builder, loc, result, same).getResult()
-            : same.getResult();
-  }
-  assert(result && "immediate checks require a nullary arm");
-  return result;
-}
-
-mlir::Value clearPointerTag(mlir::Value ptr, mlir::Location loc,
-                            mlir::OpBuilder &builder) {
-  auto mask = mlir::LLVM::ConstantOp::create(builder, loc, builder.getI64Type(),
-                                             0x00ffffffffffffffLL);
-  return mlir::LLVM::PtrMaskOp::create(builder, loc, ptr.getType(), ptr, mask);
-}
-
-mlir::Value stampPointerTag(mlir::Value ptr, mlir::Value tag,
-                            mlir::Location loc, mlir::OpBuilder &builder) {
-  mlir::Value wide = tag;
-  if (tag.getType().getIntOrFloatBitWidth() < 64)
-    wide = mlir::LLVM::ZExtOp::create(builder, loc, builder.getI64Type(), tag);
-  auto one =
-      mlir::LLVM::ConstantOp::create(builder, loc, builder.getI64Type(), 1);
-  auto shift =
-      mlir::LLVM::ConstantOp::create(builder, loc, builder.getI64Type(), 56);
-  auto encoded = mlir::LLVM::ShlOp::create(
-      builder, loc, mlir::LLVM::AddOp::create(builder, loc, wide, one), shift);
-  auto raw =
-      mlir::LLVM::PtrToIntOp::create(builder, loc, builder.getI64Type(), ptr);
-  auto tagged = mlir::LLVM::OrOp::create(builder, loc, raw, encoded);
-  return mlir::LLVM::IntToPtrOp::create(builder, loc, ptr.getType(),
-                                        tagged.getResult());
-}
-
-bool usesTbiVariantTag(RcType type, mlir::Operation *op) {
-  return specialPtrTagEncoding(op) == TagEncoding::TBI &&
-         type.canCarryTbiVariantTag();
+// `top != 0` — the value is a tagged immediate.
+mlir::Value isTaggedImmediate(mlir::Value topByte, mlir::Location loc,
+                              mlir::OpBuilder &builder) {
+  auto zero = mlir::LLVM::ConstantOp::create(builder, loc, builder.getI64Type(),
+                                             builder.getI64IntegerAttr(0));
+  return mlir::LLVM::ICmpOp::create(builder, loc, mlir::LLVM::ICmpPredicate::ne,
+                                    topByte, zero);
 }
 
 // Skip a guarded refcount store entirely behind an unlikely branch. The
@@ -601,15 +559,12 @@ struct ReussirRcReinterpretConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRcReinterpretOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // The token is the untagged box pointer, for static and dynamic tokens.
+    // The token is the box pointer verbatim — static and dynamic tokens alike.
     // A dynamic `token<align, ?>` (from an unpinned variant dec under
     // per-constructor sizing) carries no size: the free/realloc runtime
     // recovers the block from this pointer, so no per-arm size is computed
     // here.
-    mlir::Value token = adaptor.getRcPtr();
-    if (usesTbiVariantTag(op.getRcPtr().getType(), op))
-      token = clearPointerTag(token, op.getLoc(), rewriter);
-    rewriter.replaceOp(op, token);
+    rewriter.replaceOp(op, adaptor.getRcPtr());
     return mlir::success();
   }
 };
@@ -704,19 +659,18 @@ struct ReussirRcSetConversionPattern
     // behind an unlikely branch: the dummy's count is then never written at
     // all, and the store issues speculatively on the (overwhelmingly common)
     // real-box path instead of address-depending on the loaded count. TBI
-    // recognizes immediates by their nullary constructor tags, the immortal
-    // encoding by the magnitude of the count being stored (the dummy's
-    // decremented count still clears the threshold: it starts at 3 * 2^(w-2)
-    // and never actually decreases, since this very gating keeps every
-    // decrementing store away from it).
+    // recognizes immediates by the pointer's top byte, the immortal encoding
+    // by the magnitude of the count being stored (the dummy's decremented
+    // count still clears the threshold: it starts at 3 * 2^(w-2) and never
+    // actually decreases, since this very gating keeps every decrementing
+    // store away from it).
     TagEncoding encoding = specialPtrTagEncoding(op);
     if (encoding != TagEncoding::None &&
-        usesNullaryImmediates(op.getRcPtr().getType(), op)) {
+        op.getRcPtr().getType().mayCarrySpecialPointerTag()) {
       mlir::Value tagged;
       if (encoding == TagEncoding::TBI) {
         mlir::Value top = topByteOf(addr, op.getLoc(), rewriter);
-        tagged = isTaggedImmediate(top, op.getRcPtr().getType(), op.getLoc(),
-                                   rewriter);
+        tagged = isTaggedImmediate(top, op.getLoc(), rewriter);
       } else {
         tagged = isImmortalCount(narrowCount, op.getLoc(), rewriter);
       }
@@ -1181,16 +1135,7 @@ struct ReussirRefSpilledConversionPattern
     if (!enclosingFunctionIsSelfRecursive(op, &selfRecursionCache))
       mlir::LLVM::InvariantStartOp::create(
           rewriter, loc, dataLayout.getTypeABIAlignment(valueType), allocaOp);
-    mlir::Value result = allocaOp;
-    auto refType = op.getSpilled().getType();
-    auto rcType = RcType::get(rewriter.getContext(), refType.getElementType(),
-                              refType.getCapability(), refType.getAtomicKind());
-    if (usesTbiVariantTag(rcType, op)) {
-      auto tag = mlir::LLVM::ExtractValueOp::create(rewriter, loc, value,
-                                                    llvm::ArrayRef<int64_t>{1});
-      result = stampPointerTag(result, tag, loc, rewriter);
-    }
-    rewriter.replaceOp(op, result);
+    rewriter.replaceOp(op, allocaOp);
 
     return mlir::success();
   }
@@ -1443,19 +1388,6 @@ struct ReussirRefFromMemrefConversionPattern
         rewriter, loc, *converter, viewType, adaptor.getView(), {});
     if (ptr.getType() != llvmPtrType)
       ptr = mlir::LLVM::BitcastOp::create(rewriter, loc, llvmPtrType, ptr);
-    auto refType = op.getRef().getType();
-    auto rcType = RcType::get(rewriter.getContext(), refType.getElementType(),
-                              refType.getCapability(), refType.getAtomicKind());
-    if (usesTbiVariantTag(rcType, op)) {
-      ptr = clearPointerTag(ptr, loc, rewriter);
-      auto record = llvm::cast<RecordType>(refType.getElementType());
-      auto tagPtr = mlir::LLVM::GEPOp::create(
-          rewriter, loc, ptr.getType(), converter->convertType(record), ptr,
-          llvm::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
-      auto tag = mlir::LLVM::LoadOp::create(rewriter, loc, record.getTagType(),
-                                            tagPtr);
-      ptr = stampPointerTag(ptr, tag, loc, rewriter);
-    }
     rewriter.replaceOp(op, ptr);
     return mlir::success();
   }
@@ -1611,18 +1543,29 @@ struct ReussirRecordTagConversionPattern
     // Get the index type for the result
     auto indexType = converter->getIndexType();
 
+    mlir::Block *contBlock = nullptr;
+    mlir::Value tagValue;
     auto rcType = RcType::get(rewriter.getContext(), recordType,
                               refType.getCapability(), refType.getAtomicKind());
-    if (usesTbiVariantTag(rcType, op)) {
-      auto top = topByteOf(refPtr, loc, rewriter);
-      auto one = mlir::LLVM::ConstantOp::create(rewriter, loc,
-                                                rewriter.getI64Type(), 1);
-      mlir::Value decoded = mlir::LLVM::SubOp::create(rewriter, loc, top, one);
-      if (indexType != rewriter.getI64Type())
-        decoded =
-            mlir::LLVM::TruncOp::create(rewriter, loc, indexType, decoded);
-      rewriter.replaceOp(op, decoded);
-      return mlir::success();
+    if (specialPtrTagEncoding(op) == TagEncoding::TBI &&
+        rcType.mayCarrySpecialPointerTag() &&
+        llvm::cast<mlir::IntegerType>(indexType).getWidth() == 64) {
+      mlir::Value top = topByteOf(refPtr, loc, rewriter);
+      mlir::Value tagged = isTaggedImmediate(top, loc, rewriter);
+      auto one = mlir::LLVM::ConstantOp::create(rewriter, loc, indexType, 1);
+      auto decoded = mlir::LLVM::SubOp::create(rewriter, loc, top, one);
+      mlir::Block *condBlock = rewriter.getInsertionBlock();
+      contBlock = rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
+      contBlock->addArgument(indexType, loc);
+      mlir::Block *loadBlock = rewriter.createBlock(
+          contBlock->getParent(), mlir::Region::iterator(contBlock));
+      rewriter.setInsertionPointToEnd(condBlock);
+      auto branch = mlir::LLVM::CondBrOp::create(
+          rewriter, loc, tagged, contBlock, mlir::ValueRange{decoded},
+          loadBlock, mlir::ValueRange{});
+      branch->setAttr("branch_weights",
+                      rewriter.getDenseI32ArrayAttr({1, 2000}));
+      rewriter.setInsertionPointToStart(loadBlock);
     }
     // The discriminant field: past the count slot for fused-header
     // variants, first field otherwise.
@@ -1636,11 +1579,17 @@ struct ReussirRecordTagConversionPattern
     mlir::IntegerType tagType = recordType.getTagType();
     mlir::Value narrowTag =
         mlir::LLVM::LoadOp::create(rewriter, loc, tagType, tagPtr);
-    mlir::Value tagValue =
+    tagValue =
         tagType.getWidth() < llvm::cast<mlir::IntegerType>(indexType).getWidth()
             ? mlir::LLVM::ZExtOp::create(rewriter, loc, indexType, narrowTag)
                   .getResult()
             : narrowTag;
+    if (contBlock) {
+      mlir::LLVM::BrOp::create(rewriter, loc, mlir::ValueRange{tagValue},
+                               contBlock);
+      rewriter.setInsertionPointToStart(contBlock);
+      tagValue = contBlock->getArgument(0);
+    }
     rewriter.replaceOp(op, tagValue);
 
     // Assume that the tag is always in bounds
@@ -1746,8 +1695,8 @@ struct ReussirRcIncConversionPattern
     // on the read path changes).
     auto countType = rewriter.getI32Type();
     TagEncoding encoding = specialPtrTagEncoding(op);
-    bool steerNarrowImmortal =
-        encoding == TagEncoding::Immortal && usesNullaryImmediates(rcPtrTy, op);
+    bool steerNarrowImmortal = encoding == TagEncoding::Immortal &&
+                               rcPtrTy.mayCarrySpecialPointerTag();
     auto one = mlir::arith::ConstantOp::create(
         rewriter, op.getLoc(), mlir::IntegerAttr::get(countType, 1));
     mlir::Value delta = adaptor.getDelta();
@@ -1790,12 +1739,11 @@ struct ReussirRcIncConversionPattern
     // written and `old >= 1` holds for immediates as well.
     mlir::Value geOne = mlir::LLVM::ICmpOp::create(
         rewriter, op.getLoc(), mlir::LLVM::ICmpPredicate::uge, oldRefCnt, one);
-    if (encoding == TagEncoding::TBI && usesNullaryImmediates(rcPtrTy, op)) {
+    if (encoding == TagEncoding::TBI && rcPtrTy.mayCarrySpecialPointerTag()) {
       mlir::Value top = topByteOf(adaptor.getRcPtr(), op.getLoc(), rewriter);
       geOne = mlir::LLVM::OrOp::create(
           rewriter, op.getLoc(), geOne,
-          isTaggedImmediate(top, op.getRcPtr().getType(), op.getLoc(),
-                            rewriter));
+          isTaggedImmediate(top, op.getLoc(), rewriter));
     }
     mlir::LLVM::AssumeOp::create(rewriter, op.getLoc(), geOne);
 
@@ -1988,14 +1936,7 @@ struct ReussirRcCreateOpConversionPattern
       objectStore.setInvariantGroup(true);
     if (storage->countPtr)
       storeInitialRcCount(storage->countPtr, op.getLoc(), rewriter);
-    mlir::Value result = storage->token;
-    if (usesTbiVariantTag(op.getRcPtr().getType(), op)) {
-      auto tag = mlir::LLVM::ExtractValueOp::create(rewriter, op.getLoc(),
-                                                    adaptor.getValue(),
-                                                    llvm::ArrayRef<int64_t>{1});
-      result = stampPointerTag(result, tag, op.getLoc(), rewriter);
-    }
-    rewriter.replaceOp(op, result);
+    rewriter.replaceOp(op, storage->token);
     return mlir::success();
   }
 };
@@ -2133,8 +2074,10 @@ struct ReussirRcIsImmediateConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRcIsImmediateOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // TBI tests membership in the nullary tag set; immortal compares dummy
-    // addresses. Neither test reads memory.
+    // Under TBI every immediate has `tag + 1` in its top byte and every real
+    // box has zero there, so one test covers all nullary arms. Under the
+    // immortal encoding an immediate is its arm's dummy box address, so the
+    // value is compared with each of them. No memory access either way.
     mlir::Location loc = op.getLoc();
     TagEncoding encoding = specialPtrTagEncoding(op);
     if (encoding == TagEncoding::None) {
@@ -2152,7 +2095,7 @@ struct ReussirRcIsImmediateConversionPattern
             "arch-independent encoding instead");
       rewriter.replaceOp(
           op, isTaggedImmediate(topByteOf(adaptor.getRcPtr(), loc, rewriter),
-                                op.getRcPtr().getType(), loc, rewriter));
+                                loc, rewriter));
       return mlir::success();
     }
     mlir::Type ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
@@ -2256,8 +2199,6 @@ struct ReussirRcCreateVariantOpConversionPattern
 
     if (storage->countPtr)
       storeInitialRcCount(storage->countPtr, op.getLoc(), rewriter);
-    if (usesTbiVariantTag(op.getRcPtr().getType(), op))
-      results[0] = stampPointerTag(results[0], tag, op.getLoc(), rewriter);
     rewriter.replaceOp(op, results);
     return mlir::success();
   }
@@ -2721,12 +2662,11 @@ struct ReussirRcAssumeUniqueOpConversionPattern
             op.getLoc(), rcPtrTy, adaptor.getRcPtr(), getTypeConverter(),
             rewriter, &count);
     TagEncoding encoding = specialPtrTagEncoding(op);
-    if (encoding != TagEncoding::None && usesNullaryImmediates(rcPtrTy, op)) {
+    if (encoding != TagEncoding::None && rcPtrTy.mayCarrySpecialPointerTag()) {
       mlir::Value tagged;
       if (encoding == TagEncoding::TBI) {
         mlir::Value top = topByteOf(adaptor.getRcPtr(), op.getLoc(), rewriter);
-        tagged = isTaggedImmediate(top, op.getRcPtr().getType(), op.getLoc(),
-                                   rewriter);
+        tagged = isTaggedImmediate(top, op.getLoc(), rewriter);
       } else {
         tagged = isImmortalCount(count, op.getLoc(), rewriter);
       }

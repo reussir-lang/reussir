@@ -1,8 +1,8 @@
 // RUN: %reussir-opt %s --split-input-file --convert-to-llvm | %FileCheck %s
 
 // `reussir.rc.is_immediate` is true when an rc value is the immediate of a
-// nullary arm. It never loads. TBI compares the top byte with nullary tags;
-// the immortal encoding compares the
+// nullary arm. It never loads. Under TBI it is one test of the top byte, for
+// any number of nullary arms; under the immortal encoding it compares the
 // pointer with the dummy box of each nullary arm.
 
 !t_a = !reussir.record<compound "T::A" [value] { }>
@@ -14,9 +14,8 @@ module attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.dl_spe
   // CHECK-LABEL: llvm.func @is_imm_tbi
   // CHECK: %[[RAW:.+]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
   // CHECK: %[[TOP:.+]] = llvm.lshr %[[RAW]], %{{.+}} : i64
-  // CHECK: %[[A:.+]] = llvm.icmp "eq" %[[TOP]], %{{.+}} : i64
-  // CHECK: %[[B:.+]] = llvm.icmp "eq" %[[TOP]], %{{.+}} : i64
-  // CHECK: %[[IMM:.+]] = llvm.or %[[A]], %[[B]] : i1
+  // CHECK: %[[IMM:.+]] = llvm.icmp "ne" %[[TOP]], %{{.+}} : i64
+  // CHECK-NOT: llvm.icmp
   // CHECK-NOT: llvm.load
   // CHECK: llvm.return %[[IMM]] : i1
   func.func @is_imm_tbi(%rc: !reussir.rc<!t>) -> i1 {

@@ -61,7 +61,7 @@ struct NullaryVariantPattern
     if (op.getRegion() || op.getToken() || op.getSkipRc())
       return mlir::failure();
     RcType rcType = op.getRcPtr().getType();
-    if (!usesNullaryImmediates(rcType, op))
+    if (!rcType.mayCarrySpecialPointerTag())
       return mlir::failure();
     auto variant = op.getValue().getDefiningOp<ReussirRecordVariantOp>();
     if (!variant)

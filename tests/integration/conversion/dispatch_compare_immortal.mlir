@@ -1,6 +1,7 @@
 // RUN: %reussir-opt %s --reussir-convert-to-std | %FileCheck %s
+// RUN: sed 's/"immortal"/"tbi"/' %s | %reussir-opt --reussir-convert-to-std | %FileCheck %s
 
-// Under the immortal encoding a nullary arm's value is always the per-tag
+// Under either encoding a nullary arm's value is always the per-tag
 // immediate, so dispatch peels such arms into `rc.compare_immortal` guards
 // (no tag load); when a single arm remains it inlines as
 // the residual else with no tag read at all.

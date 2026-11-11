@@ -83,7 +83,7 @@ bool needsImmediateGuard(ReussirRcDecOp op) {
     return false;
   auto encoding = module->getAttrOfType<mlir::StringAttr>(kSpecialPtrTagAttr);
   if (!encoding || encoding.getValue() == kSpecialPtrTagImmortal ||
-      !usesNullaryImmediates(type, op))
+      !type.mayCarrySpecialPointerTag())
     return false;
   auto variant = llvm::cast<RecordType>(type.getElementType());
   if (op.isVariantDestructuring())

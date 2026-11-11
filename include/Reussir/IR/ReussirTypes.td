@@ -324,8 +324,6 @@ def ReussirRcType
     /// top byte, and a nonatomic refcount. Decrementing refcount stores on
     /// such values must be steered when the scheme is enabled.
     bool mayCarrySpecialPointerTag() const;
-    /// Whether every constructor tag fits the TBI pointer byte.
-    bool canCarryTbiVariantTag() const;
   }];
 }
 //===----------------------------------------------------------------------===//
