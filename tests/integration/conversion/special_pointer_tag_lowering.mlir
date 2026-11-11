@@ -5,9 +5,9 @@
 // `reussir.special_ptr_tag`). A tagged immediate's top byte is `tag + 1`
 // and its low bits hold the address of the per-tag dummy box
 // `{refcount = 2, tag}`. TBI makes loads through the tagged value land in
-// the dummy box, so the hot reads (rc.fetch, rc.is_unique, record.tag)
-// lower to plain loads with no immediate-check; only `rc.set` — the one
-// store that could decay the dummy's refcount to 1 — skips a tagged
+// the dummy box. Refcount reads remain plain loads; record.tag decodes
+// the top byte for immediates and loads the header for ordinary boxes.
+// `rc.set`, which could decay the dummy's refcount to 1, skips a tagged
 // access behind an unlikely branch (a select-steered store address would
 // data-depend on the count and serialize every rc op against its load).
 
@@ -16,6 +16,19 @@
 
 // CHECK-DAG: @_RNvC17REUSSIR_TAG_DUMMY43JTSaUNTZpqgb8a0JnRra5ebq8TvOJDFg1m5Smu4IYVX = linkonce_odr global [2 x i32] [i32 2, i32 1]
 module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> } {
+
+  // A known nullary tag needs only the top byte, not its dummy box.
+  // CHECK-LABEL: define i1 @is_nil(ptr %0)
+  // CHECK-NOT: load
+  // CHECK-NOT: REUSSIR_TAG_DUMMY
+  // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
+  // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
+  // CHECK: %[[ISNIL:.+]] = icmp eq i64 %[[TOP]], 2
+  // CHECK-NEXT: ret i1 %[[ISNIL]]
+  func.func @is_nil(%rc: !rclist) -> i1 {
+    %nil = reussir.rc.compare_immortal(%rc : !rclist) tag(1)
+    return %nil : i1
+  }
 
   // Immediate materialization: dummy address | (tag + 1) << 56, no
   // allocation. (2 << 56 = 144115188075855872.)
@@ -40,14 +53,20 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return %cnt : index
   }
 
-  // Hot read: plain tag load — a tagged immediate's load lands in its
-  // per-tag dummy box and reads the real tag, so no decode is emitted.
+  // Decode immediate tags; ordinary boxes read the header.
   // CHECK-LABEL: define i64 @tag(ptr %0)
-  // CHECK-NOT: lshr
-  // CHECK-NOT: select
+  // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
+  // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
+  // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
+  // CHECK: %[[DECODED:.+]] = sub i64 %[[TOP]], 1
+  // CHECK: br i1 %[[ISTAG]], label %[[CONT:[^, ]+]], label %[[LOAD:[^, ]+]]{{$}}
+  // CHECK: [[LOAD]]:
   // CHECK: %[[TAG:.+]] = load i32, ptr
   // CHECK: %[[WIDE:.+]] = zext i32 %[[TAG]] to i64
-  // CHECK: ret i64 %[[WIDE]]
+  // CHECK: br label %[[CONT]]
+  // CHECK: [[CONT]]:
+  // CHECK: %[[RESULT:.+]] = phi i64 [ %[[WIDE]], %[[LOAD]] ], [ %[[DECODED]], %{{.+}} ]
+  // CHECK: ret i64 %[[RESULT]]
   func.func @tag(%ref: !reussir.ref<!list shared>) -> index {
     %tag = reussir.record.tag(%ref : !reussir.ref<!list shared>) : index
     return %tag : index

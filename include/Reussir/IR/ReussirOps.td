@@ -866,17 +866,16 @@ def ReussirRcCompareImmortalOp : ReussirRcOp<"compare_immortal", [Pure]> {
   let summary = "Test an rc value against a nullary variant's immediate";
   let description = [{
     `reussir.rc.compare_immortal` answers whether an rc value *is* the
-    unboxed immediate of the nullary variant arm `tag` — a pure pointer
-    comparison against the arm's per-tag dummy box, no memory access.
+    unboxed immediate of the nullary variant arm `tag`, without accessing
+    memory. TBI compares the pointer's top byte with `tag + 1`; the immortal
+    encoding compares the pointer with the arm's per-tag dummy box.
 
     Under the special-pointer-tag scheme every construction of a nullary arm
     of a taggable type yields the immediate (the scheme invariant at
     `kSpecialPtrTagAttr`), so for such an arm this comparison is *exact*:
     true iff the value's tag is `tag`. Dispatch lowering uses it to peel
     nullary arms off a `record.dispatch` before the generic tag-load
-    dispatch — on x86's `immortal` encoding the tag read is otherwise a
-    dependent load from the dummy box on every iteration of pointer-chasing
-    kernels (issue #400).
+    dispatch, avoiding a dependent load in pointer-chasing kernels.
 
     ```mlir
     %is_leaf = reussir.rc.compare_immortal (%rc : !reussir.rc<...>) tag(1)
