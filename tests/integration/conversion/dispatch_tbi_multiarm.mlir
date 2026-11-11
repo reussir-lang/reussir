@@ -21,8 +21,8 @@ module attributes {reussir.special_ptr_tag = "tbi"} {
   // CHECK-NOT: reussir.rc.compare_immortal
   // CHECK-NOT: scf.if
   // CHECK: return
-  func.func @choose(%value: !rc_choice) -> i64 {
-    %ref = reussir.rc.borrow (%value : !rc_choice) : !reussir.ref<!choice>
+  func.func @choose(%choice: !rc_choice) -> i64 {
+    %ref = reussir.rc.borrow (%choice : !rc_choice) : !reussir.ref<!choice>
     %result = reussir.record.dispatch (%ref : !reussir.ref<!choice>) -> i64 {
       [0] -> {
         ^bb0(%nil: !reussir.ref<!nil>):
