@@ -13,6 +13,7 @@
 
 !list = !reussir.record<variant "List" {!reussir.record<compound "List.Cons" [value] {i64, !reussir.record<variant "List">}>, !reussir.record<compound "List.Nil" [value] {}>}>
 !rclist = !reussir.rc<!list>
+!value = !reussir.record<variant "Value" [value] {!reussir.record<compound "Value.Some" [value] {i64}>, !reussir.record<compound "Value.None" [value] {}>}>
 
 // CHECK-DAG: @_RNvC17REUSSIR_TAG_DUMMY43JTSaUNTZpqgb8a0JnRra5ebq8TvOJDFg1m5Smu4IYVX = linkonce_odr global [2 x i32] [i32 2, i32 1]
 module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> } {
@@ -69,6 +70,19 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
   // CHECK: ret i64 %[[RESULT]]
   func.func @tag(%ref: !reussir.ref<!list shared>) -> index {
     %tag = reussir.record.tag(%ref : !reussir.ref<!list shared>) : index
+    return %tag : index
+  }
+
+  // A shared reference to an inline variant is not a tagged box pointer.
+  // CHECK-LABEL: define i64 @value_tag(ptr %0)
+  // CHECK-NOT: ptrtoint
+  // CHECK-NOT: lshr
+  // CHECK: %[[TAG:.+]] = load i8, ptr
+  // CHECK: %[[WIDE:.+]] = zext i8 %[[TAG]] to i64
+  // CHECK-NOT: br
+  // CHECK: ret i64 %[[WIDE]]
+  func.func @value_tag(%ref: !reussir.ref<!value shared>) -> index {
+    %tag = reussir.record.tag(%ref : !reussir.ref<!value shared>) : index
     return %tag : index
   }
 

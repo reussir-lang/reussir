@@ -1547,7 +1547,9 @@ struct ReussirRecordTagConversionPattern
     mlir::Value tagValue;
     auto rcType = RcType::get(rewriter.getContext(), recordType,
                               refType.getCapability(), refType.getAtomicKind());
-    if (specialPtrTagEncoding(op) == TagEncoding::TBI &&
+    // Inline value variants always read their stored discriminant.
+    if (recordType.hasFusedHeader() &&
+        specialPtrTagEncoding(op) == TagEncoding::TBI &&
         rcType.mayCarrySpecialPointerTag() &&
         llvm::cast<mlir::IntegerType>(indexType).getWidth() == 64) {
       mlir::Value top = topByteOf(refPtr, loc, rewriter);
