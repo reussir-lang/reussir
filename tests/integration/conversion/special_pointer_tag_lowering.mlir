@@ -101,4 +101,3 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return
   }
 }
-

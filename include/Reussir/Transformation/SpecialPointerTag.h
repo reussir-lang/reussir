@@ -10,7 +10,7 @@
 ///
 /// \file
 /// This file declares support for encoding nullary variants as immediate
-/// pointers.
+/// pointers and carrying variant discriminants in TBI pointer tags.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -44,7 +44,7 @@ constexpr llvm::StringLiteral kSpecialPtrTagTBI = "tbi";
 
 /// Arch-independent encoding: the immediate *is* the dummy box address (no
 /// pointer bit tricks). The dummy refcount is initialized to an immortal
-/// value (2^62); guards test refcount magnitude instead of pointer bits.
+/// value; guards test refcount magnitude instead of pointer bits.
 constexpr llvm::StringLiteral kSpecialPtrTagImmortal = "immortal";
 
 } // namespace reussir

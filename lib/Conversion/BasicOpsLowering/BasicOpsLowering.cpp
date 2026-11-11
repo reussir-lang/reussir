@@ -100,9 +100,10 @@ namespace {
 // pointing at a per-tag dummy box with a well-formed shared header.
 // Refcount accesses can use that header; TBI tag reads decode the pointer's
 // top byte. The attribute selects one of two encodings:
-//   * `tbi` (aarch64): top byte = tag + 1, low bits = the dummy address;
+//   * `tbi` (aarch64): every encodable variant pointer has top byte = tag + 1;
+//     low bits hold the allocated object or nullary dummy address;
 //     the hardware ignores the top byte on data accesses. The dummy count is
-//     initialized to 2 and guards test the pointer's top byte. Foreign code
+//     initialized to 2 and guards recognize the type's nullary tags. Foreign code
 //     may decode `tag = top - 1` without dereferencing.
 //   * `immortal` (any target, including 32-bit ones like wasm32): the
 //     immediate *is* the dummy address — no pointer bit tricks. For a w-bit
@@ -600,7 +601,7 @@ struct ReussirRcReinterpretConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRcReinterpretOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // The token is the box pointer verbatim — static and dynamic tokens alike.
+    // The token is the untagged box pointer, for static and dynamic tokens.
     // A dynamic `token<align, ?>` (from an unpinned variant dec under
     // per-constructor sizing) carries no size: the free/realloc runtime
     // recovers the block from this pointer, so no per-arm size is computed

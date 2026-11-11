@@ -10,9 +10,16 @@ print('''func.func @tag(%ref: !reussir.ref<!t shared>) -> index {
   return %tag : index
 }
 func.func @nil() -> !reussir.rc<!t> {
-  %nil = reussir.record.compound() : !nil
+  %nil = reussir.record.compound : !nil
   %t = reussir.record.variant [0] (%nil : !nil) : !t
   %rc = reussir.rc.create value(%t : !t) : !reussir.rc<!t>
   return %rc : !reussir.rc<!t>
 }
-}''')
+''')
+print(f'''func.func @last(%v: i64) -> !reussir.rc<!t> {{
+  %payload = reussir.record.compound(%v : i64) : !payload
+  %t = reussir.record.variant [{count - 1}] (%payload : !payload) : !t
+  %rc = reussir.rc.create value(%t : !t) : !reussir.rc<!t>
+  return %rc : !reussir.rc<!t>
+}}
+}}''')
