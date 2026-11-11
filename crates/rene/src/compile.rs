@@ -518,8 +518,8 @@ pub(crate) fn profile_flags(
     if profile.fuzzer == Some(true) {
         args.push("--fuzzer".to_owned());
     }
-    if let Some(encoding) = &profile.nullary_variant_encoding {
-        push(&mut args, "--nullary-variant-encoding", encoding);
+    if let Some(encoding) = &profile.variant_encoding {
+        push(&mut args, "--variant-encoding", encoding);
     }
     push(&mut args, "--target-triple", target);
     if let Some(cpu) = &profile.target_cpu {

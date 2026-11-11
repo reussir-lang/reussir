@@ -5,7 +5,7 @@
 // RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive
 // RUN: %cc %t.opt.o %S/tail_drop.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.opt.exe
-// RUN: %rrc %s -o %t.boxed.o --relocation-mode pic -O none --nullary-variant-encoding boxed
+// RUN: %rrc %s -o %t.boxed.o --relocation-mode pic -O none --variant-encoding boxed
 // RUN: %cc %t.boxed.o %S/tail_drop.c -o %t.boxed.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.boxed.exe
 

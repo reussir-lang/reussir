@@ -6,12 +6,12 @@
 // load; a plain load is a data race TSan reports in `go`. The final count
 // checks that no increment was lost.
 
-// RUN: %rrc %s -o %t.none.ll -t llvm-ir --relocation-mode pic -Onone --sanitizer thread --nullary-variant-encoding arch-independent
+// RUN: %rrc %s -o %t.none.ll -t llvm-ir --relocation-mode pic -Onone --sanitizer thread --variant-encoding immortal-nullary
 // RUN: %cc %tsan_flags -c -x ir %t.none.ll -o %t.none.o
 // RUN: %cc %tsan_flags -pthread %t.none.o %S/Inputs/rwlock-cell-tsan-harness.c %reussir_rt_tsan -o %t.none.exe %rpath_flag %rpath_san_flag %extra_sys_libs
 // RUN: %tsan_env %t.none.exe | %FileCheck %s
 
-// RUN: %rrc %s -o %t.aggr.ll -t llvm-ir --relocation-mode pic -Oaggressive --sanitizer thread --nullary-variant-encoding arch-independent
+// RUN: %rrc %s -o %t.aggr.ll -t llvm-ir --relocation-mode pic -Oaggressive --sanitizer thread --variant-encoding immortal-nullary
 // RUN: %cc %tsan_flags -c -x ir %t.aggr.ll -o %t.aggr.o
 // RUN: %cc %tsan_flags -pthread %t.aggr.o %S/Inputs/rwlock-cell-tsan-harness.c %reussir_rt_tsan -o %t.aggr.exe %rpath_flag %rpath_san_flag %extra_sys_libs
 // RUN: %tsan_env %t.aggr.exe | %FileCheck %s

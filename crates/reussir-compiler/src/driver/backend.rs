@@ -170,7 +170,7 @@ pub(crate) fn backend_module<'c>(
         borrow_analysis: !cli.disable_borrow_analysis,
         instrument_nonlinear_ffi: cli.instrument_nonlinear_ffi,
         emit_token_reuse_remarks: cli.token_reuse_remarks.is_some(),
-        nullary_variant_encoding: cli.nullary_variant_encoding.resolve(machine.triple()),
+        variant_encoding: cli.variant_encoding.resolve(machine.triple())?,
         pack_record_members: !cli.no_pack_record_members,
         closure_wpd,
         transform_scripts: parse_transform_scripts(&cli.transform_script)?,

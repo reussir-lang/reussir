@@ -1,0 +1,24 @@
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --variant-encoding auto --emit llvm-ir -o %t.auto.ll
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --variant-encoding tbi --emit llvm-ir -o %t.tbi.ll
+// RUN: diff %t.auto.ll %t.tbi.ll
+// RUN: %FileCheck %s --check-prefix=TBI < %t.tbi.ll
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --variant-encoding auto --emit llvm-ir -o %t.x86.ll
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --variant-encoding immortal-nullary --emit llvm-ir -o %t.immortal.ll
+// RUN: diff %t.x86.ll %t.immortal.ll
+// RUN: %FileCheck %s --check-prefix=IMMORTAL < %t.immortal.ll
+// RUN: %rrc %s --variant-encoding boxed --emit llvm-ir -o %t.boxed.ll
+// RUN: %FileCheck %s --check-prefix=BOXED < %t.boxed.ll
+// RUN: %not %rrc %s --target-triple x86_64-unknown-linux-gnu --variant-encoding tbi --emit llvm-ir -o %t.bad.ll 2>&1 | %FileCheck %s --check-prefix=BAD-TARGET
+
+// TBI: REUSSIR_TAG_DUMMY
+// TBI: 144115188075855872
+// IMMORTAL: REUSSIR_TAG_DUMMY
+// IMMORTAL-NOT: 144115188075855872
+// BOXED-NOT: REUSSIR_TAG_DUMMY
+// BOXED: __reussir_allocate
+// BOXED-NOT: REUSSIR_TAG_DUMMY
+// BAD-TARGET: --variant-encoding tbi requires an aarch64 target
+
+enum List { Cons(i64, List), Nil }
+fn nil() -> List { List::Nil }
+extern "C" trampoline "make_nil" = nil;

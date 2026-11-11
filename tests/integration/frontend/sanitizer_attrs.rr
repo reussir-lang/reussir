@@ -1,8 +1,9 @@
-// RUN: %rrc %s --emit llvm-ir -O default --sanitizer address --sanitizer thread --nullary-variant-encoding arch-independent -o %t.ll && %FileCheck %s < %t.ll
+// RUN: %rrc %s --emit llvm-ir -O default --sanitizer address --sanitizer thread --variant-encoding immortal-nullary -o %t.ll && %FileCheck %s < %t.ll
 // RUN: %rrc %s --emit llvm-ir -O default -o %t.off.ll && %FileCheck %s --check-prefix=CHECK-OFF < %t.off.ll
 // RUN: %rrc %s --emit llvm-ir -O default --sanitizer leak --sanitizer undefined -o %t.noattr.ll && %FileCheck %s --check-prefix=CHECK-OFF < %t.noattr.ll
-// RUN: %rrc %s -O default --sanitizer address --sanitizer memory --sanitizer thread --sanitizer leak --sanitizer undefined --nullary-variant-encoding arch-independent -o %t.o
+// RUN: %rrc %s -O default --sanitizer address --sanitizer memory --sanitizer thread --sanitizer leak --sanitizer undefined --variant-encoding immortal-nullary -o %t.o
 // RUN: %not %rrc %s -O default --sanitizer address -o %t.rej.o 2>&1 | %FileCheck %s --check-prefix=CHECK-REJECT
+// RUN: %not %rrc %s -O default --sanitizer address --variant-encoding tbi -o %t.tbi.o 2>&1 | %FileCheck %s --check-prefix=CHECK-REJECT
 
 // `--sanitizer` annotates every emitted function definition with the LLVM
 // attribute its sanitizer's instrumentation pass keys on. This matters
@@ -22,11 +23,11 @@
 // encoding: shadow addresses are computed arithmetically from the pointer,
 // so a TBI-tagged immediate's top byte — ignored by the hardware on the
 // data access — lands the shadow lookup in unmapped space (observed as an
-// ASan SEGV in the shadow region on aarch64). The default `arch-dependent`
+// ASan SEGV in the shadow region on aarch64). The default `auto`
 // choice may resolve to TBI, so it is rejected rather than silently
 // downgraded; `leak`/`undefined` do no shadow arithmetic and stay
 // compatible (third RUN line).
-// CHECK-REJECT: cannot be combined with the (default) `arch-dependent` nullary-variant encoding
+// CHECK-REJECT: --sanitizer address/memory/thread requires --variant-encoding immortal-nullary or boxed
 
 enum Tree {
     Leaf,
