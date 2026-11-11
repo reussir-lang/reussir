@@ -1104,6 +1104,15 @@ RcBoxType RcType::getInnerBoxType() const {
   return RcBoxType::get(getContext(), eleTy, isFlexOrRigid);
 }
 
+bool RcType::canCarryTbiVariantTag() const {
+  if (getCapability() != Capability::shared &&
+      getCapability() != Capability::unspecified)
+    return false;
+  auto variant = llvm::dyn_cast<RecordType>(getElementType());
+  return variant && variant.isVariant() && variant.getComplete() &&
+         variant.hasFusedHeader() && variant.getMembers().size() <= 255;
+}
+
 bool RcType::mayCarrySpecialPointerTag() const {
   // Plain shared boxes only: the frontend leaves their capability
   // `unspecified` (regional flavors are the annotated ones), and every other

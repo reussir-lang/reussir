@@ -173,6 +173,18 @@ verifyCleanupSymbolUses(mlir::Operation *op, mlir::ArrayAttr cleanup,
 
 namespace reussir {
 
+bool usesNullaryImmediates(RcType type, mlir::Operation *scope) {
+  auto module = llvm::dyn_cast<mlir::ModuleOp>(scope);
+  if (!module)
+    module = scope->getParentOfType<mlir::ModuleOp>();
+  auto encoding =
+      module ? module->getAttrOfType<mlir::StringAttr>(kSpecialPtrTagAttr)
+             : mlir::StringAttr{};
+  return encoding && type.mayCarrySpecialPointerTag() &&
+         (encoding.getValue() != kSpecialPtrTagTBI ||
+          type.canCarryTbiVariantTag());
+}
+
 mlir::MemRefType getArrayViewMemRefType(ArrayType arrayType) {
   // A static array views as an identity-layout memref. A dynamic-extent
   // array views as a strided memref with dynamic offset and strides — the
@@ -825,9 +837,7 @@ TokenType ReussirRcDecOp::getTokenType() {
     // has exactly one real arm and keeps a static token, preserving in-place
     // reuse instead of a runtime realloc per node (the 2x rbtree regression
     // this rule fixes).
-    mlir::ModuleOp module = (*this)->getParentOfType<mlir::ModuleOp>();
-    bool nullaryImmediates = module && module->hasAttr(kSpecialPtrTagAttr) &&
-                             rcType.mayCarrySpecialPointerTag();
+    bool nullaryImmediates = usesNullaryImmediates(rcType, getOperation());
     // An arm cannot produce a token exactly when the scheme is enabled and
     // its constructions are rewritten to immediates — which for a taggable
     // type (`mayCarrySpecialPointerTag`, folded into `nullaryImmediates`

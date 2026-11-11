@@ -201,8 +201,7 @@ class TailDropEmitter {
     auto callee = helpers.lookup(type);
     builder.setInsertionPointToStart(callee.addEntryBlock());
     mlir::Value rc = callee.getArgument(0);
-    if (module->hasAttr(kSpecialPtrTagAttr) &&
-        type.mayCarrySpecialPointerTag()) {
+    if (usesNullaryImmediates(type, module)) {
       mlir::Value immediate =
           ReussirRcIsImmediateOp::create(builder, loc, builder.getI1Type(), rc);
       auto branch = mlir::scf::IfOp::create(builder, loc, immediate, true);

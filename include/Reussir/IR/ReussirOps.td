@@ -838,17 +838,11 @@ def ReussirRcTaggedOp : ReussirRcOp<"tagged", [Pure]> {
         accesses), so the tag also decodes from the pointer without a
         memory access; guards test the top byte.
 
-    Under both encodings the op reserves one byte for the tag, `0` meaning
-    "untagged, a real box pointer". The bound exists for the *guards*: under
-    `tbi` a zero top byte is the classifier for "real box, stores may
-    proceed", so every immediate must carry a nonzero top byte — an
-    unencodable arm must stay a real box (see the scheme invariant at
-    `kSpecialPtrTagAttr`). The verifier enforces `tag + 1 <= 0xFF` under
-    both encodings so the same IR stays valid under either. The range is a
-    *type-level* eligibility concern (`RcType::mayCarrySpecialPointerTag`
-    refuses types whose nullary arms exceed the slot); per arm, "nullary on
-    a taggable type" alone decides immediate-vs-boxed, and hence
-    token-vs-no-token.
+    The verifier requires `tag + 1 <= 0xFF`. Under TBI, the entire type
+    must fit that byte: types with more than 255 constructors keep boxed
+    nullary values and header tags. Allocated constructors of eligible
+    types are also tagged, so immediate guards test membership in the
+    type's nullary tag set.
     ```mlir
     %leaf = reussir.rc.tagged tag(1) : !reussir.rc<!reussir.record<...>>
     ```
@@ -899,9 +893,8 @@ def ReussirRcIsImmediateOp : ReussirRcOp<"is_immediate", [Pure]> {
     immediate of any nullary arm of its variant type. It does not access
     memory.
 
-    Under the TBI encoding, it is one test of the pointer's top byte, for
-    any number of nullary arms: an immediate has `tag + 1` there, and a real
-    box has zero. Under the immortal encoding, it compares the pointer with
+    Under TBI, it compares the encoded top byte with the type's nullary
+    constructor tags. Under the immortal encoding, it compares the pointer with
     the dummy box of each nullary arm. Without the special-pointer-tag
     scheme, no value is an immediate, and the result is false.
 

@@ -321,9 +321,7 @@ private:
     if (llvm::isa<mlir::ub::PoisonOp>(op))
       return UniqueCarryingValue::getBottom();
     if (auto tagged = llvm::dyn_cast<ReussirRcTaggedOp>(op)) {
-      auto module = op->getParentOfType<mlir::ModuleOp>();
-      bool immediates = module && module->hasAttr(kSpecialPtrTagAttr) &&
-                        tagged.getRcPtr().getType().mayCarrySpecialPointerTag();
+      bool immediates = usesNullaryImmediates(tagged.getRcPtr().getType(), op);
       return immediates ? UniqueCarryingValue::getBottom()
                         : UniqueCarryingValue::getUnknown();
     }
