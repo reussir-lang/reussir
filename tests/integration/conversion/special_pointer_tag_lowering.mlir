@@ -59,7 +59,7 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
   // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
   // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
   // CHECK: %[[DECODED:.+]] = sub i64 %[[TOP]], 1
-  // CHECK: br i1 %[[ISTAG]], label %[[CONT:.+]], label %[[LOAD:.+]], !prof
+  // CHECK: br i1 %[[ISTAG]], label %[[CONT:.+]], label %[[LOAD:.+]], !prof ![[TAG_WEIGHTS:[0-9]+]]
   // CHECK: [[LOAD]]:
   // CHECK: %[[TAG:.+]] = load i32, ptr
   // CHECK: %[[WIDE:.+]] = zext i32 %[[TAG]] to i64
@@ -108,4 +108,4 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
   }
 }
 
-// CHECK: !{!"branch_weights", i32 1, i32 2000}
+// CHECK: ![[TAG_WEIGHTS]] = !{!"branch_weights", i32 1, i32 2000}
