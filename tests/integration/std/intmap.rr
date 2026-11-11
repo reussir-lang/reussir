@@ -1,126 +1,733 @@
-// RUN: %rene build --manifest-path %S/rene.ncl --bin intmap --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}intmap
-// RUN: %std_rene_build/release/intmap%exe_ext | %FileCheck %s
-// CHECK:      intmap
-// CHECK-NEXT:   ✔ basics
-// CHECK-NEXT:   ✔ signed keys
-// CHECK-NEXT:   ✔ powers of two
-// CHECK-NEXT:   ✔ churn
-// CHECK-NEXT:   ✔ generic values
-// CHECK-NEXT:   ✔ model equivalence (fuzz)
-// CHECK-EMPTY:
-// CHECK-NEXT: 6 examples, 0 failures
+// Dedicated coverage-guided fuzz driver and unit suite for `IntMap`.
+// Unit cases cover basic operations, signed key boundaries, 64-bit branching
+// depths, point updates, ordered neighbour and range queries, traversals and
+// higher-order transforms, Patricia-tree set/map algebra, pseudorandom churn,
+// and reference-counted payloads. Fuzz targets differentially check stateful
+// operation streams, wide 64-bit signed keys, neighbour/range queries, algebra,
+// transforms, and boxed payloads against `WavlMap` while verifying Patricia
+// prefix invariants at every step.
 
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin intmap %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}intmap
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/intmap%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/intmap%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      intmap/basics: unit
+// CHECK-NEXT: intmap/signed keys: unit
+// CHECK-NEXT: intmap/powers of two: unit
+// CHECK-NEXT: intmap/point updates: unit
+// CHECK-NEXT: intmap/neighbours and range: unit
+// CHECK-NEXT: intmap/traversals and transforms: unit
+// CHECK-NEXT: intmap/algebra: unit
+// CHECK-NEXT: intmap/churn: unit
+// CHECK-NEXT: intmap/generic payloads: unit
+// CHECK-NEXT: intmap/stateful operations, persistence & WavlMap model (fuzz):
+// CHECK-NEXT: intmap/wide 64-bit signed keys, neighbours & range (fuzz):
+// CHECK-NEXT: intmap/algebra, relations & higher-order transforms (fuzz):
+// CHECK-NEXT: intmap/boxed payload RC & persistent algebra (fuzz):
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::intmap::Entry;
+import std::collections::pure::intmap::InsertResult;
 import std::collections::pure::intmap::IntMap;
+import std::collections::pure::intmap::PopResult;
+import std::collections::pure::intmap::RemoveResult;
 import std::collections::pure::list::List;
+import std::collections::pure::wavlmap::Entry as WavlEntry;
+import std::collections::pure::wavlmap::PopResult as WavlPop;
 import std::collections::pure::wavlmap::WavlMap;
 import std::option::Option;
 import test::domain::i64_domain;
-import test::domain::list_of;
 import test::domain::tuple2;
+import test::domain::tuple3;
 import test::expect::Outcome;
 import test::expect::expect;
 import test::expect::should_be;
+import test::fuzz::fuzz_init;
 import test::tree::TestTree;
+
+pub enum Payload {
+    End,
+    Link(i64, Payload)
+}
+
+fn payload_sum(value : Payload) -> i64 {
+    match value {
+        Payload::End => 0,
+        Payload::Link(head, tail) => head + payload_sum(tail)
+    }
+}
+
+impl PartialEq for Payload {
+    fn eq(self : Self, other : Self) -> bool {
+        match self {
+            Payload::End => match other {
+                Payload::End => true,
+                Payload::Link(_, _) => false
+            },
+            Payload::Link(h1, t1) => match other {
+                Payload::End => false,
+                Payload::Link(h2, t2) => h1 == h2 && t1 == t2
+            }
+        }
+    }
+}
+
+impl Eq for Payload {}
+
+fn make_payload(v : i64) -> Payload {
+    let base = Payload::Link { v, Payload::End };
+    if (v & 1) == 0 {
+        base
+    } else {
+        Payload::Link { 1, base }
+    }
+}
+
+fn make_payload_sum(v : i64) -> i64 {
+    if (v & 1) == 0 { v } else { v + 1 }
+}
+
+fn entry_is(opt : Option<Entry<i64>>, k : i64, v : i64) -> bool {
+    match opt {
+        Option::Some(e) => e.key == k && e.value == v,
+        Option::None => false
+    }
+}
+
+fn opt_entry_matches_wavl(
+    got : Option<Entry<i64>>,
+    expected : Option<WavlEntry<i64, i64>>
+) -> bool {
+    match got {
+        Option::None => expected.is_none(),
+        Option::Some(a) => match expected {
+            Option::None => false,
+            Option::Some(b) => a.key == b.key && a.value == b.value
+        }
+    }
+}
+
+fn entry_lists_match_wavl(
+    got : List<Entry<i64>>,
+    expected : List<WavlEntry<i64, i64>>
+) -> bool {
+    match got {
+        List::Nil => expected.is_nil(),
+        List::Cons(a, rest_a) => match expected {
+            List::Nil => false,
+            List::Cons(b, rest_b) =>
+                a.key == b.key && a.value == b.value
+                    && entry_lists_match_wavl(rest_a, rest_b)
+        }
+    }
+}
+
+fn entry_lists_eq(a : List<Entry<i64>>, b : List<Entry<i64>>) -> bool {
+    match a {
+        List::Nil => b.is_nil(),
+        List::Cons(x, xs) => match b {
+            List::Nil => false,
+            List::Cons(y, ys) => x == y && entry_lists_eq(xs, ys)
+        }
+    }
+}
+
+fn i64_lists_eq(a : List<i64>, b : List<i64>) -> bool {
+    match a {
+        List::Nil => b.is_nil(),
+        List::Cons(x, xs) => match b {
+            List::Nil => false,
+            List::Cons(y, ys) => x == y && i64_lists_eq(xs, ys)
+        }
+    }
+}
+
+fn entries_sorted_asc(l : List<Entry<i64>>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a.key < b.key && entries_sorted_asc(List::Cons { b, rest })
+    }
+}
+
+fn entries_sorted_desc(l : List<Entry<i64>>) -> bool {
+    match l {
+        List::Nil => true,
+        List::Cons(_, List::Nil) => true,
+        List::Cons(a, List::Cons(b, rest)) =>
+            a.key > b.key && entries_sorted_desc(List::Cons { b, rest })
+    }
+}
+
+fn map_matches_wavl(map : IntMap<i64>, model : WavlMap<i64, i64>) -> bool {
+    map.valid()
+        && map.depth() <= 65
+        && map.len() == model.len()
+        && map.is_empty() == model.is_empty()
+        && opt_entry_matches_wavl(map.min(), model.min())
+        && opt_entry_matches_wavl(map.max(), model.max())
+        && entry_lists_match_wavl(map.to_list(), model.to_list())
+        && entry_lists_match_wavl(map.to_list_desc(), model.to_list_desc())
+        && i64_lists_eq(map.keys(), model.keys())
+        && i64_lists_eq(map.values(), model.values())
+}
+
+fn map_matches_wavl_full(map : IntMap<i64>, model : WavlMap<i64, i64>) -> bool {
+    let asc = map.to_list();
+    let desc = map.to_list_desc();
+    let fl_int = map.fold_left(0 as i64, |acc, k, v| acc * 31 + k * 7 + v);
+    let fl_wavl = model.fold_left(0 as i64, |acc, k, v| acc * 31 + k * 7 + v);
+    let fr_int = map.fold_right(0 as i64, |k, v, acc| acc * 31 + k * 7 + v);
+    let fr_wavl = model.fold_right(0 as i64, |k, v, acc| acc * 31 + k * 7 + v);
+    map_matches_wavl(map, model)
+        && entries_sorted_asc(asc)
+        && entries_sorted_desc(desc)
+        && fl_int == fl_wavl
+        && fr_int == fr_wavl
+        && IntMap::from_list(asc) == map
+}
+
+fn payload_map_matches_model(
+    map : IntMap<Payload>,
+    model : WavlMap<i64, i64>
+) -> bool {
+    let projected = map.map_values(|p| payload_sum(p));
+    map.valid()
+        && map.depth() <= 65
+        && map.len() == model.len()
+        && map_matches_wavl(projected, model)
+}
+
+fn drain_min_asc(map : IntMap<i64>, prev : i64, has_prev : bool, remaining : u64) -> bool {
+    if !map.valid() || map.len() != remaining {
+        false
+    } else {
+        match map.pop_min() {
+            PopResult::Empty(rest) => remaining == 0 && rest.is_empty() && rest.valid(),
+            PopResult::Popped(entry, rest) =>
+                remaining > 0
+                    && (!has_prev || prev < entry.key)
+                    && drain_min_asc(rest, entry.key, true, remaining - 1)
+        }
+    }
+}
+
+fn drain_max_desc(map : IntMap<i64>, prev : i64, has_prev : bool, remaining : u64) -> bool {
+    if !map.valid() || map.len() != remaining {
+        false
+    } else {
+        match map.pop_max() {
+            PopResult::Empty(rest) => remaining == 0 && rest.is_empty() && rest.valid(),
+            PopResult::Popped(entry, rest) =>
+                remaining > 0
+                    && (!has_prev || prev > entry.key)
+                    && drain_max_desc(rest, entry.key, true, remaining - 1)
+        }
+    }
+}
 
 fn basics() -> Outcome {
     let empty : IntMap<i64> = IntMap::new();
     let one : IntMap<i64> = IntMap::singleton(4, 40);
     let two = one.insert(8, 80);
-    let replaced = two.insert(4, 400);
+    let three = two.insert(-12, -120);
+    let replaced = three.insert(4, 400);
     let removed = replaced.remove(8);
-    expect(empty.is_empty(), "empty map should be empty")
-        .and_then(|| expect(empty.remove(3).is_empty(), "removing from empty map should stay empty"))
-        .and_then(|| expect(empty.get(3).is_none(), "empty map get should be None"))
-        .and_then(|| should_be(empty.get_or(3, 99), 99))
-        .and_then(|| expect(!empty.contains_key(3), "empty map should not contain key"))
-        .and_then(|| expect(!one.is_empty(), "singleton should not be empty"))
-        .and_then(|| expect(!one.contains_key(8), "singleton should not contain absent key"))
-        .and_then(|| should_be(one.get_or(4, 0), 40))
-        .and_then(|| should_be(two.get_or(4, 0), 40))
-        .and_then(|| should_be(two.get_or(8, 0), 80))
-        .and_then(|| should_be(replaced.get_or(4, 0), 400))
-        .and_then(|| expect(replaced.contains_key(8), "replaced map should retain other key"))
-        .and_then(|| should_be(removed.get_or(4, 0), 400))
-        .and_then(|| expect(!removed.contains_key(8), "removed key should be absent"))
-        .and_then(|| expect(removed.remove(4).is_empty(), "removing last key should yield empty map"))
-        .and_then(|| should_be(two.remove(9).get_or(8, 0), 80))
-        .and_then(|| should_be(empty.fold_left(123, |acc, key, value| acc + key + value), 123))
+
+    let add_empty_ok = match empty.insert_result(5, 50) {
+        InsertResult::Added(next) =>
+            next.valid() && next.len() == 1 && next.get_or(5, 0) == 50,
+        InsertResult::Replaced(_, _) => false
+    };
+    let add_tip_ok = match one.insert_result(8, 80) {
+        InsertResult::Added(next) => next.valid() && next == two,
+        InsertResult::Replaced(_, _) => false
+    };
+    let rep_tip_ok = match one.insert_result(4, 44) {
+        InsertResult::Replaced(prev, next) =>
+            prev == 40 && next.valid() && next.len() == 1 && next.get_or(4, 0) == 44,
+        InsertResult::Added(_) => false
+    };
+    let add_bin_outside_ok = match two.insert_result(-5, -50) {
+        InsertResult::Added(next) =>
+            next.valid() && next.len() == 3 && next.get_or(-5, 0) == -50,
+        InsertResult::Replaced(_, _) => false
+    };
+    let rep_bin_ok = match three.insert_result(8, 88) {
+        InsertResult::Replaced(prev, next) =>
+            prev == 80 && next.valid() && next.len() == 3 && next.get_or(8, 0) == 88,
+        InsertResult::Added(_) => false
+    };
+
+    let iw_hit = three.insert_with(8, 5, |current, incoming| current - incoming);
+    let iw_miss = three.insert_with(9, 5, |current, incoming| current - incoming);
+    let iw_out = two.insert_with(-3, 7, |current, incoming| current - incoming);
+
+    let rem_empty_ok = match empty.remove_entry(4) {
+        RemoveResult::Missing(same) => same.is_empty() && same.valid(),
+        RemoveResult::Removed(_, _) => false
+    };
+    let rem_hit_ok = match three.remove_entry(4) {
+        RemoveResult::Removed(e, rest) =>
+            e == (Entry { key: 4, value: 40 }) && rest.valid() && rest.len() == 2
+                && !rest.contains_key(4) && rest.get_or(8, 0) == 80,
+        RemoveResult::Missing(_) => false
+    };
+    let rem_miss_outside_ok = match two.remove_entry(-99) {
+        RemoveResult::Missing(same) => same.valid() && same == two,
+        RemoveResult::Removed(_, _) => false
+    };
+    let rem_miss_inside_ok = match three.remove_entry(6) {
+        RemoveResult::Missing(same) => same.valid() && same == three,
+        RemoveResult::Removed(_, _) => false
+    };
+
+    let e1 = Entry { key: 4, value: 40 as i64 };
+    let e2 = Entry { key: 4, value: 40 as i64 };
+    let e3 = Entry { key: 4, value: 41 as i64 };
+
+    expect(
+        empty.is_empty() && empty.len() == 0 && empty.depth() == 0 && empty.valid()
+            && one.len() == 1 && !one.is_empty() && one.depth() == 1 && one.valid()
+            && two.len() == 2 && two.depth() == 2 && two.valid()
+            && three.len() == 3 && three.valid()
+            && three.clear().is_empty() && three.len() == 3
+            && empty.remove(3).is_empty()
+            && empty.get(3).is_none()
+            && empty.get_entry(3).is_none()
+            && empty.get_or(3, 99) == 99
+            && !empty.contains_key(3)
+            && entry_is(three.get_entry(4), 4, 40)
+            && entry_is(three.get_entry(-12), -12, -120)
+            && three.get_entry(7).is_none()
+            && one.get_or(4, 0) == 40
+            && two.get_or(4, 0) == 40
+            && two.get_or(8, 0) == 80
+            && replaced.get_or(4, 0) == 400
+            && replaced.contains_key(8)
+            && removed.valid() && removed.get_or(4, 0) == 400
+            && !removed.contains_key(8)
+            && removed.remove(4).remove(-12).is_empty()
+            && add_empty_ok && add_tip_ok && rep_tip_ok
+            && add_bin_outside_ok && rep_bin_ok
+            && iw_hit.valid() && iw_hit.get_or(8, 0) == 75
+            && iw_miss.valid() && iw_miss.get_or(9, 0) == 5
+            && iw_out.valid() && iw_out.get_or(-3, 0) == 7
+            && rem_empty_ok && rem_hit_ok
+            && rem_miss_outside_ok && rem_miss_inside_ok
+            && e1 == e2 && e1 != e3,
+        "basics failed"
+    )
 }
 
 fn signed_keys() -> Outcome {
+    let min_k : i64 = -9223372036854775808;
+    let max_k : i64 = 9223372036854775807;
     let map : IntMap<i64> = IntMap::new()
-        .insert(0, 4).insert(9223372036854775807, 8)
-        .insert(-9223372036854775808, 1).insert(-1, 3)
-        .insert(256, 7).insert(1, 5).insert(-256, 2).insert(255, 6);
-    let order : i64 = map.fold_left(0, |acc, key, value| acc * 10 + value);
-    let reduced = map.remove(-9223372036854775808).remove(9223372036854775807);
-    should_be(order, 12345678)
-        .and_then(|| should_be(reduced.fold_left(0, |a, k, v| a * 10 + v), 234567))
-        .and_then(|| should_be(map.get_or(-9223372036854775808, 0), 1))
-        .and_then(|| should_be(map.get_or(9223372036854775807, 0), 8))
-        .and_then(|| expect(reduced.get(-9223372036854775808).is_none(), "removed min key should be None"))
-        .and_then(|| should_be(map.remove(17).fold_left(0, |a, k, v| a * 10 + v), order))
-        .and_then(|| should_be(map.get_or(17, 91), 91))
+        .insert(0, 5)
+        .insert(max_k, 10)
+        .insert(min_k, 1)
+        .insert(-1, 4)
+        .insert(256, 8)
+        .insert(1, 6)
+        .insert(-256, 3)
+        .insert(255, 7)
+        .insert(min_k + 1, 2)
+        .insert(max_k - 1, 9);
+    let order = map.fold_left(0 as i64, |acc, ignored_k, value| acc * 11 + value);
+    let reduced = map.remove(min_k).remove(max_k);
+    let empty : IntMap<i64> = IntMap::new();
+    let pop_empty_min = match empty.pop_min() {
+        PopResult::Empty(same) => same.is_empty() && same.valid(),
+        PopResult::Popped(_, _) => false
+    };
+    let pop_empty_max = match empty.pop_max() {
+        PopResult::Empty(same) => same.is_empty() && same.valid(),
+        PopResult::Popped(_, _) => false
+    };
+    let pop_min_first = match map.pop_min() {
+        PopResult::Popped(e, rest) =>
+            e.key == min_k && e.value == 1 && rest.valid() && rest.len() == 9
+                && entry_is(rest.min(), min_k + 1, 2),
+        PopResult::Empty(_) => false
+    };
+    let pop_max_first = match map.pop_max() {
+        PopResult::Popped(e, rest) =>
+            e.key == max_k && e.value == 10 && rest.valid() && rest.len() == 9
+                && entry_is(rest.max(), max_k - 1, 9),
+        PopResult::Empty(_) => false
+    };
+    expect(
+        map.valid()
+            && reduced.valid()
+            && map.len() == 10
+            && empty.min().is_none()
+            && empty.max().is_none()
+            && entry_is(map.min(), min_k, 1)
+            && entry_is(map.max(), max_k, 10)
+            && entry_is(reduced.min(), min_k + 1, 2)
+            && entry_is(reduced.max(), max_k - 1, 9)
+            && map.get_or(min_k, 0) == 1
+            && map.get_or(max_k, 0) == 10
+            && reduced.get(min_k).is_none()
+            && reduced.get(max_k).is_none()
+            && map.remove(17).fold_left(0 as i64, |a, ignored_k, v| a * 11 + v) == order
+            && pop_empty_min && pop_empty_max
+            && pop_min_first && pop_max_first
+            && drain_min_asc(map, 0, false, 10)
+            && drain_max_desc(map, 0, false, 10),
+        "signed keys failed"
+    )
 }
 
 fn powers(map : IntMap<i64>, bit : u64) -> IntMap<i64> {
-    if bit == 64 { map } else {
+    if bit == 64 {
+        map
+    } else {
         powers(map.insert(((1 as u64) << bit) as i64, bit as i64), bit + 1)
     }
 }
 
 fn strip_powers(map : IntMap<i64>, bit : u64) -> bool {
-    if bit == 64 { map.is_empty() } else {
-        let key = ((1 as u64) << bit) as i64;
-        map.get_or(key, -1) == bit as i64
-            && strip_powers(map.remove(key), bit + 1)
+    if !map.valid() {
+        false
+    } else {
+        if bit == 64 {
+            map.is_empty()
+        } else {
+            let key = ((1 as u64) << bit) as i64;
+            let next = map.remove(key);
+            map.get_or(key, -1) == bit as i64 && strip_powers(next, bit + 1)
+        }
     }
 }
 
 fn powers_of_two() -> Outcome {
     let all_bits = powers(IntMap::new(), 0);
-    should_be(all_bits.fold_left(0 as i64, |a, k, v| a + 1), 64)
+    should_be(all_bits.len(), 64 as u64)
+        .and_then(|| expect(all_bits.valid() && all_bits.depth() <= 65, "powers map invariant failed"))
+        .and_then(|| should_be(all_bits.fold_left(0 as i64, |a, ignored_k, ignored_v| a + 1), 64))
         .and_then(|| expect(strip_powers(all_bits, 0), "stripping all 64 power-of-two keys should empty map"))
 }
 
-struct [value] Order {
-    previous : i64,
-    count : u64,
-    sorted : bool
+fn point_updates() -> Outcome {
+    let empty : IntMap<i64> = IntMap::new();
+    let one = IntMap::singleton(10, 100 as i64);
+    let base : IntMap<i64> = IntMap::new()
+        .insert(2, 20)
+        .insert(6, 60)
+        .insert(10, 100);
+
+    let adj_empty = empty.adjust(2, |v| v + 1);
+    let adj_tip_hit = one.adjust(10, |v| v + 5);
+    let adj_tip_miss = one.adjust(11, |v| v + 5);
+    let adj_hit = base.adjust(6, |v| v + 7);
+    let adj_out = base.adjust(-5, |v| v + 7);
+    let adj_in_miss = base.adjust(4, |v| v + 7);
+
+    let upd_empty = empty.update(2, |v| Option::Some { v + 1 });
+    let upd_tip_some = one.update(10, |v| Option::Some { v + 9 });
+    let upd_tip_none = one.update(10, |ignored| Option::None);
+    let upd_some = base.update(6, |v| Option::Some { v - 10 });
+    let upd_none = base.update(2, |ignored| Option::None);
+    let upd_out = base.update(-9, |v| Option::Some { v + 1 });
+    let upd_in_miss = base.update(3, |ignored| Option::None);
+
+    let alt_empty_none = empty.alter(5, |slot| slot);
+    let alt_empty_some = empty.alter(5, |slot| match slot {
+        Option::None => Option::Some { 55 },
+        Option::Some(v) => Option::Some { v }
+    });
+    let alt_tip_rep = one.alter(10, |slot| match slot {
+        Option::Some(v) => Option::Some { v + 1 },
+        Option::None => Option::None
+    });
+    let alt_tip_del = one.alter(10, |ignored| Option::None);
+    let alt_tip_add = one.alter(3, |slot| match slot {
+        Option::None => Option::Some { 30 },
+        Option::Some(v) => Option::Some { v }
+    });
+    let alt_bin_out_add = base.alter(-4, |slot| match slot {
+        Option::None => Option::Some { -40 },
+        Option::Some(v) => Option::Some { v }
+    });
+    let alt_bin_out_noop = base.alter(-4, |ignored| Option::None);
+    let alt_bin_in_add = base.alter(4, |slot| match slot {
+        Option::None => Option::Some { 40 },
+        Option::Some(v) => Option::Some { v }
+    });
+    let alt_bin_del = base.alter(6, |ignored| Option::None);
+
+    expect(
+        adj_empty.is_empty() && adj_empty.valid()
+            && adj_tip_hit.valid() && adj_tip_hit.get_or(10, 0) == 105
+            && adj_tip_miss.valid() && adj_tip_miss == one
+            && adj_hit.valid() && adj_hit.get_or(6, 0) == 67 && base.get_or(6, 0) == 60
+            && adj_out.valid() && adj_out == base
+            && adj_in_miss.valid() && adj_in_miss == base
+            && upd_empty.is_empty() && upd_empty.valid()
+            && upd_tip_some.valid() && upd_tip_some.get_or(10, 0) == 109
+            && upd_tip_none.valid() && upd_tip_none.is_empty()
+            && upd_some.valid() && upd_some.get_or(6, 0) == 50
+            && upd_none.valid() && upd_none.len() == 2 && !upd_none.contains_key(2)
+            && upd_out.valid() && upd_out == base
+            && upd_in_miss.valid() && upd_in_miss == base
+            && alt_empty_none.is_empty() && alt_empty_none.valid()
+            && alt_empty_some.valid() && alt_empty_some.get_or(5, 0) == 55
+            && alt_tip_rep.valid() && alt_tip_rep.get_or(10, 0) == 101
+            && alt_tip_del.valid() && alt_tip_del.is_empty()
+            && alt_tip_add.valid() && alt_tip_add.len() == 2 && alt_tip_add.get_or(3, 0) == 30
+            && alt_bin_out_add.valid() && alt_bin_out_add.len() == 4
+            && alt_bin_out_add.get_or(-4, 0) == -40
+            && alt_bin_out_noop.valid() && alt_bin_out_noop == base
+            && alt_bin_in_add.valid() && alt_bin_in_add.len() == 4
+            && alt_bin_in_add.get_or(4, 0) == 40
+            && alt_bin_del.valid() && alt_bin_del.len() == 2 && !alt_bin_del.contains_key(6),
+        "point updates failed"
+    )
+}
+
+fn neighbours_and_range() -> Outcome {
+    let min_k : i64 = -9223372036854775808;
+    let max_k : i64 = 9223372036854775807;
+    let empty : IntMap<i64> = IntMap::new();
+    let tip = IntMap::singleton(20, 200 as i64);
+
+    // Positive dyadic cluster [16..31] tests queries outside root prefix on both sides
+    // as well as cross-branch fallback inside a prefix block.
+    let cluster = IntMap::new()
+        .insert(17, 170)
+        .insert(19, 190)
+        .insert(26, 260)
+        .insert(30, 300);
+
+    let wide = cluster
+        .insert(min_k, -1)
+        .insert(-50, -500)
+        .insert(0, 0)
+        .insert(max_k, 1);
+
+    let w_mid = wide.range(-50, 27);
+    let w_dyadic = wide.range(16, 32);
+    let w_empty_eq = wide.range(19, 19);
+    let w_empty_rev = wide.range(30, 17);
+    let w_gap = wide.range(1, 16);
+    let w_extremes = wide.range(min_k, max_k);
+
+    expect(
+        empty.floor_entry(0).is_none()
+            && empty.ceiling_entry(0).is_none()
+            && empty.predecessor_entry(0).is_none()
+            && empty.successor_entry(0).is_none()
+            && empty.range(-10, 10).is_empty()
+            && empty.range_to_list(-10, 10).is_nil()
+            && tip.floor_entry(19).is_none()
+            && entry_is(tip.floor_entry(20), 20, 200)
+            && entry_is(tip.floor_entry(21), 20, 200)
+            && tip.predecessor_entry(20).is_none()
+            && entry_is(tip.predecessor_entry(21), 20, 200)
+            && entry_is(tip.ceiling_entry(19), 20, 200)
+            && entry_is(tip.ceiling_entry(20), 20, 200)
+            && tip.ceiling_entry(21).is_none()
+            && entry_is(tip.successor_entry(19), 20, 200)
+            && tip.successor_entry(20).is_none()
+            // Outside cluster prefix on the low side (`u < prefix`) and high side (`u >= prefix`)
+            && cluster.floor_entry(15).is_none()
+            && cluster.floor_entry(-1).is_none()
+            && entry_is(cluster.ceiling_entry(15), 17, 170)
+            && entry_is(cluster.ceiling_entry(-100), 17, 170)
+            && entry_is(cluster.floor_entry(100), 30, 300)
+            && cluster.ceiling_entry(100).is_none()
+            // Cross-branch fallback within cluster [16..31]: 24 is in right half [24..31], below 26
+            && entry_is(cluster.floor_entry(24), 19, 190)
+            && entry_is(cluster.predecessor_entry(26), 19, 190)
+            // 20 is in left half [16..23], above 19 -> ceiling/successor falls back to right half min 26
+            && entry_is(cluster.ceiling_entry(20), 26, 260)
+            && entry_is(cluster.successor_entry(19), 26, 260)
+            // Signed i64::MIN / i64::MAX boundaries
+            && entry_is(wide.floor_entry(min_k), min_k, -1)
+            && wide.predecessor_entry(min_k).is_none()
+            && entry_is(wide.successor_entry(min_k), -50, -500)
+            && entry_is(wide.ceiling_entry(max_k), max_k, 1)
+            && wide.successor_entry(max_k).is_none()
+            && entry_is(wide.predecessor_entry(max_k), 30, 300)
+            // Range checks
+            && w_mid.valid() && w_mid.len() == 5
+            && w_mid.contains_key(-50) && w_mid.contains_key(26)
+            && !w_mid.contains_key(min_k) && !w_mid.contains_key(30)
+            && entry_lists_eq(w_mid.to_list(), wide.range_to_list(-50, 27))
+            && w_dyadic.valid() && w_dyadic == cluster
+            && w_empty_eq.is_empty() && wide.range_to_list(19, 19).is_nil()
+            && w_empty_rev.is_empty() && wide.range_to_list(30, 17).is_nil()
+            && w_gap.is_empty() && wide.range_to_list(1, 16).is_nil()
+            && w_extremes.valid() && w_extremes.len() == 7
+            && w_extremes.contains_key(min_k) && !w_extremes.contains_key(max_k),
+        "neighbours and range failed"
+    )
+}
+
+fn traversals_and_transforms() -> Outcome {
+    let m = IntMap::new()
+        .insert(-3, -30 as i64)
+        .insert(1, 10)
+        .insert(2, 20)
+        .insert(4, 40);
+
+    let dup_entries : List<Entry<i64>> = List::Cons {
+        Entry { key: 2, value: 2 },
+        List::Cons {
+            Entry { key: -1, value: -10 },
+            List::Cons {
+                Entry { key: 2, value: 22 },
+                List::Nil
+            }
+        }
+    };
+    let from_dups = IntMap::from_list(dup_entries);
+
+    let doubled = m.map_values(|v| v * 2);
+    let flags : IntMap<bool> = m.map_values(|v| v > 0);
+    let shifted = m.map_keys(|k| k + 10);
+    // -3/2 == -1, 1/2 == 0, 2/2 == 1, 4/2 == 2; now test a collision: `k & 1`
+    // Ascending keys: -3 (odd -> 1, -30), 1 (odd -> 1, 10), 2 (even -> 0, 20), 4 (even -> 0, 40).
+    // Later in ascending order wins: key 1 gets 10, key 0 gets 40.
+    let parity_keys = m.map_keys(|k| k & 1);
+    let swapped = m.map_entries(|k, v| Entry { key: v, value: k > 0 });
+    let positives = m.filter(|k, ignored| k > 0);
+    let picked = m.filter_map(|k, v| {
+        if k >= 2 { Option::Some { v + k } } else { Option::None }
+    });
+    let cleared_filter = m.filter(|ignored_k, ignored_v| false);
+
+    expect(
+        entries_sorted_asc(m.to_list())
+            && entries_sorted_desc(m.to_list_desc())
+            && m.keys().fold_left(0 as i64, |acc, k| acc * 10 + (k + 5)) == 2679
+            && m.values().fold_left(0 as i64, |acc, v| acc + v) == 40
+            && m.fold_left(0 as i64, |acc, k, ignored| acc * 10 + (k + 5)) == 2679
+            && m.fold_right(0 as i64, |k, ignored, acc| acc * 10 + (k + 5)) == 9762
+            && from_dups.valid() && from_dups.len() == 2 && from_dups.get_or(2, 0) == 22
+            && IntMap::from_list(m.to_list()) == m
+            && doubled.valid() && doubled.len() == 4 && doubled.get_or(-3, 0) == -60
+            && flags.valid() && flags.len() == 4
+            && !flags.get_or(-3, true) && flags.get_or(1, false)
+            && shifted.valid() && shifted.len() == 4 && shifted.get_or(7, 0) == -30
+            && parity_keys.valid() && parity_keys.len() == 2
+            && parity_keys.get_or(1, 0) == 10 && parity_keys.get_or(0, 0) == 40
+            && swapped.valid() && swapped.len() == 4
+            && !swapped.get_or(-30, true) && swapped.get_or(20, false)
+            && positives.valid() && positives.len() == 3 && !positives.contains_key(-3)
+            && picked.valid() && picked.len() == 2
+            && picked.get_or(2, 0) == 22 && picked.get_or(4, 0) == 44
+            && cleared_filter.is_empty() && cleared_filter.valid()
+            && m.count_if(|k, ignored| k > 0) == 3
+            && m.any(|k, ignored| k == -3) && !m.any(|k, ignored| k == 99)
+            && m.all(|k, v| v == k * 10) && !m.all(|k, ignored| k > 0)
+            // `find` must return the least signed matching key (-3 before 2)
+            && entry_is(m.find(|ignored_k, v| v != 10), -3, -30)
+            && entry_is(m.find(|k, ignored_v| k > 0), 1, 10)
+            && m.find(|k, ignored_v| k > 100).is_none(),
+        "traversals and transforms failed"
+    )
+}
+
+fn algebra() -> Outcome {
+    let left : IntMap<i64> = IntMap::new()
+        .insert(-8, 1)
+        .insert(1, 10)
+        .insert(2, 20)
+        .insert(3, 30);
+    let right : IntMap<i64> = IntMap::new()
+        .insert(3, 300)
+        .insert(4, 400)
+        .insert(100, 9);
+
+    let u = left.union(right);
+    // Non-commutative combiner `mine * 1000 + theirs` verifies left-before-right order
+    // across Bin-Bin, Tip-Bin, Bin-Tip, and Tip-Tip paths.
+    let uw_bins = left.union_with(right, |mine, theirs| mine * 1000 + theirs);
+    let tip3 = IntMap::singleton(3, 7 as i64);
+    let uw_tip_bin = tip3.union_with(right, |mine, theirs| mine * 1000 + theirs);
+    let uw_bin_tip = right.union_with(tip3, |mine, theirs| mine * 1000 + theirs);
+    let uw_tip_tip = tip3.union_with(IntMap::singleton(3, 9 as i64), |mine, theirs| mine * 1000 + theirs);
+
+    // Heterogeneous `IntMap<bool>` mask for intersection, difference, disjoint, submap_by
+    let mask : IntMap<bool> = IntMap::new()
+        .insert(-8, false)
+        .insert(2, true)
+        .insert(99, true);
+    let inter_hetero = left.intersection(mask);
+    let inter_with_hetero = left.intersection_with(mask, |v, keep| {
+        if keep { v * 10 } else { -v }
+    });
+    let diff_hetero = left.difference(mask);
+    let diff_self = left.difference(left);
+
+    let sub : IntMap<i64> = IntMap::new().insert(-8, 1).insert(2, 20);
+    let bad_val_sub : IntMap<i64> = IntMap::new().insert(-8, 1).insert(2, 21);
+    let reordered_left : IntMap<i64> = IntMap::new()
+        .insert(3, 30)
+        .insert(-8, 1)
+        .insert(2, 20)
+        .insert(1, 10);
+    let disjoint_map : IntMap<bool> = IntMap::new().insert(-99, true).insert(50, false);
+    let empty : IntMap<i64> = IntMap::new();
+
+    expect(
+        u.valid() && u.len() == 6
+            && u.get_or(3, 0) == 300 && u.get_or(1, 0) == 10 && u.get_or(100, 0) == 9
+            && uw_bins.valid() && uw_bins.len() == 6
+            && uw_bins.get_or(3, 0) == 30300
+            && uw_bins.get_or(1, 0) == 10 && uw_bins.get_or(4, 0) == 400
+            && uw_tip_bin.valid() && uw_tip_bin.len() == 3 && uw_tip_bin.get_or(3, 0) == 7300
+            && uw_bin_tip.valid() && uw_bin_tip.len() == 3 && uw_bin_tip.get_or(3, 0) == 300007
+            && uw_tip_tip.valid() && uw_tip_tip.get_or(3, 0) == 7009
+            && inter_hetero.valid() && inter_hetero.len() == 2
+            && inter_hetero.get_or(-8, 0) == 1 && inter_hetero.get_or(2, 0) == 20
+            && inter_with_hetero.valid() && inter_with_hetero.len() == 2
+            && inter_with_hetero.get_or(-8, 0) == -1 && inter_with_hetero.get_or(2, 0) == 200
+            && diff_hetero.valid() && diff_hetero.len() == 2
+            && diff_hetero.contains_key(1) && diff_hetero.contains_key(3)
+            && !diff_hetero.contains_key(-8) && !diff_hetero.contains_key(2)
+            && diff_self.is_empty() && diff_self.valid()
+            && empty.is_submap(empty) && !empty.is_proper_submap(empty)
+            && empty.is_submap(left) && empty.is_proper_submap(left)
+            && !left.is_submap(empty)
+            && sub.is_submap(left) && sub.is_proper_submap(left)
+            && !left.is_submap(sub) && !left.is_proper_submap(sub)
+            && !bad_val_sub.is_submap(left)
+            && left.is_submap(reordered_left) && !left.is_proper_submap(reordered_left)
+            && sub.is_submap_by(mask, |v, flag| (v > 10) == flag)
+            && sub.is_proper_submap_by(mask, |v, flag| (v > 10) == flag)
+            && left.is_disjoint(disjoint_map) && !left.is_disjoint(mask)
+            && left.equals(reordered_left) && left == reordered_left && left != right
+            && left.contains_value(20) && !left.contains_value(999),
+        "algebra failed"
+    )
 }
 
 fn key_at(index : i64) -> i64 {
     ((index as u64) * 11400714819323198485) as i64
 }
 
-fn agrees(map : IntMap<i64>, model : WavlMap<i64, i64>, index : i64) -> bool {
-    if index == 64 { true } else {
-        let key = key_at(index);
-        let expected = model.get(key).unwrap_or(-1);
-        map.get(key).unwrap_or(-1) == expected && map.get_or(key, -1) == expected
-            && map.contains_key(key) == (expected != -1)
-            && agrees(map, model, index + 1)
-    }
-}
-
-fn valid(map : IntMap<i64>, model : WavlMap<i64, i64>) -> bool {
-    let order = map.fold_left(Order { previous: 0, count: 0, sorted: true }, |acc, key, value|
-        Order {
-            previous: key,
-            count: acc.count + 1,
-            sorted: acc.sorted && (acc.count == 0 || acc.previous < key)
-        });
-    order.sorted && order.count == model.len() && agrees(map, model, 0)
-}
-
 fn churn(
-    map : IntMap<i64>, model : WavlMap<i64, i64>,
-    saved : IntMap<i64>, saved_model : WavlMap<i64, i64>,
-    seed : i64, steps : i64
+    map : IntMap<i64>,
+    model : WavlMap<i64, i64>,
+    saved : IntMap<i64>,
+    saved_model : WavlMap<i64, i64>,
+    seed : i64,
+    steps : i64
 ) -> bool {
-    if !valid(map, model) || !valid(saved, saved_model) { false } else {
-        if steps == 0 { true } else {
+    if !map.valid() || !saved.valid() {
+        false
+    } else {
+        if steps == 0 {
+            map_matches_wavl_full(map, model)
+                && map_matches_wavl_full(saved, saved_model)
+        } else {
             let next = (seed * 48271) % 2147483647;
             let key = key_at(next % 64);
             let current = if steps % 7 == 0 { saved } else { map };
@@ -135,10 +742,14 @@ fn churn(
             } else {
                 current_model.insert(key, next)
             };
-            if steps % 3 == 0 {
-                churn(updated, updated_model, map, model, next, steps - 1)
+            if (steps % 25 == 0) && !map_matches_wavl(updated, updated_model) {
+                false
             } else {
-                churn(updated, updated_model, saved, saved_model, next, steps - 1)
+                if steps % 3 == 0 {
+                    churn(updated, updated_model, map, model, next, steps - 1)
+                } else {
+                    churn(updated, updated_model, saved, saved_model, next, steps - 1)
+                }
             }
         }
     }
@@ -146,69 +757,631 @@ fn churn(
 
 fn test_churn() -> Outcome {
     expect(
-        churn(IntMap::new(), WavlMap::new(), IntMap::new(), WavlMap::new(), 994, 1000),
-        "IntMap and WavlMap model should agree across 1000 churn steps"
+        churn(IntMap::new(), WavlMap::new(), IntMap::new(), WavlMap::new(), 994, 1500),
+        "IntMap and WavlMap model should agree across 1500 churn steps"
     )
 }
 
-enum Payload { End, Link(i64, Payload) }
-
-fn payload_sum(value : Payload) -> i64 {
-    match value { End => 0, Link(head, tail) => head + payload_sum(tail) }
-}
-
-fn generic_values() -> Outcome {
+fn generic_payloads() -> Outcome {
     let original = IntMap::singleton(-4, Payload::Link { 7, Payload::End });
-    let extended = original.insert(4, Payload::Link { 11, original.get_or(-4, Payload::End) });
-    let replaced = extended.insert(-4, Payload::End);
-    should_be(payload_sum(original.get_or(-4, Payload::End)), 7)
-        .and_then(|| should_be(payload_sum(extended.get(4).unwrap_or(Payload::End)), 18))
-        .and_then(|| should_be(payload_sum(replaced.get_or(-4, Payload::End)), 0))
-        .and_then(|| should_be(payload_sum(replaced.remove(-4).get_or(4, Payload::End)), 18))
-        .and_then(|| should_be(payload_sum(extended.get_or(-4, Payload::End)), 7))
+    let extended = original
+        .insert(4, Payload::Link { 11, original.get_or(-4, Payload::End) })
+        .insert(12, Payload::Link { 5, Payload::End });
+    let replaced_ok = match extended.insert_result(-4, Payload::End) {
+        InsertResult::Replaced(prev, next) =>
+            payload_sum(prev) == 7 && next.valid()
+                && payload_sum(next.get_or(-4, Payload::End)) == 0
+                && payload_sum(next.get_or(4, Payload::End)) == 18,
+        InsertResult::Added(_) => false
+    };
+    let combined = extended.insert_with(
+        4,
+        Payload::Link { 3, Payload::End },
+        |cur, inc| Payload::Link { payload_sum(cur) + payload_sum(inc), Payload::End }
+    );
+    let altered = extended.alter(9, |slot| match slot {
+        Option::None => Option::Some { Payload::Link { 90, Payload::End } },
+        Option::Some(p) => Option::Some { p }
+    });
+    let popped_ok = match altered.pop_min() {
+        PopResult::Popped(e, rest) =>
+            e.key == -4 && payload_sum(e.value) == 7 && rest.valid() && rest.len() == 3,
+        PopResult::Empty(_) => false
+    };
+    let other = IntMap::new()
+        .insert(4, Payload::Link { 2, Payload::End })
+        .insert(20, Payload::Link { 50, Payload::End });
+    let merged = extended.union_with(
+        other,
+        |a, b| Payload::Link { payload_sum(a) * 10 + payload_sum(b), Payload::End }
+    );
+    let inter = extended.intersection_with(other, |a, b| payload_sum(a) - payload_sum(b));
+    let diff = merged.difference(original);
+    let win = merged.range(0, 15);
+    let mapped = win.filter_map(|k, p| {
+        if k == 4 { Option::Some { payload_sum(p) } } else { Option::None }
+    });
+
+    expect(
+        original.valid() && extended.valid() && combined.valid() && altered.valid()
+            && merged.valid() && inter.valid() && diff.valid() && win.valid() && mapped.valid()
+            && replaced_ok && popped_ok
+            && payload_sum(original.get_or(-4, Payload::End)) == 7
+            && payload_sum(extended.get_or(-4, Payload::End)) == 7
+            && payload_sum(extended.get(4).unwrap_or(Payload::End)) == 18
+            && payload_sum(combined.get_or(4, Payload::End)) == 21
+            && payload_sum(merged.get_or(4, Payload::End)) == 182
+            && payload_sum(merged.get_or(20, Payload::End)) == 50
+            && inter.len() == 1 && inter.get_or(4, 0) == 16
+            && !diff.contains_key(-4) && diff.len() == 3
+            && win.len() == 2 && mapped.len() == 1 && mapped.get_or(4, 0) == 182
+            && extended == extended,
+        "generic payloads failed"
+    )
 }
 
-fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
-    let (map, model) = ops.fold_left(
-        (IntMap::new(), WavlMap::new()),
-        |state : (IntMap<i64>, WavlMap<i64, i64>), op : (i64, i64)| {
-            let (m, w) = state;
-            let (k, v) = op;
-            if (v & 3) == 0 {
-                (m.remove(k), w.remove(k))
+fn apply_stateful_ops(
+    keys : Vec<i64>,
+    vals : Vec<i64>,
+    idx : u64,
+    map : IntMap<i64>,
+    model : WavlMap<i64, i64>,
+    saved : IntMap<i64>,
+    saved_model : WavlMap<i64, i64>
+) -> bool {
+    if !map.valid() || map.depth() > 65 || map.len() != model.len() {
+        false
+    } else {
+        if idx >= keys.len() || idx >= vals.len() {
+            map_matches_wavl_full(map, model)
+                && map_matches_wavl_full(saved, saved_model)
+        } else {
+            let k = keys.get(idx).unwrap_or(0);
+            let v = vals.get(idx).unwrap_or(0);
+            let tag = ((if v < 0 { -v } else { v }) as u64) % 12;
+            if tag == 0 {
+                apply_stateful_ops(
+                    keys, vals, idx + 1,
+                    map.insert(k, v), model.insert(k, v),
+                    saved, saved_model
+                )
             } else {
-                (m.insert(k, v), w.insert(k, v))
+                if tag == 1 {
+                    let expected_prev = model.get(k);
+                    let next_model = model.insert(k, v);
+                    match map.insert_result(k, v) {
+                        InsertResult::Added(next_map) =>
+                            expected_prev.is_none()
+                                && apply_stateful_ops(
+                                    keys, vals, idx + 1,
+                                    next_map, next_model, saved, saved_model
+                                ),
+                        InsertResult::Replaced(prev, next_map) =>
+                            match expected_prev {
+                                Option::Some(exp) =>
+                                    prev == exp
+                                        && apply_stateful_ops(
+                                            keys, vals, idx + 1,
+                                            next_map, next_model, saved, saved_model
+                                        ),
+                                Option::None => false
+                            }
+                    }
+                } else {
+                    if tag == 2 {
+                        apply_stateful_ops(
+                            keys, vals, idx + 1,
+                            map.insert_with(k, v, |cur, inc| cur - inc * 2),
+                            model.insert_with(k, v, |cur, inc| cur - inc * 2),
+                            saved, saved_model
+                        )
+                    } else {
+                        if tag == 3 {
+                            apply_stateful_ops(
+                                keys, vals, idx + 1,
+                                map.remove(k), model.remove(k),
+                                saved, saved_model
+                            )
+                        } else {
+                            if tag == 4 {
+                                let expected = model.get(k);
+                                let next_model = model.remove(k);
+                                match map.remove_entry(k) {
+                                    RemoveResult::Missing(same_map) =>
+                                        expected.is_none()
+                                            && apply_stateful_ops(
+                                                keys, vals, idx + 1,
+                                                same_map, next_model, saved, saved_model
+                                            ),
+                                    RemoveResult::Removed(e, next_map) =>
+                                        match expected {
+                                            Option::Some(exp_v) =>
+                                                e.key == k && e.value == exp_v
+                                                    && apply_stateful_ops(
+                                                        keys, vals, idx + 1,
+                                                        next_map, next_model, saved, saved_model
+                                                    ),
+                                            Option::None => false
+                                        }
+                                }
+                            } else {
+                                if tag == 5 {
+                                    match map.pop_min() {
+                                        PopResult::Empty(rest_m) => match model.pop_min() {
+                                            WavlPop::Empty(rest_w) =>
+                                                apply_stateful_ops(
+                                                    keys, vals, idx + 1,
+                                                    rest_m, rest_w, saved, saved_model
+                                                ),
+                                            WavlPop::Popped(_, _) => false
+                                        },
+                                        PopResult::Popped(em, rest_m) => match model.pop_min() {
+                                            WavlPop::Popped(ew, rest_w) =>
+                                                em.key == ew.key && em.value == ew.value
+                                                    && apply_stateful_ops(
+                                                        keys, vals, idx + 1,
+                                                        rest_m, rest_w, saved, saved_model
+                                                    ),
+                                            WavlPop::Empty(_) => false
+                                        }
+                                    }
+                                } else {
+                                    if tag == 6 {
+                                        match map.pop_max() {
+                                            PopResult::Empty(rest_m) => match model.pop_max() {
+                                                WavlPop::Empty(rest_w) =>
+                                                    apply_stateful_ops(
+                                                        keys, vals, idx + 1,
+                                                        rest_m, rest_w, saved, saved_model
+                                                    ),
+                                                WavlPop::Popped(_, _) => false
+                                            },
+                                            PopResult::Popped(em, rest_m) => match model.pop_max() {
+                                                WavlPop::Popped(ew, rest_w) =>
+                                                    em.key == ew.key && em.value == ew.value
+                                                        && apply_stateful_ops(
+                                                            keys, vals, idx + 1,
+                                                            rest_m, rest_w, saved, saved_model
+                                                        ),
+                                                WavlPop::Empty(_) => false
+                                            }
+                                        }
+                                    } else {
+                                        if tag == 7 {
+                                            apply_stateful_ops(
+                                                keys, vals, idx + 1,
+                                                map.adjust(k, |x| x + v),
+                                                model.adjust(k, |x| x + v),
+                                                saved, saved_model
+                                            )
+                                        } else {
+                                            if tag == 8 {
+                                                let f = |x : i64| {
+                                                    if ((x + v) & 1) == 0 {
+                                                        Option::Some { x - v }
+                                                    } else {
+                                                        Option::None
+                                                    }
+                                                };
+                                                apply_stateful_ops(
+                                                    keys, vals, idx + 1,
+                                                    map.update(k, f),
+                                                    model.update(k, f),
+                                                    saved, saved_model
+                                                )
+                                            } else {
+                                                if tag == 9 {
+                                                    let f = |slot : Option<i64>| match slot {
+                                                        Option::None =>
+                                                            if (v & 1) == 0 {
+                                                                Option::Some { v }
+                                                            } else {
+                                                                Option::None
+                                                            },
+                                                        Option::Some(cur) =>
+                                                            if (v & 2) == 0 {
+                                                                Option::Some { cur + v }
+                                                            } else {
+                                                                Option::None
+                                                            }
+                                                    };
+                                                    apply_stateful_ops(
+                                                        keys, vals, idx + 1,
+                                                        map.alter(k, f),
+                                                        model.alter(k, f),
+                                                        saved, saved_model
+                                                    )
+                                                } else {
+                                                    if tag == 10 {
+                                                        if (k & 1) == 0 {
+                                                            apply_stateful_ops(
+                                                                keys, vals, idx + 1,
+                                                                map, model, map, model
+                                                            )
+                                                        } else {
+                                                            apply_stateful_ops(
+                                                                keys, vals, idx + 1,
+                                                                saved, saved_model, map, model
+                                                            )
+                                                        }
+                                                    } else {
+                                                        if v == 11 {
+                                                            apply_stateful_ops(
+                                                                keys, vals, idx + 1,
+                                                                map.clear(), model.clear(),
+                                                                saved, saved_model
+                                                            )
+                                                        } else {
+                                                            apply_stateful_ops(
+                                                                keys, vals, idx + 1,
+                                                                map.insert(k, v), model.insert(k, v),
+                                                                saved, saved_model
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-    );
-    let order = map.fold_left(Order { previous: 0, count: 0, sorted: true }, |acc, key, value|
-        Order {
-            previous: key,
-            count: acc.count + 1,
-            sorted: acc.sorted && (acc.count == 0 || acc.previous < key)
-        });
-    let all_keys_match = ops.all(|op : (i64, i64)| {
-        let (k, _) = op;
-        let expected = model.get(k).unwrap_or(-1);
-        map.get(k).unwrap_or(-1) == expected && map.get_or(k, -1) == expected
-            && map.contains_key(k) == model.contains_key(k)
-    });
-    expect(order.sorted, "IntMap fold_left keys should be strictly ascending")
-        .and_then(|| should_be(order.count, model.len()))
-        .and_then(|| expect(all_keys_match, "IntMap and WavlMap lookups should match for all keys"))
+    }
 }
 
-#[main]
-pub fn main() {
-    test::runner::run_main(TestTree::group("intmap")
+fn build_wide_pair(
+    raw : Vec<i64>,
+    idx : u64,
+    map : IntMap<i64>,
+    model : WavlMap<i64, i64>
+) -> (IntMap<i64>, WavlMap<i64, i64>) {
+    if idx >= raw.len() {
+        (map, model)
+    } else {
+        let k = raw.get(idx).unwrap_or(0);
+        let v = (idx as i64) * 13 - (k & 255);
+        if (k & 7) == 0 {
+            build_wide_pair(raw, idx + 1, map.remove(k), model.remove(k))
+        } else {
+            build_wide_pair(raw, idx + 1, map.insert(k, v), model.insert(k, v))
+        }
+    }
+}
+
+fn check_query_key(map : IntMap<i64>, model : WavlMap<i64, i64>, q : i64) -> bool {
+    let g_int = map.get(q);
+    let g_wavl = model.get(q);
+    let get_ok = match g_int {
+        Option::None => g_wavl.is_none() && map.get_or(q, -987654321) == -987654321,
+        Option::Some(v) => match g_wavl {
+            Option::Some(wv) => v == wv && map.get_or(q, -987654321) == v,
+            Option::None => false
+        }
+    };
+    let find_ceil_ok = opt_entry_matches_wavl(
+        map.find(|k, ignored_v| k >= q),
+        model.ceiling_entry(q)
+    );
+    get_ok
+        && map.contains_key(q) == model.contains_key(q)
+        && opt_entry_matches_wavl(map.get_entry(q), model.get_entry(q))
+        && opt_entry_matches_wavl(map.floor_entry(q), model.floor_entry(q))
+        && opt_entry_matches_wavl(map.ceiling_entry(q), model.ceiling_entry(q))
+        && opt_entry_matches_wavl(map.predecessor_entry(q), model.predecessor_entry(q))
+        && opt_entry_matches_wavl(map.successor_entry(q), model.successor_entry(q))
+        && find_ceil_ok
+}
+
+fn check_queries_vec(
+    map : IntMap<i64>,
+    model : WavlMap<i64, i64>,
+    queries : Vec<i64>,
+    idx : u64
+) -> bool {
+    if idx >= queries.len() {
+        true
+    } else {
+        check_query_key(map, model, queries.get(idx).unwrap_or(0))
+            && check_queries_vec(map, model, queries, idx + 1)
+    }
+}
+
+fn build_bounded_pair(
+    keys : Vec<i64>,
+    vals : Vec<i64>,
+    idx : u64,
+    map : IntMap<i64>,
+    model : WavlMap<i64, i64>
+) -> (IntMap<i64>, WavlMap<i64, i64>) {
+    if idx >= keys.len() || idx >= vals.len() {
+        (map, model)
+    } else {
+        let k = keys.get(idx).unwrap_or(0);
+        let v = vals.get(idx).unwrap_or(0);
+        build_bounded_pair(keys, vals, idx + 1, map.insert(k, v), model.insert(k, v))
+    }
+}
+
+fn apply_payload_ops(
+    keys : Vec<i64>,
+    vals : Vec<i64>,
+    idx : u64,
+    m1 : IntMap<Payload>,
+    w1 : WavlMap<i64, i64>,
+    m2 : IntMap<Payload>,
+    w2 : WavlMap<i64, i64>
+) -> bool {
+    if !m1.valid() || !m2.valid() {
+        false
+    } else {
+        if idx >= keys.len() || idx >= vals.len() {
+            let u_m = m1.union_with(
+                m2,
+                |a, b| Payload::Link { payload_sum(a) - payload_sum(b), Payload::End }
+            );
+            let u_w = w1.union_with(w2, |a, b| a - b);
+            let i_m = m1.intersection_with(
+                m2,
+                |a, b| Payload::Link { payload_sum(a) + payload_sum(b) * 2, Payload::End }
+            );
+            let i_w = w1.intersection_with(w2, |a, b| a + b * 2);
+            let d_m = m1.difference(m2);
+            let d_w = w1.difference(w2);
+            let fm_m = u_m.filter_map(|k, p| {
+                if (k & 1) == 0 {
+                    Option::Some { Payload::Link { payload_sum(p) + 3, Payload::End } }
+                } else {
+                    Option::None
+                }
+            });
+            let fm_w = u_w.filter_map(|k, s| {
+                if (k & 1) == 0 { Option::Some { s + 3 } } else { Option::None }
+            });
+            payload_map_matches_model(m1, w1)
+                && payload_map_matches_model(m2, w2)
+                && payload_map_matches_model(u_m, u_w)
+                && payload_map_matches_model(i_m, i_w)
+                && payload_map_matches_model(d_m, d_w)
+                && payload_map_matches_model(fm_m, fm_w)
+        } else {
+            let k = keys.get(idx).unwrap_or(0);
+            let v = vals.get(idx).unwrap_or(0);
+            let p = make_payload(v);
+            let s = make_payload_sum(v);
+            let tag = ((if v < 0 { -v } else { v }) as u64) % 6;
+            if tag == 0 {
+                apply_payload_ops(
+                    keys, vals, idx + 1,
+                    m1.insert(k, p), w1.insert(k, s),
+                    m2, w2
+                )
+            } else {
+                if tag == 1 {
+                    apply_payload_ops(
+                        keys, vals, idx + 1,
+                        m1, w1,
+                        m2.insert(k, p), w2.insert(k, s)
+                    )
+                } else {
+                    if tag == 2 {
+                        apply_payload_ops(
+                            keys, vals, idx + 1,
+                            m1.insert_with(
+                                k,
+                                p,
+                                |cur, inc| Payload::Link { payload_sum(cur) - payload_sum(inc), Payload::End }
+                            ),
+                            w1.insert_with(k, s, |cur, inc| cur - inc),
+                            m2, w2
+                        )
+                    } else {
+                        if tag == 3 {
+                            apply_payload_ops(
+                                keys, vals, idx + 1,
+                                m1.remove(k), w1.remove(k),
+                                m2, w2
+                            )
+                        } else {
+                            if tag == 4 {
+                                match m1.pop_min() {
+                                    PopResult::Empty(rm) => match w1.pop_min() {
+                                        WavlPop::Empty(rw) =>
+                                            apply_payload_ops(keys, vals, idx + 1, rm, rw, m2, w2),
+                                        WavlPop::Popped(_, _) => false
+                                    },
+                                    PopResult::Popped(em, rm) => match w1.pop_min() {
+                                        WavlPop::Popped(ew, rw) =>
+                                            em.key == ew.key && payload_sum(em.value) == ew.value
+                                                && apply_payload_ops(keys, vals, idx + 1, rm, rw, m2, w2),
+                                        WavlPop::Empty(_) => false
+                                    }
+                                }
+                            } else {
+                                // Snapshot cross-assignment to exercise shared RC nodes + later updates
+                                apply_payload_ops(keys, vals, idx + 1, m1, w1, m1, w1)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("intmap")
         .with_case("basics", basics)
         .with_case("signed keys", signed_keys)
         .with_case("powers of two", powers_of_two)
+        .with_case("point updates", point_updates)
+        .with_case("neighbours and range", neighbours_and_range)
+        .with_case("traversals and transforms", traversals_and_transforms)
+        .with_case("algebra", algebra)
         .with_case("churn", test_churn)
-        .with_case("generic values", generic_values)
+        .with_case("generic payloads", generic_payloads)
         .with_fuzz(
-            "model equivalence (fuzz)",
-            list_of(tuple2(i64_domain(), i64_domain())),
-            model_equivalence
-        ))
+            "stateful operations, persistence & WavlMap model (fuzz)",
+            tuple2(
+                i64_domain().in_range(-32, 32).vec().max_len(56),
+                i64_domain().in_range(-200, 200).vec().max_len(56)
+            ),
+            |pair : (Vec<i64>, Vec<i64>)| {
+                let (keys, vals) = pair;
+                expect(
+                    apply_stateful_ops(
+                        keys, vals, 0,
+                        IntMap::new(), WavlMap::new(),
+                        IntMap::new(), WavlMap::new()
+                    ),
+                    "IntMap stateful operations diverged from WavlMap or violated invariants"
+                )
+            }
+        )
+        .with_fuzz(
+            "wide 64-bit signed keys, neighbours & range (fuzz)",
+            tuple3(
+                i64_domain().vec().max_len(40),
+                i64_domain().vec().max_len(16),
+                tuple2(i64_domain(), i64_domain())
+            ),
+            |input : (Vec<i64>, Vec<i64>, (i64, i64))| {
+                let (raw_keys, queries, bounds) = input;
+                let (lo, hi) = bounds;
+                let (map, model) = build_wide_pair(raw_keys, 0, IntMap::new(), WavlMap::new());
+                let min_k : i64 = -9223372036854775808;
+                let max_k : i64 = 9223372036854775807;
+                let win_int = map.range(lo, hi);
+                let win_wavl = model.range(lo, hi);
+                expect(
+                    map_matches_wavl_full(map, model)
+                        && check_queries_vec(map, model, queries, 0)
+                        && check_queries_vec(map, model, raw_keys, 0)
+                        && check_query_key(map, model, lo)
+                        && check_query_key(map, model, hi)
+                        && check_query_key(map, model, 0)
+                        && check_query_key(map, model, -1)
+                        && check_query_key(map, model, min_k)
+                        && check_query_key(map, model, max_k)
+                        && map_matches_wavl(win_int, win_wavl)
+                        && entry_lists_match_wavl(
+                            map.range_to_list(lo, hi),
+                            model.range_to_list(lo, hi)
+                        ),
+                    "IntMap wide 64-bit signed keys/neighbours/range diverged from WavlMap"
+                )
+            }
+        )
+        .with_fuzz(
+            "algebra, relations & higher-order transforms (fuzz)",
+            tuple3(
+                tuple2(
+                    i64_domain().in_range(-20, 20).vec().max_len(28),
+                    i64_domain().in_range(-50, 50).vec().max_len(28)
+                ),
+                tuple2(
+                    i64_domain().in_range(-20, 20).vec().max_len(28),
+                    i64_domain().in_range(-50, 50).vec().max_len(28)
+                ),
+                tuple2(i64_domain().in_range(-24, 24), i64_domain().in_range(-24, 24))
+            ),
+            |input : ((Vec<i64>, Vec<i64>), (Vec<i64>, Vec<i64>), (i64, i64))| {
+                let (left_in, right_in, bounds) = input;
+                let (k1, v1) = left_in;
+                let (k2, v2) = right_in;
+                let (lo, hi) = bounds;
+                let (m1, w1) = build_bounded_pair(k1, v1, 0, IntMap::new(), WavlMap::new());
+                let (m2, w2) = build_bounded_pair(k2, v2, 0, IntMap::new(), WavlMap::new());
+
+                let u_m = m1.union(m2);
+                let u_w = w1.union(w2);
+                let uw_m = m1.union_with(m2, |a, b| a * 131 - b);
+                let uw_w = w1.union_with(w2, |a, b| a * 131 - b);
+                let i_m = m1.intersection(m2);
+                let i_w = w1.intersection(w2);
+                let iw_m = m1.intersection_with(m2, |a, b| a * 17 - b);
+                let iw_w = w1.intersection_with(w2, |a, b| a * 17 - b);
+                let d_m = m1.difference(m2);
+                let d_w = w1.difference(w2);
+                let r_m = m1.range(lo, hi);
+                let r_w = w1.range(lo, hi);
+
+                let mv_m = m1.map_values(|v| v * 3 + 1);
+                let mv_w = w1.map_values(|v| v * 3 + 1);
+                let mk_m = m1.map_keys(|k| k / 2);
+                let mk_w = w1.map_keys(|k| k / 2);
+                let me_m = m1.map_entries(|k, v| Entry { key: -k, value: v + k });
+                let me_w = w1.map_entries(|k, v| WavlEntry { key: -k, value: v + k });
+                let fil_m = m1.filter(|k, v| ((k + v) & 1) == 0);
+                let fil_w = w1.filter(|k, v| ((k + v) & 1) == 0);
+                let fm_m = m1.filter_map(|k, v| {
+                    if k >= lo && k < hi { Option::Some { v - k } } else { Option::None }
+                });
+                let fm_w = w1.filter_map(|k, v| {
+                    if k >= lo && k < hi { Option::Some { v - k } } else { Option::None }
+                });
+
+                expect(
+                    map_matches_wavl(u_m, u_w)
+                        && map_matches_wavl(uw_m, uw_w)
+                        && map_matches_wavl(i_m, i_w)
+                        && map_matches_wavl(iw_m, iw_w)
+                        && map_matches_wavl(d_m, d_w)
+                        && map_matches_wavl(r_m, r_w)
+                        && map_matches_wavl(mv_m, mv_w)
+                        && map_matches_wavl(mk_m, mk_w)
+                        && map_matches_wavl(me_m, me_w)
+                        && map_matches_wavl(fil_m, fil_w)
+                        && map_matches_wavl(fm_m, fm_w)
+                        && m1.is_disjoint(m2) == w1.is_disjoint(w2)
+                        && m1.is_submap(m2) == w1.is_submap(w2)
+                        && m1.is_proper_submap(m2) == w1.is_proper_submap(w2)
+                        && m1.is_submap_by(m2, |a, b| a <= b)
+                            == w1.is_submap_by(w2, |a, b| a <= b)
+                        && m1.is_proper_submap_by(m2, |a, b| a <= b)
+                            == w1.is_proper_submap_by(w2, |a, b| a <= b)
+                        && (m1 == m2) == (w1 == w2)
+                        && m1.contains_value(lo) == w1.contains_value(lo)
+                        && m1.count_if(|k, v| k < v) == w1.count_if(|k, v| k < v)
+                        && m1.any(|k, v| k == v) == w1.any(|k, v| k == v)
+                        && m1.all(|k, v| k >= -20) == w1.all(|k, v| k >= -20)
+                        && opt_entry_matches_wavl(
+                            m1.find(|k, v| k + v >= lo),
+                            w1.find(|k, v| k + v >= lo)
+                        )
+                        && u_m.len() + i_m.len() == m1.len() + m2.len()
+                        && d_m.is_disjoint(m2)
+                        && i_m.is_submap(m1)
+                        && (i_m.is_proper_submap(m1) == (i_m.len() < m1.len())),
+                    "IntMap algebra/relations/transforms diverged from WavlMap"
+                )
+            }
+        )
+        .with_fuzz(
+            "boxed payload RC & persistent algebra (fuzz)",
+            tuple2(
+                i64_domain().in_range(-12, 12).vec().max_len(36),
+                i64_domain().in_range(-40, 40).vec().max_len(36)
+            ),
+            |pair : (Vec<i64>, Vec<i64>)| {
+                let (keys, vals) = pair;
+                expect(
+                    apply_payload_ops(
+                        keys, vals, 0,
+                        IntMap::new(), WavlMap::new(),
+                        IntMap::new(), WavlMap::new()
+                    ),
+                    "IntMap<Payload> diverged from scalar model or violated invariants"
+                )
+            }
+        )
 }
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

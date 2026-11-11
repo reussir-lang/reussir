@@ -5,34 +5,75 @@
 //! has two nonempty children, and branching bits decrease toward the leaves.
 
 import core::intrinsic::math;
+import std::collections::pure::list::List;
 import std::option::Option;
+
+/// A key-value pair stored in and produced by `IntMap`.
+pub struct [value] Entry<V> {
+    pub key : i64,
+    pub value : V
+}
+
+impl<V : PartialEq> PartialEq for Entry<V> {
+    fn eq(self : Self, other : Self) -> bool {
+        self.key == other.key && self.value == other.value
+    }
+}
+
+impl<V : Eq> Eq for Entry<V> {}
 
 /// A persistent map from signed 64-bit integer keys to values.
 ///
 /// Packed Patricia branches skip shared prefixes and require no balancing.
-/// Point operations traverse at most 64 branches; `fold_left` visits entries
-/// in ascending signed key order in O(n) time. Updates preserve retained
-/// versions and share unchanged subtrees. Uniquely owned nodes can be reused.
-/// Use the methods to maintain the internal prefix and nonempty-child invariants.
+/// Point operations and neighbour queries traverse at most 64 branches;
+/// `range` shares interior dyadic subtrees in O(min(n, 64)) time; set and map
+/// algebra merges shared or disjoint prefixes without revisiting unchanged
+/// subtrees. `to_list` and `fold_left` visit entries in ascending signed key
+/// order, while `to_list_desc` and `fold_right` use descending order. Updates
+/// preserve retained versions and share unchanged subtrees; uniquely owned
+/// nodes can be reused in place. Use the methods to maintain the internal
+/// prefix and nonempty-child invariants.
 pub enum IntMap<V> {
     Empty,
     Tip(i64, V),
     Bin(u64, IntMap<V>, IntMap<V>)
 }
 
-// Flipping the sign bit makes unsigned routing follow signed key order.
-fn ordered(key : i64) -> u64 {
-    (key as u64) ^ (1 << 63)
+/// The previous value, when requested while inserting an entry.
+pub enum [value] InsertResult<V> {
+    Added(IntMap<V>),
+    Replaced(V, IntMap<V>)
 }
 
-fn outside(key : u64, prefix : u64) -> bool {
-    ((key ^ prefix) & (18446744073709551615 ^ (prefix ^ (prefix - 1)))) != 0
+/// The entry removed from a map, or the unchanged map when the key was absent.
+pub enum [value] RemoveResult<V> {
+    Removed(Entry<V>, IntMap<V>),
+    Missing(IntMap<V>)
 }
+
+/// The entry taken off one end of a map, or the unchanged empty map.
+pub enum [value] PopResult<V> {
+    Popped(Entry<V>, IntMap<V>),
+    Empty(IntMap<V>)
+}
+
+struct [value] PoppedEntry<V> {
+    entry : Entry<V>,
+    rest : IntMap<V>
+}
+
+// Unsigned key order flips the sign bit: `(key as u64) ^ (1 << 63)`.
+// For a non-zero branch `prefix`, `prefix ^ (prefix & (prefix - 1))` is its
+// branching bit and `(u ^ prefix) > (prefix ^ (prefix - 1))` holds when `u`
+// differs from `prefix` above that bit. The helpers below stay generic and
+// directly self-recursive so downstream instantiations inline bit arithmetic,
+// apply TRMC, and reuse uniquely owned spine nodes in place.
 
 // The two representatives differ above their subtrees' branching bits.
 fn join<V>(k : u64, a : IntMap<V>, q : u64, b : IntMap<V>) -> IntMap<V> {
     let bit : u64 = 1 << (63 - math::ctlz(k ^ q));
-    let prefix = (k & (18446744073709551615 ^ (bit ^ (bit - 1)))) | bit;
+    let low = bit - 1;
+    let prefix = ((k | low) ^ low) | bit;
     if k < prefix {
         IntMap::Bin { prefix, a, b }
     } else {
@@ -42,122 +83,1918 @@ fn join<V>(k : u64, a : IntMap<V>, q : u64, b : IntMap<V>) -> IntMap<V> {
 
 fn branch<V>(prefix : u64, left : IntMap<V>, right : IntMap<V>) -> IntMap<V> {
     match left {
-        Empty => right,
+        IntMap::Empty => right,
         _ => match right {
-            Empty => left,
+            IntMap::Empty => left,
             _ => IntMap::Bin { prefix, left, right }
         }
     }
 }
 
+fn valid_in<V>(map : IntMap<V>, min_u : u64, max_u : u64) -> bool {
+    match map {
+        IntMap::Empty => false,
+        IntMap::Tip(key, _) => {
+            let u = (key as u64) ^ (1 << 63);
+            u >= min_u && u <= max_u
+        },
+        IntMap::Bin(prefix, left, right) => {
+            if prefix == 0 {
+                false
+            } else {
+                let bin_min = prefix & (prefix - 1);
+                let bin_max = prefix | (prefix - 1);
+                bin_min >= min_u
+                    && bin_max <= max_u
+                    && valid_in(left, bin_min, prefix - 1)
+                    && valid_in(right, prefix, bin_max)
+            }
+        }
+    }
+}
+
+fn len_acc<V>(map : IntMap<V>, acc : u64) -> u64 {
+    match map {
+        IntMap::Empty => acc,
+        IntMap::Tip(_, _) => acc + 1,
+        IntMap::Bin(_, left, right) => len_acc(right, len_acc(left, acc))
+    }
+}
+
+fn get_at<V>(map : IntMap<V>, key : i64, u : u64) -> Option<V> {
+    match map {
+        IntMap::Empty => Option::None,
+        IntMap::Tip(k, value) =>
+            if k == key { Option::Some { value } } else { Option::None },
+        IntMap::Bin(prefix, left, right) =>
+            if u < prefix {
+                get_at(left, key, u)
+            } else {
+                get_at(right, key, u)
+            }
+    }
+}
+
+fn get_or_at<V>(map : IntMap<V>, key : i64, u : u64, default : V) -> V {
+    match map {
+        IntMap::Empty => default,
+        IntMap::Tip(k, value) => if k == key { value } else { default },
+        IntMap::Bin(prefix, left, right) =>
+            if u < prefix {
+                get_or_at(left, key, u, default)
+            } else {
+                get_or_at(right, key, u, default)
+            }
+    }
+}
+
+fn get_entry_at<V>(map : IntMap<V>, key : i64, u : u64) -> Option<Entry<V>> {
+    match map {
+        IntMap::Empty => Option::None,
+        IntMap::Tip(k, value) =>
+            if k == key {
+                Option::Some { Entry { key: k, value } }
+            } else {
+                Option::None
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if u < prefix {
+                get_entry_at(left, key, u)
+            } else {
+                get_entry_at(right, key, u)
+            }
+    }
+}
+
+fn contains_at<V>(map : IntMap<V>, key : i64, u : u64) -> bool {
+    match map {
+        IntMap::Empty => false,
+        IntMap::Tip(k, _) => k == key,
+        IntMap::Bin(prefix, left, right) =>
+            if u < prefix {
+                contains_at(left, key, u)
+            } else {
+                contains_at(right, key, u)
+            }
+    }
+}
+
+fn get_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64
+) -> Option<V> {
+    let u = (key as u64) ^ (1 << 63);
+    if u < prefix { get_at(left, key, u) } else { get_at(right, key, u) }
+}
+
+fn contains_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64
+) -> bool {
+    let u = (key as u64) ^ (1 << 63);
+    if u < prefix {
+        contains_at(left, key, u)
+    } else {
+        contains_at(right, key, u)
+    }
+}
+
+fn insert_at<V>(map : IntMap<V>, key : i64, u : u64, value : V) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Tip { key, value },
+        IntMap::Tip(k, previous) => if key == k {
+            IntMap::Tip { key, value }
+        } else {
+            let old = IntMap::Tip { k, previous };
+            join(u, IntMap::Tip { key, value }, (k as u64) ^ (1 << 63), old)
+        },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                let old = IntMap::Bin { prefix, left, right };
+                join(u, IntMap::Tip { key, value }, prefix, old)
+            } else {
+                if u < prefix {
+                    IntMap::Bin { prefix, insert_at(left, key, u, value), right }
+                } else {
+                    IntMap::Bin { prefix, left, insert_at(right, key, u, value) }
+                }
+            }
+    }
+}
+
+fn insert_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64,
+    value : V
+) -> IntMap<V> {
+    let u = (key as u64) ^ (1 << 63);
+    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+        join(
+            u,
+            IntMap::Tip { key, value },
+            prefix,
+            IntMap::Bin { prefix, left, right }
+        )
+    } else {
+        if u < prefix {
+            IntMap::Bin { prefix, insert_at(left, key, u, value), right }
+        } else {
+            IntMap::Bin { prefix, left, insert_at(right, key, u, value) }
+        }
+    }
+}
+
+fn insert_result_at<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    value : V
+) -> InsertResult<V> {
+    match map {
+        IntMap::Empty => InsertResult::Added { IntMap::Tip { key, value } },
+        IntMap::Tip(k, previous) => if key == k {
+            InsertResult::Replaced { previous, IntMap::Tip { key, value } }
+        } else {
+            let old = IntMap::Tip { k, previous };
+            InsertResult::Added {
+                join(u, IntMap::Tip { key, value }, (k as u64) ^ (1 << 63), old)
+            }
+        },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                let old = IntMap::Bin { prefix, left, right };
+                InsertResult::Added {
+                    join(u, IntMap::Tip { key, value }, prefix, old)
+                }
+            } else {
+                if u < prefix {
+                    match insert_result_at(left, key, u, value) {
+                        InsertResult::Added(next_left) =>
+                            InsertResult::Added {
+                                IntMap::Bin { prefix, next_left, right }
+                            },
+                        InsertResult::Replaced(previous, next_left) =>
+                            InsertResult::Replaced {
+                                previous,
+                                IntMap::Bin { prefix, next_left, right }
+                            }
+                    }
+                } else {
+                    match insert_result_at(right, key, u, value) {
+                        InsertResult::Added(next_right) =>
+                            InsertResult::Added {
+                                IntMap::Bin { prefix, left, next_right }
+                            },
+                        InsertResult::Replaced(previous, next_right) =>
+                            InsertResult::Replaced {
+                                previous,
+                                IntMap::Bin { prefix, left, next_right }
+                            }
+                    }
+                }
+            }
+    }
+}
+
+fn insert_if_absent_at<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    value : V
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Tip { key, value },
+        IntMap::Tip(k, existing) => if key == k {
+            IntMap::Tip { k, existing }
+        } else {
+            let old = IntMap::Tip { k, existing };
+            join(u, IntMap::Tip { key, value }, (k as u64) ^ (1 << 63), old)
+        },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                let old = IntMap::Bin { prefix, left, right };
+                join(u, IntMap::Tip { key, value }, prefix, old)
+            } else {
+                if u < prefix {
+                    IntMap::Bin {
+                        prefix,
+                        insert_if_absent_at(left, key, u, value),
+                        right
+                    }
+                } else {
+                    IntMap::Bin {
+                        prefix,
+                        left,
+                        insert_if_absent_at(right, key, u, value)
+                    }
+                }
+            }
+    }
+}
+
+fn insert_if_absent_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64,
+    value : V
+) -> IntMap<V> {
+    let u = (key as u64) ^ (1 << 63);
+    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+        join(
+            u,
+            IntMap::Tip { key, value },
+            prefix,
+            IntMap::Bin { prefix, left, right }
+        )
+    } else {
+        if u < prefix {
+            IntMap::Bin {
+                prefix,
+                insert_if_absent_at(left, key, u, value),
+                right
+            }
+        } else {
+            IntMap::Bin {
+                prefix,
+                left,
+                insert_if_absent_at(right, key, u, value)
+            }
+        }
+    }
+}
+
+fn insert_with_at<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    value : V,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Tip { key, value },
+        IntMap::Tip(k, previous) => if key == k {
+            IntMap::Tip { k, combine(previous, value) }
+        } else {
+            let old = IntMap::Tip { k, previous };
+            join(u, IntMap::Tip { key, value }, (k as u64) ^ (1 << 63), old)
+        },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                let old = IntMap::Bin { prefix, left, right };
+                join(u, IntMap::Tip { key, value }, prefix, old)
+            } else {
+                if u < prefix {
+                    IntMap::Bin {
+                        prefix,
+                        insert_with_at(left, key, u, value, combine),
+                        right
+                    }
+                } else {
+                    IntMap::Bin {
+                        prefix,
+                        left,
+                        insert_with_at(right, key, u, value, combine)
+                    }
+                }
+            }
+    }
+}
+
+fn insert_with_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64,
+    value : V,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    let u = (key as u64) ^ (1 << 63);
+    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+        join(
+            u,
+            IntMap::Tip { key, value },
+            prefix,
+            IntMap::Bin { prefix, left, right }
+        )
+    } else {
+        if u < prefix {
+            IntMap::Bin {
+                prefix,
+                insert_with_at(left, key, u, value, combine),
+                right
+            }
+        } else {
+            IntMap::Bin {
+                prefix,
+                left,
+                insert_with_at(right, key, u, value, combine)
+            }
+        }
+    }
+}
+
+fn insert_with_left_at<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    left_value : V,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Tip { key, left_value },
+        IntMap::Tip(k, right_value) => if key == k {
+            IntMap::Tip { k, combine(left_value, right_value) }
+        } else {
+            let old = IntMap::Tip { k, right_value };
+            join(u, IntMap::Tip { key, left_value }, (k as u64) ^ (1 << 63), old)
+        },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                let old = IntMap::Bin { prefix, left, right };
+                join(u, IntMap::Tip { key, left_value }, prefix, old)
+            } else {
+                if u < prefix {
+                    IntMap::Bin {
+                        prefix,
+                        insert_with_left_at(left, key, u, left_value, combine),
+                        right
+                    }
+                } else {
+                    IntMap::Bin {
+                        prefix,
+                        left,
+                        insert_with_left_at(right, key, u, left_value, combine)
+                    }
+                }
+            }
+    }
+}
+
+fn insert_with_left_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64,
+    left_value : V,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    let u = (key as u64) ^ (1 << 63);
+    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+        join(
+            u,
+            IntMap::Tip { key, left_value },
+            prefix,
+            IntMap::Bin { prefix, left, right }
+        )
+    } else {
+        if u < prefix {
+            IntMap::Bin {
+                prefix,
+                insert_with_left_at(left, key, u, left_value, combine),
+                right
+            }
+        } else {
+            IntMap::Bin {
+                prefix,
+                left,
+                insert_with_left_at(right, key, u, left_value, combine)
+            }
+        }
+    }
+}
+
+fn remove_at<V>(map : IntMap<V>, key : i64, u : u64) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, value) =>
+            if key == k { IntMap::Empty } else { IntMap::Tip { k, value } },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                IntMap::Bin { prefix, left, right }
+            } else {
+                if u < prefix {
+                    branch(prefix, remove_at(left, key, u), right)
+                } else {
+                    branch(prefix, left, remove_at(right, key, u))
+                }
+            }
+    }
+}
+
+fn remove_in_bin<V>(
+    prefix : u64,
+    left : IntMap<V>,
+    right : IntMap<V>,
+    key : i64
+) -> IntMap<V> {
+    let u = (key as u64) ^ (1 << 63);
+    if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+        IntMap::Bin { prefix, left, right }
+    } else {
+        if u < prefix {
+            branch(prefix, remove_at(left, key, u), right)
+        } else {
+            branch(prefix, left, remove_at(right, key, u))
+        }
+    }
+}
+
+fn remove_entry_at<V>(map : IntMap<V>, key : i64, u : u64) -> RemoveResult<V> {
+    match map {
+        IntMap::Empty => RemoveResult::Missing { IntMap::Empty },
+        IntMap::Tip(k, value) =>
+            if key == k {
+                RemoveResult::Removed { Entry { key: k, value }, IntMap::Empty }
+            } else {
+                RemoveResult::Missing { IntMap::Tip { k, value } }
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                RemoveResult::Missing { IntMap::Bin { prefix, left, right } }
+            } else {
+                if u < prefix {
+                    match remove_entry_at(left, key, u) {
+                        RemoveResult::Removed(entry, next_left) =>
+                            RemoveResult::Removed {
+                                entry,
+                                branch(prefix, next_left, right)
+                            },
+                        RemoveResult::Missing(same_left) =>
+                            RemoveResult::Missing {
+                                IntMap::Bin { prefix, same_left, right }
+                            }
+                    }
+                } else {
+                    match remove_entry_at(right, key, u) {
+                        RemoveResult::Removed(entry, next_right) =>
+                            RemoveResult::Removed {
+                                entry,
+                                branch(prefix, left, next_right)
+                            },
+                        RemoveResult::Missing(same_right) =>
+                            RemoveResult::Missing {
+                                IntMap::Bin { prefix, left, same_right }
+                            }
+                    }
+                }
+            }
+    }
+}
+
+fn adjust_at<V>(map : IntMap<V>, key : i64, u : u64, f : V -> V) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, value) =>
+            if key == k {
+                IntMap::Tip { k, f(value) }
+            } else {
+                IntMap::Tip { k, value }
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                IntMap::Bin { prefix, left, right }
+            } else {
+                if u < prefix {
+                    IntMap::Bin { prefix, adjust_at(left, key, u, f), right }
+                } else {
+                    IntMap::Bin { prefix, left, adjust_at(right, key, u, f) }
+                }
+            }
+    }
+}
+
+fn update_at<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    f : V -> Option<V>
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, value) =>
+            if key == k {
+                match f(value) {
+                    Option::Some(next) => IntMap::Tip { k, next },
+                    Option::None => IntMap::Empty
+                }
+            } else {
+                IntMap::Tip { k, value }
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                IntMap::Bin { prefix, left, right }
+            } else {
+                if u < prefix {
+                    branch(prefix, update_at(left, key, u, f), right)
+                } else {
+                    branch(prefix, left, update_at(right, key, u, f))
+                }
+            }
+    }
+}
+
+fn alter_at<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    f : Option<V> -> Option<V>
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => match f(Option::None) {
+            Option::Some(value) => IntMap::Tip { key, value },
+            Option::None => IntMap::Empty
+        },
+        IntMap::Tip(k, previous) =>
+            if key == k {
+                match f(Option::Some { previous }) {
+                    Option::Some(value) => IntMap::Tip { k, value },
+                    Option::None => IntMap::Empty
+                }
+            } else {
+                let old = IntMap::Tip { k, previous };
+                match f(Option::None) {
+                    Option::Some(value) => join(
+                        u,
+                        IntMap::Tip { key, value },
+                        (k as u64) ^ (1 << 63),
+                        old
+                    ),
+                    Option::None => old
+                }
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                let old = IntMap::Bin { prefix, left, right };
+                match f(Option::None) {
+                    Option::Some(value) =>
+                        join(u, IntMap::Tip { key, value }, prefix, old),
+                    Option::None => old
+                }
+            } else {
+                if u < prefix {
+                    branch(prefix, alter_at(left, key, u, f), right)
+                } else {
+                    branch(prefix, left, alter_at(right, key, u, f))
+                }
+            }
+    }
+}
+
+fn min_nonempty<V>(map : IntMap<V>) -> Entry<V> {
+    match map {
+        IntMap::Tip(key, value) => Entry { key, value },
+        IntMap::Bin(_, left, _) => min_nonempty(left),
+        IntMap::Empty => core::intrinsic::panic::panic()
+    }
+}
+
+fn max_nonempty<V>(map : IntMap<V>) -> Entry<V> {
+    match map {
+        IntMap::Tip(key, value) => Entry { key, value },
+        IntMap::Bin(_, _, right) => max_nonempty(right),
+        IntMap::Empty => core::intrinsic::panic::panic()
+    }
+}
+
+fn pop_min_nonempty<V>(map : IntMap<V>) -> PoppedEntry<V> {
+    match map {
+        IntMap::Tip(key, value) => PoppedEntry {
+            entry: Entry { key, value },
+            rest: IntMap::Empty
+        },
+        IntMap::Bin(prefix, left, right) => {
+            let popped = pop_min_nonempty(left);
+            PoppedEntry {
+                entry: popped.entry,
+                rest: branch(prefix, popped.rest, right)
+            }
+        },
+        IntMap::Empty => core::intrinsic::panic::panic()
+    }
+}
+
+fn pop_max_nonempty<V>(map : IntMap<V>) -> PoppedEntry<V> {
+    match map {
+        IntMap::Tip(key, value) => PoppedEntry {
+            entry: Entry { key, value },
+            rest: IntMap::Empty
+        },
+        IntMap::Bin(prefix, left, right) => {
+            let popped = pop_max_nonempty(right);
+            PoppedEntry {
+                entry: popped.entry,
+                rest: branch(prefix, left, popped.rest)
+            }
+        },
+        IntMap::Empty => core::intrinsic::panic::panic()
+    }
+}
+
+fn floor_entry_map<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    inclusive : bool
+) -> Option<Entry<V>> {
+    match map {
+        IntMap::Empty => Option::None,
+        IntMap::Tip(k, value) =>
+            if k < key || (inclusive && k == key) {
+                Option::Some { Entry { key: k, value } }
+            } else {
+                Option::None
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                if u < prefix {
+                    Option::None
+                } else {
+                    Option::Some { max_nonempty(right) }
+                }
+            } else {
+                if u < prefix {
+                    floor_entry_map(left, key, u, inclusive)
+                } else {
+                    let below = floor_entry_map(right, key, u, inclusive);
+                    match below {
+                        Option::Some(_) => below,
+                        Option::None => Option::Some { max_nonempty(left) }
+                    }
+                }
+            }
+    }
+}
+
+fn ceil_entry_map<V>(
+    map : IntMap<V>,
+    key : i64,
+    u : u64,
+    inclusive : bool
+) -> Option<Entry<V>> {
+    match map {
+        IntMap::Empty => Option::None,
+        IntMap::Tip(k, value) =>
+            if k > key || (inclusive && k == key) {
+                Option::Some { Entry { key: k, value } }
+            } else {
+                Option::None
+            },
+        IntMap::Bin(prefix, left, right) =>
+            if (u ^ prefix) > (prefix ^ (prefix - 1)) {
+                if u < prefix {
+                    Option::Some { min_nonempty(left) }
+                } else {
+                    Option::None
+                }
+            } else {
+                if u < prefix {
+                    let below = ceil_entry_map(left, key, u, inclusive);
+                    match below {
+                        Option::Some(_) => below,
+                        Option::None => Option::Some { min_nonempty(right) }
+                    }
+                } else {
+                    ceil_entry_map(right, key, u, inclusive)
+                }
+            }
+    }
+}
+
+fn to_list_acc<V>(map : IntMap<V>, acc : List<Entry<V>>) -> List<Entry<V>> {
+    match map {
+        IntMap::Empty => acc,
+        IntMap::Tip(key, value) => List::Cons { Entry { key, value }, acc },
+        IntMap::Bin(_, left, right) =>
+            to_list_acc(left, to_list_acc(right, acc))
+    }
+}
+
+fn to_list_desc_acc<V>(
+    map : IntMap<V>,
+    acc : List<Entry<V>>
+) -> List<Entry<V>> {
+    match map {
+        IntMap::Empty => acc,
+        IntMap::Tip(key, value) => List::Cons { Entry { key, value }, acc },
+        IntMap::Bin(_, left, right) =>
+            to_list_desc_acc(right, to_list_desc_acc(left, acc))
+    }
+}
+
+fn keys_acc<V>(map : IntMap<V>, acc : List<i64>) -> List<i64> {
+    match map {
+        IntMap::Empty => acc,
+        IntMap::Tip(key, _) => List::Cons { key, acc },
+        IntMap::Bin(_, left, right) => keys_acc(left, keys_acc(right, acc))
+    }
+}
+
+fn values_acc<V>(map : IntMap<V>, acc : List<V>) -> List<V> {
+    match map {
+        IntMap::Empty => acc,
+        IntMap::Tip(_, value) => List::Cons { value, acc },
+        IntMap::Bin(_, left, right) => values_acc(left, values_acc(right, acc))
+    }
+}
+
+fn range_acc<V>(
+    map : IntMap<V>,
+    u_lo : u64,
+    u_hi : u64,
+    acc : List<Entry<V>>
+) -> List<Entry<V>> {
+    match map {
+        IntMap::Empty => acc,
+        IntMap::Tip(key, value) => {
+            let u = (key as u64) ^ (1 << 63);
+            if u >= u_lo && u < u_hi {
+                List::Cons { Entry { key, value }, acc }
+            } else {
+                acc
+            }
+        },
+        IntMap::Bin(prefix, left, right) => {
+            let bin_min = prefix & (prefix - 1);
+            let bin_max = prefix | (prefix - 1);
+            if bin_max < u_lo || bin_min >= u_hi {
+                acc
+            } else {
+                if bin_min >= u_lo && bin_max < u_hi {
+                    to_list_acc(left, to_list_acc(right, acc))
+                } else {
+                    let after_right = if prefix >= u_hi {
+                        acc
+                    } else {
+                        range_acc(right, u_lo, u_hi, acc)
+                    };
+                    if prefix <= u_lo {
+                        after_right
+                    } else {
+                        range_acc(left, u_lo, u_hi, after_right)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn range_tree<V>(map : IntMap<V>, u_lo : u64, u_hi : u64) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(key, value) => {
+            let u = (key as u64) ^ (1 << 63);
+            if u >= u_lo && u < u_hi {
+                IntMap::Tip { key, value }
+            } else {
+                IntMap::Empty
+            }
+        },
+        IntMap::Bin(prefix, left, right) => {
+            let bin_min = prefix & (prefix - 1);
+            let bin_max = prefix | (prefix - 1);
+            if bin_max < u_lo || bin_min >= u_hi {
+                IntMap::Empty
+            } else {
+                if bin_min >= u_lo && bin_max < u_hi {
+                    IntMap::Bin { prefix, left, right }
+                } else {
+                    let next_left = if prefix <= u_lo {
+                        IntMap::Empty
+                    } else {
+                        range_tree(left, u_lo, u_hi)
+                    };
+                    let next_right = if prefix >= u_hi {
+                        IntMap::Empty
+                    } else {
+                        range_tree(right, u_lo, u_hi)
+                    };
+                    branch(prefix, next_left, next_right)
+                }
+            }
+        }
+    }
+}
+
+fn from_list_impl<V>(values : List<Entry<V>>, acc : IntMap<V>) -> IntMap<V> {
+    match values {
+        List::Nil => acc,
+        List::Cons(entry, rest) =>
+            from_list_impl(rest, acc.insert(entry.key, entry.value))
+    }
+}
+
+fn union_bin_left<V>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    other : IntMap<V>
+) -> IntMap<V> {
+    match other {
+        IntMap::Empty => IntMap::Bin { p1, l1, r1 },
+        IntMap::Tip(k, v) => insert_in_bin(p1, l1, r1, k, v),
+        IntMap::Bin(p2, l2, r2) => union_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn union_bin_right<V>(
+    map : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<V>,
+    r2 : IntMap<V>
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Bin { p2, l2, r2 },
+        IntMap::Tip(k, v) => insert_if_absent_in_bin(p2, l2, r2, k, v),
+        IntMap::Bin(p1, l1, r1) => union_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn union_bins<V>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<V>,
+    r2 : IntMap<V>
+) -> IntMap<V> {
+    if p1 == p2 {
+        IntMap::Bin { p1, l1.union(l2), r1.union(r2) }
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 > m2 {
+            if (p2 ^ p1) > m1 {
+                let left_bin = IntMap::Bin { p1, l1, r1 };
+                let right_bin = IntMap::Bin { p2, l2, r2 };
+                join(p1, left_bin, p2, right_bin)
+            } else {
+                if p2 < p1 {
+                    IntMap::Bin { p1, union_bin_right(l1, p2, l2, r2), r1 }
+                } else {
+                    IntMap::Bin { p1, l1, union_bin_right(r1, p2, l2, r2) }
+                }
+            }
+        } else {
+            if m2 > m1 {
+                if (p1 ^ p2) > m2 {
+                    let left_bin = IntMap::Bin { p1, l1, r1 };
+                    let right_bin = IntMap::Bin { p2, l2, r2 };
+                    join(p1, left_bin, p2, right_bin)
+                } else {
+                    if p1 < p2 {
+                        IntMap::Bin { p2, union_bin_left(p1, l1, r1, l2), r2 }
+                    } else {
+                        IntMap::Bin { p2, l2, union_bin_left(p1, l1, r1, r2) }
+                    }
+                }
+            } else {
+                let left_bin = IntMap::Bin { p1, l1, r1 };
+                let right_bin = IntMap::Bin { p2, l2, r2 };
+                join(p1, left_bin, p2, right_bin)
+            }
+        }
+    }
+}
+
+fn union_with_bin_left<V>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    other : IntMap<V>,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    match other {
+        IntMap::Empty => IntMap::Bin { p1, l1, r1 },
+        IntMap::Tip(k, right_val) =>
+            insert_with_in_bin(p1, l1, r1, k, right_val, combine),
+        IntMap::Bin(p2, l2, r2) =>
+            union_bins_with(p1, l1, r1, p2, l2, r2, combine)
+    }
+}
+
+fn union_with_bin_right<V>(
+    map : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<V>,
+    r2 : IntMap<V>,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Bin { p2, l2, r2 },
+        IntMap::Tip(k, left_val) =>
+            insert_with_left_in_bin(p2, l2, r2, k, left_val, combine),
+        IntMap::Bin(p1, l1, r1) =>
+            union_bins_with(p1, l1, r1, p2, l2, r2, combine)
+    }
+}
+
+fn union_bins_with<V>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<V>,
+    r2 : IntMap<V>,
+    combine : (V, V) -> V
+) -> IntMap<V> {
+    if p1 == p2 {
+        IntMap::Bin {
+            p1,
+            l1.union_with(l2, combine),
+            r1.union_with(r2, combine)
+        }
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 > m2 {
+            if (p2 ^ p1) > m1 {
+                let left_bin = IntMap::Bin { p1, l1, r1 };
+                let right_bin = IntMap::Bin { p2, l2, r2 };
+                join(p1, left_bin, p2, right_bin)
+            } else {
+                if p2 < p1 {
+                    IntMap::Bin {
+                        p1,
+                        union_with_bin_right(l1, p2, l2, r2, combine),
+                        r1
+                    }
+                } else {
+                    IntMap::Bin {
+                        p1,
+                        l1,
+                        union_with_bin_right(r1, p2, l2, r2, combine)
+                    }
+                }
+            }
+        } else {
+            if m2 > m1 {
+                if (p1 ^ p2) > m2 {
+                    let left_bin = IntMap::Bin { p1, l1, r1 };
+                    let right_bin = IntMap::Bin { p2, l2, r2 };
+                    join(p1, left_bin, p2, right_bin)
+                } else {
+                    if p1 < p2 {
+                        IntMap::Bin {
+                            p2,
+                            union_with_bin_left(p1, l1, r1, l2, combine),
+                            r2
+                        }
+                    } else {
+                        IntMap::Bin {
+                            p2,
+                            l2,
+                            union_with_bin_left(p1, l1, r1, r2, combine)
+                        }
+                    }
+                }
+            } else {
+                let left_bin = IntMap::Bin { p1, l1, r1 };
+                let right_bin = IntMap::Bin { p2, l2, r2 };
+                join(p1, left_bin, p2, right_bin)
+            }
+        }
+    }
+}
+
+fn intersect_bin_left<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    other : IntMap<W>
+) -> IntMap<V> {
+    match other {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, _) => match get_in_bin(p1, l1, r1, k) {
+            Option::Some(v) => IntMap::Tip { k, v },
+            Option::None => IntMap::Empty
+        },
+        IntMap::Bin(p2, l2, r2) => intersect_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn intersect_bin_right<V, W>(
+    map : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, v) =>
+            if contains_in_bin(p2, l2, r2, k) {
+                IntMap::Tip { k, v }
+            } else {
+                IntMap::Empty
+            },
+        IntMap::Bin(p1, l1, r1) => intersect_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn intersect_bins<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>
+) -> IntMap<V> {
+    if p1 == p2 {
+        branch(p1, l1.intersection(l2), r1.intersection(r2))
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 > m2 {
+            if (p2 ^ p1) > m1 {
+                IntMap::Empty
+            } else {
+                if p2 < p1 {
+                    intersect_bin_right(l1, p2, l2, r2)
+                } else {
+                    intersect_bin_right(r1, p2, l2, r2)
+                }
+            }
+        } else {
+            if m2 > m1 {
+                if (p1 ^ p2) > m2 {
+                    IntMap::Empty
+                } else {
+                    if p1 < p2 {
+                        intersect_bin_left(p1, l1, r1, l2)
+                    } else {
+                        intersect_bin_left(p1, l1, r1, r2)
+                    }
+                }
+            } else {
+                IntMap::Empty
+            }
+        }
+    }
+}
+
+fn intersect_with_bin_left<V, W, U>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    other : IntMap<W>,
+    combine : (V, W) -> U
+) -> IntMap<U> {
+    match other {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, w) => match get_in_bin(p1, l1, r1, k) {
+            Option::Some(v) => IntMap::Tip { k, combine(v, w) },
+            Option::None => IntMap::Empty
+        },
+        IntMap::Bin(p2, l2, r2) =>
+            intersect_bins_with(p1, l1, r1, p2, l2, r2, combine)
+    }
+}
+
+fn intersect_with_bin_right<V, W, U>(
+    map : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>,
+    combine : (V, W) -> U
+) -> IntMap<U> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, v) => match get_in_bin(p2, l2, r2, k) {
+            Option::Some(w) => IntMap::Tip { k, combine(v, w) },
+            Option::None => IntMap::Empty
+        },
+        IntMap::Bin(p1, l1, r1) =>
+            intersect_bins_with(p1, l1, r1, p2, l2, r2, combine)
+    }
+}
+
+fn intersect_bins_with<V, W, U>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>,
+    combine : (V, W) -> U
+) -> IntMap<U> {
+    if p1 == p2 {
+        branch(
+            p1,
+            l1.intersection_with(l2, combine),
+            r1.intersection_with(r2, combine)
+        )
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 > m2 {
+            if (p2 ^ p1) > m1 {
+                IntMap::Empty
+            } else {
+                if p2 < p1 {
+                    intersect_with_bin_right(l1, p2, l2, r2, combine)
+                } else {
+                    intersect_with_bin_right(r1, p2, l2, r2, combine)
+                }
+            }
+        } else {
+            if m2 > m1 {
+                if (p1 ^ p2) > m2 {
+                    IntMap::Empty
+                } else {
+                    if p1 < p2 {
+                        intersect_with_bin_left(p1, l1, r1, l2, combine)
+                    } else {
+                        intersect_with_bin_left(p1, l1, r1, r2, combine)
+                    }
+                }
+            } else {
+                IntMap::Empty
+            }
+        }
+    }
+}
+
+fn diff_bin_left<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    other : IntMap<W>
+) -> IntMap<V> {
+    match other {
+        IntMap::Empty => IntMap::Bin { p1, l1, r1 },
+        IntMap::Tip(k, _) => remove_in_bin(p1, l1, r1, k),
+        IntMap::Bin(p2, l2, r2) => diff_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn diff_bin_right<V, W>(
+    map : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>
+) -> IntMap<V> {
+    match map {
+        IntMap::Empty => IntMap::Empty,
+        IntMap::Tip(k, v) =>
+            if contains_in_bin(p2, l2, r2, k) {
+                IntMap::Empty
+            } else {
+                IntMap::Tip { k, v }
+            },
+        IntMap::Bin(p1, l1, r1) => diff_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn diff_bins<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>
+) -> IntMap<V> {
+    if p1 == p2 {
+        branch(p1, l1.difference(l2), r1.difference(r2))
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 > m2 {
+            if (p2 ^ p1) > m1 {
+                IntMap::Bin { p1, l1, r1 }
+            } else {
+                if p2 < p1 {
+                    branch(p1, diff_bin_right(l1, p2, l2, r2), r1)
+                } else {
+                    branch(p1, l1, diff_bin_right(r1, p2, l2, r2))
+                }
+            }
+        } else {
+            if m2 > m1 {
+                if (p1 ^ p2) > m2 {
+                    IntMap::Bin { p1, l1, r1 }
+                } else {
+                    if p1 < p2 {
+                        diff_bin_left(p1, l1, r1, l2)
+                    } else {
+                        diff_bin_left(p1, l1, r1, r2)
+                    }
+                }
+            } else {
+                IntMap::Bin { p1, l1, r1 }
+            }
+        }
+    }
+}
+
+fn disjoint_bin_left<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    other : IntMap<W>
+) -> bool {
+    match other {
+        IntMap::Empty => true,
+        IntMap::Tip(k, _) => !contains_in_bin(p1, l1, r1, k),
+        IntMap::Bin(p2, l2, r2) => disjoint_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn disjoint_bin_right<V, W>(
+    map : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>
+) -> bool {
+    match map {
+        IntMap::Empty => true,
+        IntMap::Tip(k, _) => !contains_in_bin(p2, l2, r2, k),
+        IntMap::Bin(p1, l1, r1) => disjoint_bins(p1, l1, r1, p2, l2, r2)
+    }
+}
+
+fn disjoint_bins<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>
+) -> bool {
+    if p1 == p2 {
+        l1.is_disjoint(l2) && r1.is_disjoint(r2)
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 > m2 {
+            if (p2 ^ p1) > m1 {
+                true
+            } else {
+                if p2 < p1 {
+                    disjoint_bin_right(l1, p2, l2, r2)
+                } else {
+                    disjoint_bin_right(r1, p2, l2, r2)
+                }
+            }
+        } else {
+            if m2 > m1 {
+                if (p1 ^ p2) > m2 {
+                    true
+                } else {
+                    if p1 < p2 {
+                        disjoint_bin_left(p1, l1, r1, l2)
+                    } else {
+                        disjoint_bin_left(p1, l1, r1, r2)
+                    }
+                }
+            } else {
+                true
+            }
+        }
+    }
+}
+
+// 0: not a submap; 1: submap with equal key set; 2: proper submap.
+fn submap_state<V, W>(
+    left : IntMap<V>,
+    right : IntMap<W>,
+    predicate : (V, W) -> bool
+) -> u8 {
+    match left {
+        IntMap::Empty => match right {
+            IntMap::Empty => 1,
+            _ => 2
+        },
+        IntMap::Tip(k1, v1) => match right {
+            IntMap::Empty => 0,
+            IntMap::Tip(k2, v2) =>
+                if k1 == k2 && predicate(v1, v2) { 1 } else { 0 },
+            IntMap::Bin(p2, l2, r2) => match get_in_bin(p2, l2, r2, k1) {
+                Option::Some(v2) => if predicate(v1, v2) { 2 } else { 0 },
+                Option::None => 0
+            }
+        },
+        IntMap::Bin(p1, l1, r1) => match right {
+            IntMap::Bin(p2, l2, r2) =>
+                submap_bins(p1, l1, r1, p2, l2, r2, predicate),
+            _ => 0
+        }
+    }
+}
+
+fn submap_in_bin<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    right : IntMap<W>,
+    predicate : (V, W) -> bool
+) -> bool {
+    match right {
+        IntMap::Bin(p2, l2, r2) =>
+            submap_bins(p1, l1, r1, p2, l2, r2, predicate) != 0,
+        _ => false
+    }
+}
+
+fn submap_bins<V, W>(
+    p1 : u64,
+    l1 : IntMap<V>,
+    r1 : IntMap<V>,
+    p2 : u64,
+    l2 : IntMap<W>,
+    r2 : IntMap<W>,
+    predicate : (V, W) -> bool
+) -> u8 {
+    if p1 == p2 {
+        let sl = submap_state(l1, l2, predicate);
+        if sl == 0 {
+            0
+        } else {
+            let sr = submap_state(r1, r2, predicate);
+            if sr == 0 {
+                0
+            } else {
+                if sl == 2 || sr == 2 { 2 } else { 1 }
+            }
+        }
+    } else {
+        let m1 = p1 ^ (p1 - 1);
+        let m2 = p2 ^ (p2 - 1);
+        if m1 >= m2 || (p1 ^ p2) > m2 {
+            0
+        } else {
+            let ok = if p1 < p2 {
+                submap_in_bin(p1, l1, r1, l2, predicate)
+            } else {
+                submap_in_bin(p1, l1, r1, r2, predicate)
+            };
+            if ok { 2 } else { 0 }
+        }
+    }
+}
+
+fn equals_map<V : PartialEq>(left : IntMap<V>, right : IntMap<V>) -> bool {
+    match left {
+        IntMap::Empty => right.is_empty(),
+        IntMap::Tip(k1, v1) => match right {
+            IntMap::Tip(k2, v2) => k1 == k2 && v1 == v2,
+            _ => false
+        },
+        IntMap::Bin(p1, l1, r1) => match right {
+            IntMap::Bin(p2, l2, r2) =>
+                p1 == p2 && equals_map(l1, l2) && equals_map(r1, r2),
+            _ => false
+        }
+    }
+}
+
 impl<V> IntMap<V> {
-    /// Construct an empty map.
+    /// Creates an empty map. O(1).
     pub fn new() -> Self {
         IntMap::Empty
     }
 
-    /// Construct a map containing one entry.
+    /// Creates a one-entry map. O(1).
     pub fn singleton(key : i64, value : V) -> Self {
         IntMap::Tip { key, value }
     }
 
-    /// Whether the map contains no entries.
+    /// Removes every entry. O(1).
+    pub fn clear(self : Self) -> Self {
+        IntMap::Empty
+    }
+
+    /// Returns the number of entries. O(n).
+    pub fn len(self : Self) -> u64 {
+        len_acc(self, 0)
+    }
+
+    /// Returns true when the map contains no entries. O(1).
     pub fn is_empty(self : Self) -> bool {
         match self {
-            Empty => true,
+            IntMap::Empty => true,
             _ => false
         }
     }
 
-    /// Look up a key, returning None if it is absent.
+    /// Returns the number of nodes on the longest root-to-leaf path, zero for
+    /// an empty map and bounded by 65 for 64-bit keys. O(n).
+    pub fn depth(self : Self) -> u64 {
+        match self {
+            IntMap::Empty => 0,
+            IntMap::Tip(_, _) => 1,
+            IntMap::Bin(_, left, right) => {
+                let dl = left.depth();
+                let dr = right.depth();
+                1 + (if dl < dr { dr } else { dl })
+            }
+        }
+    }
+
+    /// Checks the Patricia-tree invariants: every branch has a non-zero
+    /// prefix, two non-empty children, strictly decreasing branching bits, and
+    /// keys within its dyadic prefix block. O(n); for tests and debugging.
+    pub fn valid(self : Self) -> bool {
+        match self {
+            IntMap::Empty => true,
+            IntMap::Tip(_, _) => true,
+            other => valid_in(other, 0, 18446744073709551615)
+        }
+    }
+
+    /// Look up a key, returning `None` if it is absent. O(min(n, 64)).
     pub fn get(self : Self, key : i64) -> Option<V> {
-        match self {
-            Empty => Option::None,
-            Tip(k, value) => if k == key { Option::Some { value } } else { Option::None },
-            Bin(prefix, left, right) => if ordered(key) < prefix {
-                left.get(key)
-            } else {
-                right.get(key)
-            }
-        }
+        get_at(self, key, (key as u64) ^ (1 << 63))
     }
 
-    /// Look up a key without constructing an Option; return default if absent.
+    /// Look up a key without constructing an `Option`; return `default` if
+    /// absent. O(min(n, 64)).
     pub fn get_or(self : Self, key : i64, default : V) -> V {
-        match self {
-            Empty => default,
-            Tip(k, value) => if k == key { value } else { default },
-            Bin(prefix, left, right) => if ordered(key) < prefix {
-                left.get_or(key, default)
-            } else {
-                right.get_or(key, default)
-            }
-        }
+        get_or_at(self, key, (key as u64) ^ (1 << 63), default)
     }
 
-    /// Whether the map contains the key.
+    /// Returns the stored key and value for `key`, or `None`. O(min(n, 64)).
+    pub fn get_entry(self : Self, key : i64) -> Option<Entry<V>> {
+        get_entry_at(self, key, (key as u64) ^ (1 << 63))
+    }
+
+    /// Returns true if an entry exists for `key`. O(min(n, 64)).
     pub fn contains_key(self : Self, key : i64) -> bool {
-        match self {
-            Empty => false,
-            Tip(k, _) => k == key,
-            Bin(prefix, left, right) => if ordered(key) < prefix {
-                left.contains_key(key)
-            } else {
-                right.contains_key(key)
-            }
-        }
+        contains_at(self, key, (key as u64) ^ (1 << 63))
     }
 
-    /// Insert a key, replacing its value if it is already present.
+    /// Adds or replaces the entry for `key`. O(min(n, 64)).
     pub fn insert(self : Self, key : i64, value : V) -> Self {
-        match self {
-            Empty => IntMap::Tip { key, value },
-            Tip(k, previous) => if key == k {
-                IntMap::Tip { key, value }
-            } else {
-                join(ordered(key), IntMap::Tip { key, value }, ordered(k), IntMap::Tip { k, previous })
-            },
-            Bin(prefix, left, right) => {
-                let k = ordered(key);
-                if outside(k, prefix) {
-                    join(k, IntMap::Tip { key, value }, prefix, IntMap::Bin { prefix, left, right })
-                } else {
-                    if k < prefix {
-                        IntMap::Bin { prefix, left.insert(key, value), right }
-                    } else {
-                        IntMap::Bin { prefix, left, right.insert(key, value) }
-                    }
-                }
-            }
-        }
+        insert_at(self, key, (key as u64) ^ (1 << 63), value)
     }
 
-    /// Remove a key. An absent key leaves the entries unchanged.
+    /// Adds or replaces an entry and reports the previous value. O(min(n, 64)).
+    pub fn insert_result(self : Self, key : i64, value : V) -> InsertResult<V> {
+        insert_result_at(self, key, (key as u64) ^ (1 << 63), value)
+    }
+
+    /// Combines an existing value with `value`, or inserts `value` when the
+    /// key is absent. `combine` receives the existing value first.
+    /// O(min(n, 64)).
+    pub fn insert_with(
+        self : Self,
+        key : i64,
+        value : V,
+        combine : (V, V) -> V
+    ) -> Self {
+        insert_with_at(self, key, (key as u64) ^ (1 << 63), value, combine)
+    }
+
+    /// Removes the entry for `key` when present. O(min(n, 64)).
     pub fn remove(self : Self, key : i64) -> Self {
+        remove_at(self, key, (key as u64) ^ (1 << 63))
+    }
+
+    /// Removes and returns the stored entry for `key`. O(min(n, 64)).
+    pub fn remove_entry(self : Self, key : i64) -> RemoveResult<V> {
+        remove_entry_at(self, key, (key as u64) ^ (1 << 63))
+    }
+
+    /// Removes and returns the entry with the least key. O(min(n, 64)).
+    pub fn pop_min(self : Self) -> PopResult<V> {
         match self {
-            Empty => IntMap::Empty,
-            Tip(k, value) => if key == k { IntMap::Empty } else { IntMap::Tip { k, value } },
-            Bin(prefix, left, right) => {
-                let k = ordered(key);
-                if outside(k, prefix) {
-                    IntMap::Bin { prefix, left, right }
-                } else {
-                    if k < prefix {
-                        branch(prefix, left.remove(key), right)
-                    } else {
-                        branch(prefix, left, right.remove(key))
-                    }
+            IntMap::Empty => PopResult::Empty { IntMap::Empty },
+            IntMap::Tip(key, value) =>
+                PopResult::Popped { Entry { key, value }, IntMap::Empty },
+            IntMap::Bin(prefix, left, right) => {
+                let popped = pop_min_nonempty(left);
+                PopResult::Popped {
+                    popped.entry,
+                    branch(prefix, popped.rest, right)
                 }
             }
         }
     }
 
-    /// Fold entries in ascending signed key order. Takes O(n) time.
+    /// Removes and returns the entry with the greatest key. O(min(n, 64)).
+    pub fn pop_max(self : Self) -> PopResult<V> {
+        match self {
+            IntMap::Empty => PopResult::Empty { IntMap::Empty },
+            IntMap::Tip(key, value) =>
+                PopResult::Popped { Entry { key, value }, IntMap::Empty },
+            IntMap::Bin(prefix, left, right) => {
+                let popped = pop_max_nonempty(right);
+                PopResult::Popped {
+                    popped.entry,
+                    branch(prefix, left, popped.rest)
+                }
+            }
+        }
+    }
+
+    /// Applies `f` to an existing value, leaving a missing key unchanged.
+    /// O(min(n, 64)).
+    pub fn adjust(self : Self, key : i64, f : V -> V) -> Self {
+        adjust_at(self, key, (key as u64) ^ (1 << 63), f)
+    }
+
+    /// Updates an existing value; returning `None` from `f` removes the entry.
+    /// A missing key is left unchanged. O(min(n, 64)).
+    pub fn update(self : Self, key : i64, f : V -> Option<V>) -> Self {
+        update_at(self, key, (key as u64) ^ (1 << 63), f)
+    }
+
+    /// Alters the optional value for `key`; `Some` inserts or replaces and
+    /// `None` removes. O(min(n, 64)).
+    pub fn alter(self : Self, key : i64, f : Option<V> -> Option<V>) -> Self {
+        alter_at(self, key, (key as u64) ^ (1 << 63), f)
+    }
+
+    /// Returns the entry with the least key. O(min(n, 64)).
+    pub fn min(self : Self) -> Option<Entry<V>> {
+        match self {
+            IntMap::Empty => Option::None,
+            IntMap::Tip(key, value) => Option::Some { Entry { key, value } },
+            IntMap::Bin(_, left, _) => Option::Some { min_nonempty(left) }
+        }
+    }
+
+    /// Returns the entry with the greatest key. O(min(n, 64)).
+    pub fn max(self : Self) -> Option<Entry<V>> {
+        match self {
+            IntMap::Empty => Option::None,
+            IntMap::Tip(key, value) => Option::Some { Entry { key, value } },
+            IntMap::Bin(_, _, right) => Option::Some { max_nonempty(right) }
+        }
+    }
+
+    /// Returns the entry whose key is greatest among those at most `key`.
+    /// O(min(n, 64)).
+    pub fn floor_entry(self : Self, key : i64) -> Option<Entry<V>> {
+        floor_entry_map(self, key, (key as u64) ^ (1 << 63), true)
+    }
+
+    /// Returns the entry whose key is least among those at least `key`.
+    /// O(min(n, 64)).
+    pub fn ceiling_entry(self : Self, key : i64) -> Option<Entry<V>> {
+        ceil_entry_map(self, key, (key as u64) ^ (1 << 63), true)
+    }
+
+    /// Returns the entry whose key is greatest among those strictly below
+    /// `key`. O(min(n, 64)).
+    pub fn predecessor_entry(self : Self, key : i64) -> Option<Entry<V>> {
+        floor_entry_map(self, key, (key as u64) ^ (1 << 63), false)
+    }
+
+    /// Returns the entry whose key is least among those strictly above `key`.
+    /// O(min(n, 64)).
+    pub fn successor_entry(self : Self, key : i64) -> Option<Entry<V>> {
+        ceil_entry_map(self, key, (key as u64) ^ (1 << 63), false)
+    }
+
+    /// Returns the entries keyed by `[low, high)` in ascending signed key
+    /// order, skipping subtrees outside the window. O(min(n, 64) + k).
+    pub fn range_to_list(self : Self, low : i64, high : i64) -> List<Entry<V>> {
+        if !(low < high) {
+            List::Nil
+        } else {
+            range_acc(
+                self,
+                (low as u64) ^ (1 << 63),
+                (high as u64) ^ (1 << 63),
+                List::Nil
+            )
+        }
+    }
+
+    /// Returns the entries keyed by `[low, high)` as a map, sharing maximal
+    /// dyadic subtrees contained in the window. O(min(n, 64)).
+    pub fn range(self : Self, low : i64, high : i64) -> Self {
+        if !(low < high) {
+            IntMap::Empty
+        } else {
+            range_tree(
+                self,
+                (low as u64) ^ (1 << 63),
+                (high as u64) ^ (1 << 63)
+            )
+        }
+    }
+
+    /// Returns the entries in ascending signed key order. O(n).
+    pub fn to_list(self : Self) -> List<Entry<V>> {
+        to_list_acc(self, List::Nil)
+    }
+
+    /// Returns the entries in descending signed key order. O(n).
+    pub fn to_list_desc(self : Self) -> List<Entry<V>> {
+        to_list_desc_acc(self, List::Nil)
+    }
+
+    /// Returns the keys in ascending signed order. O(n).
+    pub fn keys(self : Self) -> List<i64> {
+        keys_acc(self, List::Nil)
+    }
+
+    /// Returns the values ordered by their keys. O(n).
+    pub fn values(self : Self) -> List<V> {
+        values_acc(self, List::Nil)
+    }
+
+    /// Folds the entries in ascending signed key order. O(n).
     pub fn fold_left<A>(self : Self, initial : A, f : (A, i64, V) -> A) -> A {
         match self {
-            Empty => initial,
-            Tip(key, value) => f(initial, key, value),
-            Bin(_, left, right) => right.fold_left(left.fold_left(initial, f), f)
+            IntMap::Empty => initial,
+            IntMap::Tip(key, value) => f(initial, key, value),
+            IntMap::Bin(_, left, right) =>
+                right.fold_left(left.fold_left(initial, f), f)
         }
     }
+
+    /// Folds the entries in descending signed key order, each entry seeing the
+    /// result for every greater key. O(n).
+    pub fn fold_right<A>(self : Self, initial : A, f : (i64, V, A) -> A) -> A {
+        match self {
+            IntMap::Empty => initial,
+            IntMap::Tip(key, value) => f(key, value, initial),
+            IntMap::Bin(_, left, right) =>
+                left.fold_right(right.fold_right(initial, f), f)
+        }
+    }
+
+    /// Creates a map from entries, later duplicates replacing earlier ones.
+    /// O(n · min(n, 64)).
+    pub fn from_list(values : List<Entry<V>>) -> Self {
+        from_list_impl(values, IntMap::Empty)
+    }
+
+    /// Transforms every value while retaining its key and tree structure. O(n).
+    pub fn map_values<U>(self : Self, f : V -> U) -> IntMap<U> {
+        match self {
+            IntMap::Empty => IntMap::Empty,
+            IntMap::Tip(key, value) => IntMap::Tip { key, f(value) },
+            IntMap::Bin(prefix, left, right) =>
+                IntMap::Bin { prefix, left.map_values(f), right.map_values(f) }
+        }
+    }
+
+    /// Transforms entries into an `IntMap` with a possibly different value
+    /// type. Later transformed duplicates in ascending key order replace
+    /// earlier values. O(n · min(n, 64)).
+    pub fn map_entries<U>(self : Self, f : (i64, V) -> Entry<U>) -> IntMap<U> {
+        let initial : IntMap<U> = IntMap::Empty;
+        self.fold_left(initial, |map, key, value| {
+            let entry = f(key, value);
+            map.insert(entry.key, entry.value)
+        })
+    }
+
+    /// Transforms every key while retaining its value. Later transformed
+    /// duplicates in ascending key order replace earlier values.
+    /// O(n · min(n, 64)).
+    pub fn map_keys(self : Self, f : i64 -> i64) -> Self {
+        self.map_entries(|key, value| Entry { key: f(key), value })
+    }
+
+    /// Keeps entries for which `predicate` returns true. O(n).
+    pub fn filter(self : Self, predicate : (i64, V) -> bool) -> Self {
+        match self {
+            IntMap::Empty => IntMap::Empty,
+            IntMap::Tip(key, value) =>
+                if predicate(key, value) {
+                    IntMap::Tip { key, value }
+                } else {
+                    IntMap::Empty
+                },
+            IntMap::Bin(prefix, left, right) =>
+                branch(prefix, left.filter(predicate), right.filter(predicate))
+        }
+    }
+
+    /// Transforms retained values and discards entries mapped to `None`. O(n).
+    pub fn filter_map<U>(self : Self, f : (i64, V) -> Option<U>) -> IntMap<U> {
+        match self {
+            IntMap::Empty => IntMap::Empty,
+            IntMap::Tip(key, value) => match f(key, value) {
+                Option::Some(next) => IntMap::Tip { key, next },
+                Option::None => IntMap::Empty
+            },
+            IntMap::Bin(prefix, left, right) =>
+                branch(prefix, left.filter_map(f), right.filter_map(f))
+        }
+    }
+
+    /// Counts entries satisfying `predicate`. O(n).
+    pub fn count_if(self : Self, predicate : (i64, V) -> bool) -> u64 {
+        self.fold_left(0, |count, key, value| {
+            if predicate(key, value) { count + 1 } else { count }
+        })
+    }
+
+    /// Returns true if any entry satisfies `predicate`, stopping at the first
+    /// match in ascending key order. O(n) worst case.
+    pub fn any(self : Self, predicate : (i64, V) -> bool) -> bool {
+        match self {
+            IntMap::Empty => false,
+            IntMap::Tip(key, value) => predicate(key, value),
+            IntMap::Bin(_, left, right) =>
+                left.any(predicate) || right.any(predicate)
+        }
+    }
+
+    /// Returns true if every entry satisfies `predicate`, stopping at the
+    /// first counterexample in ascending key order. O(n) worst case.
+    pub fn all(self : Self, predicate : (i64, V) -> bool) -> bool {
+        match self {
+            IntMap::Empty => true,
+            IntMap::Tip(key, value) => predicate(key, value),
+            IntMap::Bin(_, left, right) =>
+                left.all(predicate) && right.all(predicate)
+        }
+    }
+
+    /// Returns the matching entry with the least key, or `None`. O(n) worst
+    /// case.
+    pub fn find(self : Self, predicate : (i64, V) -> bool) -> Option<Entry<V>> {
+        match self {
+            IntMap::Empty => Option::None,
+            IntMap::Tip(key, value) =>
+                if predicate(key, value) {
+                    Option::Some { Entry { key, value } }
+                } else {
+                    Option::None
+                },
+            IntMap::Bin(_, left, right) => {
+                let found = left.find(predicate);
+                match found {
+                    Option::Some(_) => found,
+                    Option::None => right.find(predicate)
+                }
+            }
+        }
+    }
+
+    /// Inserts every entry from `other`; values from `other` win on duplicate
+    /// keys. O(n + m).
+    pub fn union(self : Self, other : Self) -> Self {
+        match other {
+            IntMap::Empty => self,
+            IntMap::Tip(key, value) => self.insert(key, value),
+            IntMap::Bin(p2, l2, r2) => union_bin_right(self, p2, l2, r2)
+        }
+    }
+
+    /// Unions two maps and combines duplicate values, receiving the value from
+    /// this map first and `other` second. O(n + m).
+    pub fn union_with(self : Self, other : Self, combine : (V, V) -> V) -> Self {
+        match other {
+            IntMap::Empty => self,
+            IntMap::Tip(key, value) => self.insert_with(key, value, combine),
+            IntMap::Bin(p2, l2, r2) =>
+                union_with_bin_right(self, p2, l2, r2, combine)
+        }
+    }
+
+    /// Keeps entries from this map whose keys also occur in `other`, with this
+    /// map's values. O(n + m).
+    pub fn intersection<W>(self : Self, other : IntMap<W>) -> Self {
+        match self {
+            IntMap::Empty => IntMap::Empty,
+            IntMap::Tip(key, value) =>
+                if other.contains_key(key) {
+                    IntMap::Tip { key, value }
+                } else {
+                    IntMap::Empty
+                },
+            IntMap::Bin(p1, l1, r1) => intersect_bin_left(p1, l1, r1, other)
+        }
+    }
+
+    /// Keeps shared keys and combines their values. O(n + m).
+    pub fn intersection_with<W, U>(
+        self : Self,
+        other : IntMap<W>,
+        combine : (V, W) -> U
+    ) -> IntMap<U> {
+        match self {
+            IntMap::Empty => IntMap::Empty,
+            IntMap::Tip(key, value) => match other.get(key) {
+                Option::Some(right) => IntMap::Tip { key, combine(value, right) },
+                Option::None => IntMap::Empty
+            },
+            IntMap::Bin(p1, l1, r1) =>
+                intersect_with_bin_left(p1, l1, r1, other, combine)
+        }
+    }
+
+    /// Removes every key occurring in `other`. O(n + m).
+    pub fn difference<W>(self : Self, other : IntMap<W>) -> Self {
+        match other {
+            IntMap::Empty => self,
+            IntMap::Tip(key, _) => self.remove(key),
+            IntMap::Bin(p2, l2, r2) => diff_bin_right(self, p2, l2, r2)
+        }
+    }
+
+    /// Returns true when the maps share no key. O(min(n, m)).
+    pub fn is_disjoint<W>(self : Self, other : IntMap<W>) -> bool {
+        match self {
+            IntMap::Empty => true,
+            IntMap::Tip(key, _) => !other.contains_key(key),
+            IntMap::Bin(p1, l1, r1) => disjoint_bin_left(p1, l1, r1, other)
+        }
+    }
+
+    /// Returns true when every entry in this map has a matching key and value
+    /// accepted by `predicate` in `other`. O(n + m).
+    pub fn is_submap_by<W>(
+        self : Self,
+        other : IntMap<W>,
+        predicate : (V, W) -> bool
+    ) -> bool {
+        submap_state(self, other, predicate) != 0
+    }
+
+    /// Returns true when this map has strictly fewer keys than `other` and
+    /// every entry has a matching key whose two values are accepted by
+    /// `predicate`. O(n + m).
+    pub fn is_proper_submap_by<W>(
+        self : Self,
+        other : IntMap<W>,
+        predicate : (V, W) -> bool
+    ) -> bool {
+        submap_state(self, other, predicate) == 2
+    }
 }
+
+impl<V : PartialEq> IntMap<V> {
+    /// Returns true when both maps contain equal values for the exact same
+    /// keys. O(min(n, m)).
+    pub fn equals(self : Self, other : Self) -> bool {
+        equals_map(self, other)
+    }
+
+    /// Returns true when every entry in this map also occurs in `other`.
+    /// O(n + m).
+    pub fn is_submap(self : Self, other : Self) -> bool {
+        self.is_submap_by(other, |left, right| left == right)
+    }
+
+    /// Returns true when this map is a strict submap of `other`. O(n + m).
+    pub fn is_proper_submap(self : Self, other : Self) -> bool {
+        self.is_proper_submap_by(other, |left, right| left == right)
+    }
+
+    /// Returns true if any entry has a value equal to `value`. O(n).
+    pub fn contains_value(self : Self, value : V) -> bool {
+        self.any(|ignored_key, stored| stored == value)
+    }
+}
+
+impl<V : PartialEq> PartialEq for IntMap<V> {
+    fn eq(self : Self, other : Self) -> bool {
+        self.equals(other)
+    }
+}
+
+impl<V : Eq> Eq for IntMap<V> {}
