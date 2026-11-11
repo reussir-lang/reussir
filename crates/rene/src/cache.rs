@@ -256,7 +256,7 @@ mod tests {
                 ..base.clone()
             },
             Profile {
-                variant_encoding: Some("immortal-nullary".into()),
+                nullary_variant_encoding: Some("arch-independent".into()),
                 ..base.clone()
             },
         ] {

@@ -256,7 +256,7 @@ pub(crate) struct Cli {
     /// is a pure runtime mechanism; UBSan checks are emitted by the C/C++
     /// frontend, not an attribute-driven LLVM pass). The shadow-based kinds
     /// (`address`/`memory`/`thread`) require an explicit untagged
-    /// `--variant-encoding` (`immortal-nullary` or `boxed`): a
+    /// `--nullary-variant-encoding` (`arch-independent` or `boxed`): a
     /// TBI-tagged immediate's top byte breaks shadow-address arithmetic.
     #[arg(long = "sanitizer", value_enum)]
     pub(crate) sanitizer: Vec<SanitizerCli>,
@@ -292,13 +292,18 @@ pub(crate) struct Cli {
     #[arg(short = 'g', long = "debug")]
     pub(crate) debug: bool,
 
-    /// Variant representation: `auto` selects TBI on aarch64 and
-    /// `immortal-nullary` elsewhere. `tbi` uses pointer top-byte tags;
-    /// `immortal-nullary` represents nullary constructors by immortal
-    /// dummy-box addresses; `boxed` heap-boxes every constructor.
-    #[arg(long = "variant-encoding", value_enum,
-          default_value_t = VariantEncoding::Auto)]
-    pub(crate) variant_encoding: VariantEncoding,
+    /// How nullary enum variants are represented. `arch-dependent` picks
+    /// the best encoding the target supports: on aarch64 the TBI form (top
+    /// byte = tag + 1, low bits = a per-tag dummy box; hardware top-byte
+    /// ignore masks stray dereferences, and foreign code may decode the tag
+    /// from the pointer without dereferencing); elsewhere it falls back to
+    /// the arch-independent form. `arch-independent` uses no TBI/LAM-style
+    /// pointer tricks on any target: the immediate is the dummy box address
+    /// itself, with an immortal refcount — foreign code sees a
+    /// layout-compatible box. `boxed` keeps the legacy heap-boxed layout.
+    #[arg(long = "nullary-variant-encoding", value_enum,
+          default_value_t = VariantEncoding::ArchDependent)]
+    pub(crate) nullary_variant_encoding: VariantEncoding,
 
     /// Split codegen into this many units. Each function's body is emitted in
     /// exactly one unit (a stable hash of its mangled symbol picks which);

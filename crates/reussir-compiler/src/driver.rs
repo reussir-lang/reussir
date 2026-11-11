@@ -237,20 +237,22 @@ fn run(cli: &Cli) -> Result<bool, String> {
     // arithmetically from the pointer; a TBI-tagged nullary immediate's top
     // byte — which the hardware ignores on the data access — bleeds into
     // that arithmetic and lands the shadow lookup in unmapped space. The
-    // `auto` default may resolve to the TBI encoding, so require
+    // `arch-dependent` default may resolve to the TBI encoding, so require
     // an explicit untagged choice rather than silently downgrading.
     if cli.sanitizer.iter().any(|s| {
         matches!(
             s,
             SanitizerCli::Address | SanitizerCli::Memory | SanitizerCli::Thread
         )
-    }) && matches!(
-        cli.variant_encoding,
-        VariantEncoding::Auto | VariantEncoding::Tbi
-    ) {
-        return Err("--sanitizer address/memory/thread requires \
-             --variant-encoding immortal-nullary or boxed"
-            .into());
+    }) && cli.nullary_variant_encoding == VariantEncoding::ArchDependent
+    {
+        return Err(
+            "--sanitizer address/memory/thread cannot be combined with the (default) \
+             `arch-dependent` nullary-variant encoding: on aarch64 it resolves to \
+             TBI-tagged immediates, whose tag byte breaks the sanitizers' shadow-address \
+             arithmetic; pass --nullary-variant-encoding arch-independent (or boxed)"
+                .into(),
+        );
     }
     if cli.codegen_units > 1 && output.as_os_str() == "-" {
         return Err(

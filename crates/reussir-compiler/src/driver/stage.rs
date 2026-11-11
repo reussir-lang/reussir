@@ -1,12 +1,12 @@
 //! The stage chain and the emission knobs riding on it: where the pipeline
 //! can be entered and left, and the value-enum flavors of the codegen options
 //! (`--lto`, `--runtime-linkage`, `--sanitizer`,
-//! `--variant-encoding`).
+//! `--nullary-variant-encoding`).
 
 use std::path::Path;
 
 use reussir_backend::llvm::LtoMode;
-use reussir_backend::pipeline::VariantEncoding as BackendVariantEncoding;
+use reussir_backend::pipeline::NullaryVariantEncoding;
 use reussir_codegen::lower::Sanitizer;
 
 use crate::OutputKind;
@@ -118,27 +118,33 @@ impl From<SanitizerCli> for Sanitizer {
     }
 }
 
-/// CLI encoding selection, including automatic target-based selection.
+/// CLI surface for [`NullaryVariantEncoding`], with the extra
+/// `arch-dependent` value that resolves per target triple.
 #[derive(Clone, Copy, PartialEq, Eq, palc::ValueEnum)]
 pub(crate) enum VariantEncoding {
-    /// TBI on aarch64, immortal nullary constructors elsewhere.
-    Auto,
-    /// Encode constructor tags in the pointer's top byte (aarch64).
-    Tbi,
-    /// Represent nullary constructors by immortal dummy-box addresses.
-    ImmortalNullary,
-    /// Heap-box every constructor.
+    /// Best encoding the target supports: TBI on aarch64 (LAM and friends
+    /// may follow), the arch-independent form elsewhere.
+    ArchDependent,
+    /// The immortal dummy-box encoding — no TBI/LAM pointer tricks, works
+    /// on any target (including wasm32).
+    ArchIndependent,
+    /// Legacy heap-boxed layout; no immediates.
     Boxed,
 }
 
 impl VariantEncoding {
-    pub(crate) fn resolve(self, triple: &str) -> Result<BackendVariantEncoding, String> {
+    /// Resolves the CLI choice against the target `triple`.
+    pub(crate) fn resolve(self, triple: &str) -> NullaryVariantEncoding {
         match self {
-            Self::Auto if triple.starts_with("aarch64") => Ok(BackendVariantEncoding::Tbi),
-            Self::Auto | Self::ImmortalNullary => Ok(BackendVariantEncoding::ImmortalNullary),
-            Self::Tbi if triple.starts_with("aarch64") => Ok(BackendVariantEncoding::Tbi),
-            Self::Tbi => Err("--variant-encoding tbi requires an aarch64 target".into()),
-            Self::Boxed => Ok(BackendVariantEncoding::Boxed),
+            VariantEncoding::ArchDependent => {
+                if triple.starts_with("aarch64") {
+                    NullaryVariantEncoding::Tbi
+                } else {
+                    NullaryVariantEncoding::Immortal
+                }
+            }
+            VariantEncoding::ArchIndependent => NullaryVariantEncoding::Immortal,
+            VariantEncoding::Boxed => NullaryVariantEncoding::Boxed,
         }
     }
 }

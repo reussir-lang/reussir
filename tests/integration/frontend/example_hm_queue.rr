@@ -14,7 +14,7 @@
 // RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive --reuse-across-call
 // RUN: %cc %t.opt.o %S/example_hm_queue.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.opt.exe
-// RUN: %rrc %s -o %t.boxed.o --relocation-mode pic -Oaggressive --variant-encoding boxed
+// RUN: %rrc %s -o %t.boxed.o --relocation-mode pic -Oaggressive --nullary-variant-encoding boxed
 // RUN: %cc %t.boxed.o %S/example_hm_queue.c -o %t.boxed.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.boxed.exe
 

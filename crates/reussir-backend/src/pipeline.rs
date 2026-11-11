@@ -69,9 +69,9 @@ impl OptLevel {
     }
 }
 
-/// How shared rc-boxed enum variants are represented.
+/// How nullary variants of shared rc-boxed enums are represented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VariantEncoding {
+pub enum NullaryVariantEncoding {
     /// Legacy layout: every construction heap-allocates a refcounted box.
     Boxed,
     /// Unboxed immediate whose top byte is `tag + 1` and whose low bits
@@ -83,7 +83,7 @@ pub enum VariantEncoding {
     /// immortal refcount recognized by magnitude. No architectural
     /// dependency (works on any target, including wasm32); foreign code
     /// sees a layout-compatible box.
-    ImmortalNullary,
+    Immortal,
 }
 
 /// A named interception point in the lowering pipeline where user-supplied
@@ -200,10 +200,10 @@ pub struct LoweringOptions {
     /// Emit structured decisions from the token-reuse pass. A driver enabling
     /// this must install a remark streamer on the MLIR context.
     pub emit_token_reuse_remarks: bool,
-    /// How shared rc-boxed enum variants are encoded. `rrc`
-    /// exposes this as `--variant-encoding`; embedders (REPL/JIT,
-    /// tests) default to [`VariantEncoding::Boxed`].
-    pub variant_encoding: VariantEncoding,
+    /// How nullary variants of shared rc-boxed enums are encoded. `rrc`
+    /// exposes this as `--nullary-variant-encoding`; embedders (REPL/JIT,
+    /// tests) default to [`NullaryVariantEncoding::Boxed`].
+    pub nullary_variant_encoding: NullaryVariantEncoding,
     /// Run the invariant-group analysis pass.
     pub enable_invariant_analysis: bool,
     /// Lay out compound record members in packed physical order (descending
@@ -246,7 +246,7 @@ impl Default for LoweringOptions {
             // Boxed by default: only target-aware drivers (rrc) pick an
             // immediate encoding, so embedders (REPL/JIT, tests) keep the
             // boxed layout untouched.
-            variant_encoding: VariantEncoding::Boxed,
+            nullary_variant_encoding: NullaryVariantEncoding::Boxed,
             // Off by default, mirroring the C++ `createLoweringPipeline`
             // (`enableInvariantAnalysis = false`).
             enable_invariant_analysis: false,
@@ -368,7 +368,7 @@ pub fn run_lowering_pipeline(
         borrow_analysis = options.borrow_analysis,
         emit_token_reuse_remarks = options.emit_token_reuse_remarks,
         enable_invariant_analysis = options.enable_invariant_analysis,
-        variant_encoding = ?options.variant_encoding,
+        nullary_variant_encoding = ?options.nullary_variant_encoding,
         pack_record_members = options.pack_record_members,
         instrument_nonlinear_ffi = options.instrument_nonlinear_ffi,
         inline_transform,
@@ -427,9 +427,9 @@ pub fn run_lowering_pipeline(
         // immediates. Must run before any uniqueness/token pass so no
         // provenance or allocation token is ever attached to a rewritten
         // construction.
-        if options.variant_encoding != VariantEncoding::Boxed => {
+        if options.nullary_variant_encoding != NullaryVariantEncoding::Boxed => {
             module: sys::reussirCreateSpecialPointerTagPass(
-                options.variant_encoding == VariantEncoding::ImmortalNullary,
+                options.nullary_variant_encoding == NullaryVariantEncoding::Immortal,
             );
         }
 

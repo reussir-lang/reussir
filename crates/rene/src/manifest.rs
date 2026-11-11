@@ -193,8 +193,8 @@ pub struct Profile {
     pub sancov: Vec<String>,
     /// `rrc --fuzzer` when true.
     pub fuzzer: Option<bool>,
-    /// `rrc --variant-encoding`.
-    pub variant_encoding: Option<String>,
+    /// `rrc --nullary-variant-encoding`.
+    pub nullary_variant_encoding: Option<String>,
     /// Default machine target when `rene build --target` is absent.
     pub default_target_triple: Option<String>,
     /// `rrc --target-cpu`.
@@ -238,7 +238,7 @@ impl Profile {
             codegen_units,
             runtime_linkage,
             linker,
-            variant_encoding,
+            nullary_variant_encoding,
             default_target_triple,
             target_cpu,
             target_features,
@@ -515,7 +515,7 @@ mod tests {
                   link_args = ["-lm"],
                   default_target_triple = "wasm32-unknown-unknown",
                 },
-                asan = { sanitizers = ["address"], variant_encoding = "immortal-nullary" },
+                asan = { sanitizers = ["address"], nullary_variant_encoding = "arch-independent" },
               },
             }
             "#,
