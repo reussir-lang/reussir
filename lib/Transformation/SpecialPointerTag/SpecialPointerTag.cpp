@@ -33,8 +33,7 @@ namespace reussir {
 // observable reference count — and stamps the module with
 // `kSpecialPtrTagAttr` carrying the chosen encoding, so the LLVM lowering
 // steers the few stores that must not reach an immediate's dummy box (see
-// BasicOpsLowering's special-pointer-tag notes; the hot reads need no guard
-// at all).
+// BasicOpsLowering's special-pointer-tag notes).
 //
 // Encodings: `tbi` puts `tag + 1` in the pointer's top byte (hard-depends
 // on the hardware ignoring the top byte on data accesses — aarch64);

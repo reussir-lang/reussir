@@ -97,11 +97,9 @@ namespace {
 //===----------------------------------------------------------------------===//
 // When `reussir-special-pointer-tag` ran (module carries kSpecialPtrTagAttr),
 // a value of a taggable shared rc<variant> type may be an unboxed immediate
-// pointing at a per-tag *dummy box* — a well-formed shared box header the
-// hot accesses land in, so refcount loads/increments, uniqueness reads, and
-// even the variant-tag read through a tagged value lower exactly as without
-// the scheme: plain loads, zero guards. The attribute's value selects one of
-// two encodings, differing only in how the cold guards recognize immediates:
+// pointing at a per-tag dummy box with a well-formed shared header.
+// Refcount accesses can use that header; TBI tag reads decode the pointer's
+// top byte. The attribute selects one of two encodings:
 //   * `tbi` (aarch64): top byte = tag + 1, low bits = the dummy address;
 //     the hardware ignores the top byte on data accesses. The dummy count is
 //     initialized to 2 and guards test the pointer's top byte. Foreign code
@@ -1998,13 +1996,9 @@ struct ReussirRcTaggedConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRcTaggedOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // The immediate is the per-tag dummy box's address; refcount,
-    // uniqueness, and tag accesses through the value hit the dummy box
-    // unguarded and observe a well-formed shared header. The TBI encoding
-    // additionally sets the top byte to `tag + 1` (masked by the hardware
-    // on data accesses) so foreign code and future inhabited-variant
-    // tagging can decode from the pointer; the immortal encoding uses the
-    // plain address.
+    // Refcount accesses use the dummy box's shared header. TBI additionally
+    // stamps `tag + 1` into the top byte for tag reads; the immortal
+    // encoding uses the plain dummy address.
     mlir::Location loc = op.getLoc();
     auto indexTy = llvm::cast<mlir::IntegerType>(
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter())
