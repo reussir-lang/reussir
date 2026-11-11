@@ -17,6 +17,19 @@
 // CHECK-DAG: @_RNvC17REUSSIR_TAG_DUMMY43JTSaUNTZpqgb8a0JnRra5ebq8TvOJDFg1m5Smu4IYVX = linkonce_odr global [2 x i32] [i32 2, i32 1]
 module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<8> : vector<2xi64>>> } {
 
+  // A known nullary tag needs only the top byte, not its dummy box.
+  // CHECK-LABEL: define i1 @is_nil(ptr %0)
+  // CHECK-NOT: load
+  // CHECK-NOT: REUSSIR_TAG_DUMMY
+  // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
+  // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
+  // CHECK: %[[ISNIL:.+]] = icmp eq i64 %[[TOP]], 2
+  // CHECK-NEXT: ret i1 %[[ISNIL]]
+  func.func @is_nil(%rc: !rclist) -> i1 {
+    %nil = reussir.rc.compare_immortal(%rc : !rclist) tag(1)
+    return %nil : i1
+  }
+
   // Immediate materialization: dummy address | (tag + 1) << 56, no
   // allocation. (2 << 56 = 144115188075855872.)
   // CHECK-LABEL: define ptr @make_nil()

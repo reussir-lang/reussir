@@ -588,14 +588,9 @@ public:
   mlir::LogicalResult
   matchAndRewrite(ReussirRecordDispatchOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // Under the immortal encoding a nullary arm's value is always the
-    // per-tag immediate (the scheme invariant at `kSpecialPtrTagAttr`), so
-    // membership is one pointer compare — while the generic tag read is a
-    // dependent *load* through the dummy box on every dispatch (issue
-    // #400). Peel such arms off into `rc.compare_immortal` guards and keep
-    // the unchanged tag dispatch for the rest. The TBI encoding already
-    // reads tags from the pointer's top byte without touching memory, so
-    // only `immortal` peels.
+    // Peel nullary arms into immediate tests: TBI compares the top byte,
+    // immortal compares the dummy address. Neither needs the generic tag
+    // load; inhabited arms retain the ordinary dispatch.
     auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
     auto encoding =
         moduleOp->getAttrOfType<mlir::StringAttr>(kSpecialPtrTagAttr);
@@ -604,7 +599,8 @@ public:
     llvm::SmallVector<unsigned> remaining;
     RecordType recordType =
         llvm::cast<RecordType>(op.getVariant().getType().getElementType());
-    if (encoding && encoding.getValue() == kSpecialPtrTagImmortal)
+    if (encoding && (encoding.getValue() == kSpecialPtrTagImmortal ||
+                     encoding.getValue() == kSpecialPtrTagTBI))
       if (auto borrow = op.getVariant().getDefiningOp<ReussirRcBorrowOp>();
           borrow && borrow.getRcPtr().getType().mayCarrySpecialPointerTag())
         scrutinee = borrow.getRcPtr();

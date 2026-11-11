@@ -2018,35 +2018,29 @@ struct ReussirRcCompareImmortalConversionPattern
   mlir::LogicalResult
   matchAndRewrite(ReussirRcCompareImmortalOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    // The nullary arm's immediate is a link-time constant: the per-tag
-    // dummy box address (immortal), with `(tag + 1) << 56` folded into the
-    // top byte under TBI. The classification is therefore one pointer
-    // compare — no load, unlike a tag read through the dummy box.
     mlir::Location loc = op.getLoc();
     auto indexTy = llvm::cast<mlir::IntegerType>(
         static_cast<const mlir::LLVMTypeConverter *>(getTypeConverter())
             ->getIndexType());
     mlir::Type ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
     TagEncoding encoding = specialPtrTagEncoding(op);
-    auto dummy = tagDummyBox(op->getParentOfType<mlir::ModuleOp>(), loc,
-                             op.getTag().getZExtValue(), encoding, rewriter);
-    mlir::Value expected = mlir::LLVM::AddressOfOp::create(rewriter, loc, ptrTy,
-                                                           dummy.getSymName());
     if (encoding == TagEncoding::TBI) {
       if (indexTy.getWidth() != 64)
         return op.emitOpError(
             "the TBI encoding requires a 64-bit target; use the "
             "arch-independent encoding instead");
-      mlir::Value baseInt =
-          mlir::LLVM::PtrToIntOp::create(rewriter, loc, indexTy, expected);
-      uint64_t encoded = (op.getTag().getZExtValue() + 1) << 56;
-      mlir::Value tagBits = mlir::LLVM::ConstantOp::create(
+      mlir::Value top = topByteOf(adaptor.getRcPtr(), loc, rewriter);
+      mlir::Value expected = mlir::LLVM::ConstantOp::create(
           rewriter, loc, indexTy,
-          rewriter.getIntegerAttr(indexTy, static_cast<int64_t>(encoded)));
-      mlir::Value imm =
-          mlir::LLVM::OrOp::create(rewriter, loc, baseInt, tagBits);
-      expected = mlir::LLVM::IntToPtrOp::create(rewriter, loc, ptrTy, imm);
+          rewriter.getIntegerAttr(indexTy, op.getTag().getZExtValue() + 1));
+      rewriter.replaceOpWithNewOp<mlir::LLVM::ICmpOp>(
+          op, mlir::LLVM::ICmpPredicate::eq, top, expected);
+      return mlir::success();
     }
+    auto dummy = tagDummyBox(op->getParentOfType<mlir::ModuleOp>(), loc,
+                             op.getTag().getZExtValue(), encoding, rewriter);
+    mlir::Value expected = mlir::LLVM::AddressOfOp::create(rewriter, loc, ptrTy,
+                                                           dummy.getSymName());
     rewriter.replaceOpWithNewOp<mlir::LLVM::ICmpOp>(
         op, mlir::LLVM::ICmpPredicate::eq, adaptor.getRcPtr(), expected);
     return mlir::success();
