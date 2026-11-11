@@ -1560,11 +1560,9 @@ struct ReussirRecordTagConversionPattern
       mlir::Block *loadBlock = rewriter.createBlock(
           contBlock->getParent(), mlir::Region::iterator(contBlock));
       rewriter.setInsertionPointToEnd(condBlock);
-      auto branch = mlir::LLVM::CondBrOp::create(
+      mlir::LLVM::CondBrOp::create(
           rewriter, loc, tagged, contBlock, mlir::ValueRange{decoded},
           loadBlock, mlir::ValueRange{});
-      branch->setAttr("branch_weights",
-                      rewriter.getDenseI32ArrayAttr({1, 2000}));
       rewriter.setInsertionPointToStart(loadBlock);
     }
     // The discriminant field: past the count slot for fused-header

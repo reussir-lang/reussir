@@ -53,13 +53,13 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return %cnt : index
   }
 
-  // Decode immediate tags; the likely ordinary-box path reads the header.
+  // Decode immediate tags; ordinary boxes read the header.
   // CHECK-LABEL: define i64 @tag(ptr %0)
   // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
   // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
   // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
   // CHECK: %[[DECODED:.+]] = sub i64 %[[TOP]], 1
-  // CHECK: br i1 %[[ISTAG]], label %[[CONT:.+]], label %[[LOAD:.+]], !prof ![[TAG_WEIGHTS:[0-9]+]]
+  // CHECK: br i1 %[[ISTAG]], label %[[CONT:[^, ]+]], label %[[LOAD:[^, ]+]]{{$}}
   // CHECK: [[LOAD]]:
   // CHECK: %[[TAG:.+]] = load i32, ptr
   // CHECK: %[[WIDE:.+]] = zext i32 %[[TAG]] to i64
@@ -107,5 +107,3 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return
   }
 }
-
-// CHECK: ![[TAG_WEIGHTS]] = !{!"branch_weights", i32 1, i32 2000}
