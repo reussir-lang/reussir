@@ -1545,6 +1545,30 @@ struct ReussirRecordTagConversionPattern
     // Get the index type for the result
     auto indexType = converter->getIndexType();
 
+    mlir::Block *contBlock = nullptr;
+    mlir::Value tagValue;
+    auto rcType = RcType::get(rewriter.getContext(), recordType,
+                              refType.getCapability(), refType.getAtomicKind());
+    if (specialPtrTagEncoding(op) == TagEncoding::TBI &&
+        rcType.mayCarrySpecialPointerTag() &&
+        llvm::cast<mlir::IntegerType>(indexType).getWidth() == 64) {
+      mlir::Value top = topByteOf(refPtr, loc, rewriter);
+      mlir::Value tagged = isTaggedImmediate(top, loc, rewriter);
+      auto one = mlir::LLVM::ConstantOp::create(rewriter, loc, indexType, 1);
+      auto decoded = mlir::LLVM::SubOp::create(rewriter, loc, top, one);
+      mlir::Block *condBlock = rewriter.getInsertionBlock();
+      contBlock = rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
+      contBlock->addArgument(indexType, loc);
+      mlir::Block *loadBlock = rewriter.createBlock(
+          contBlock->getParent(), mlir::Region::iterator(contBlock));
+      rewriter.setInsertionPointToEnd(condBlock);
+      auto branch = mlir::LLVM::CondBrOp::create(
+          rewriter, loc, tagged, contBlock, mlir::ValueRange{decoded},
+          loadBlock, mlir::ValueRange{});
+      branch->setAttr("branch_weights",
+                      rewriter.getDenseI32ArrayAttr({1, 2000}));
+      rewriter.setInsertionPointToStart(loadBlock);
+    }
     // The discriminant field: past the count slot for fused-header
     // variants, first field otherwise.
     int32_t tagField = recordType.hasFusedHeader() ? 1 : 0;
@@ -1553,19 +1577,21 @@ struct ReussirRecordTagConversionPattern
         rewriter, loc, tagPtrType, elementType, refPtr,
         llvm::ArrayRef<mlir::LLVM::GEPArg>{0, tagField});
 
-    // Load the tag value at the record's minimal tag width and widen it to
-    // the op's index result. Under the special-pointer-tag scheme a tagged
-    // immediate scrutinee needs no decode: the load lands in its per-tag
-    // dummy box (TBI masks the top byte) and reads the real tag — so the
-    // match hot path is identical with and without the scheme.
+    // Untagged references read the discriminant at its minimal width.
     mlir::IntegerType tagType = recordType.getTagType();
     mlir::Value narrowTag =
         mlir::LLVM::LoadOp::create(rewriter, loc, tagType, tagPtr);
-    mlir::Value tagValue =
+    tagValue =
         tagType.getWidth() < llvm::cast<mlir::IntegerType>(indexType).getWidth()
             ? mlir::LLVM::ZExtOp::create(rewriter, loc, indexType, narrowTag)
                   .getResult()
             : narrowTag;
+    if (contBlock) {
+      mlir::LLVM::BrOp::create(rewriter, loc, mlir::ValueRange{tagValue},
+                               contBlock);
+      rewriter.setInsertionPointToStart(contBlock);
+      tagValue = contBlock->getArgument(0);
+    }
     rewriter.replaceOp(op, tagValue);
 
     // Assume that the tag is always in bounds

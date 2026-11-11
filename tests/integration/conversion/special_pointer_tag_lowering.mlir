@@ -5,9 +5,9 @@
 // `reussir.special_ptr_tag`). A tagged immediate's top byte is `tag + 1`
 // and its low bits hold the address of the per-tag dummy box
 // `{refcount = 2, tag}`. TBI makes loads through the tagged value land in
-// the dummy box, so the hot reads (rc.fetch, rc.is_unique, record.tag)
-// lower to plain loads with no immediate-check; only `rc.set` — the one
-// store that could decay the dummy's refcount to 1 — skips a tagged
+// the dummy box. Refcount reads remain plain loads; record.tag decodes
+// the top byte for immediates and loads the header for ordinary boxes.
+// `rc.set`, which could decay the dummy's refcount to 1, skips a tagged
 // access behind an unlikely branch (a select-steered store address would
 // data-depend on the count and serialize every rc op against its load).
 
@@ -53,14 +53,20 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return %cnt : index
   }
 
-  // Hot read: plain tag load — a tagged immediate's load lands in its
-  // per-tag dummy box and reads the real tag, so no decode is emitted.
+  // Decode immediate tags; the likely ordinary-box path reads the header.
   // CHECK-LABEL: define i64 @tag(ptr %0)
-  // CHECK-NOT: lshr
-  // CHECK-NOT: select
+  // CHECK: %[[INT:.+]] = ptrtoint ptr %0 to i64
+  // CHECK: %[[TOP:.+]] = lshr i64 %[[INT]], 56
+  // CHECK: %[[ISTAG:.+]] = icmp ne i64 %[[TOP]], 0
+  // CHECK: %[[DECODED:.+]] = sub i64 %[[TOP]], 1
+  // CHECK: br i1 %[[ISTAG]], label %[[CONT:.+]], label %[[LOAD:.+]], !prof
+  // CHECK: [[LOAD]]:
   // CHECK: %[[TAG:.+]] = load i32, ptr
   // CHECK: %[[WIDE:.+]] = zext i32 %[[TAG]] to i64
-  // CHECK: ret i64 %[[WIDE]]
+  // CHECK: br label %[[CONT]]
+  // CHECK: [[CONT]]:
+  // CHECK: %[[RESULT:.+]] = phi i64 [ %[[WIDE]], %[[LOAD]] ], [ %[[DECODED]], %{{.+}} ]
+  // CHECK: ret i64 %[[RESULT]]
   func.func @tag(%ref: !reussir.ref<!list shared>) -> index {
     %tag = reussir.record.tag(%ref : !reussir.ref<!list shared>) : index
     return %tag : index
@@ -101,3 +107,5 @@ module @test attributes { reussir.special_ptr_tag = "tbi", dlti.dl_spec = #dlti.
     return
   }
 }
+
+// CHECK: !{!"branch_weights", i32 1, i32 2000}
