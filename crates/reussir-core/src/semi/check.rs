@@ -3816,6 +3816,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if let Some(reason) = crate::semi::ty_eval::object_operand_rejection(
             |def| self.records.get(&def).map(|r| r.default_cap),
             ty,
+            func,
         ) {
             self.error(arg.span, format!("`core::object::{name}` can only be applied to an RC-managed object; found `{}` ({reason})", self.ty_display(ty)));
             return self.poison(span);

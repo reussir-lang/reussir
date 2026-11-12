@@ -295,7 +295,7 @@ public:
   static bool isSharedAfterDefinition(mlir::Value value) {
     unsigned consumingUses = 0;
     for (mlir::Operation *user : value.getUsers()) {
-      if (llvm::isa<ReussirRcIncOp>(user))
+      if (isUnsafeRcOperation(user) || llvm::isa<ReussirRcIncOp>(user))
         return true;
       if (llvm::isa<mlir::scf::YieldOp, ReussirScfYieldOp,
                     mlir::func::ReturnOp>(user))
@@ -468,14 +468,6 @@ computeFunctionSummary(mlir::func::FuncOp funcOp,
     return initialFunctionSummary(funcOp);
   llvm::SmallVector<UniqueCarryingValue> summary =
       initialFunctionSummary(funcOp);
-  auto unsafeEffect = funcOp.walk([](mlir::Operation *op) {
-    return isUnsafeRcOperation(op) ? mlir::WalkResult::interrupt()
-                                   : mlir::WalkResult::advance();
-  });
-  if (unsafeEffect.wasInterrupted()) {
-    llvm::fill(summary, UniqueCarryingValue::getUnknown());
-    return summary;
-  }
   ProvenanceEvaluator evaluator(summaries);
   funcOp.walk([&](mlir::func::ReturnOp returnOp) {
     for (auto [index, operand] : llvm::enumerate(returnOp.getOperands())) {
@@ -742,8 +734,8 @@ struct UniqueCarryingRecursionAnalysisPass
     mlir::SymbolTable symbolTable(moduleOp);
     llvm::SmallVector<mlir::func::FuncOp> recursiveFunctions;
     moduleOp.walk([&](mlir::func::FuncOp funcOp) {
-      if (!funcOp->hasAttr(kCarryingUniquenessAttr) || funcOp.isDeclaration() ||
-          isUniqueClone(funcOp) || !hasSelfRecursiveCall(funcOp))
+      if (funcOp.isDeclaration() || isUniqueClone(funcOp) ||
+          !hasSelfRecursiveCall(funcOp))
         return;
       if (!collectCarriedRcArguments(funcOp, summaries).any())
         return;

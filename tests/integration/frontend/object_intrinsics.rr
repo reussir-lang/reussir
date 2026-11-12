@@ -7,8 +7,8 @@
 // RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
 
 import core::object as object;
-struct [shared] Box { value: i64 }
-struct [shared] Outer { inner: Box }
+pub struct [shared] Box { value: i64 }
+pub struct [shared] Outer { inner: Box }
 struct [regional] Node { value: i64 }
 
 // CHECK-LABEL: func.func {{.*}}unique
@@ -34,9 +34,10 @@ fn generic<T>(x: T) -> bool { object::is_unique<T>(x) }
 pub fn array(x: [i64; 3]) -> bool { generic(x) }
 pub fn cell(x: Cell<i64>) -> bool { object::is_unique(x) }
 pub fn atomic(x: Arc<Box>) -> bool { object::is_unique(x) }
-pub fn frozen(n: i64) -> bool {
+pub fn frozen(n: i64) {
     let x = regional { Node{n} };
-    object::is_unique(x)
+    object::unsafe_inc(x);
+    object::unsafe_dec(x);
 }
 pub fn projected(x: Outer) -> bool { object::is_unique(x.inner) }
 pub fn temporary() -> bool { object::is_unique(Box{1}) }

@@ -789,15 +789,18 @@ pub fn lock_cell_slot_rejection<'tcx>(
 pub fn object_operand_rejection(
     cap_of: impl Fn(DefId) -> Option<DefaultCap>,
     ty: Ty<'_>,
+    op: crate::intrinsic::ObjectFn,
 ) -> Option<&'static str> {
     match *ty.kind() {
-        TyKind::Arc(inner) => object_operand_rejection(cap_of, inner),
+        TyKind::Arc(inner) => object_operand_rejection(cap_of, inner, op),
         TyKind::Cell { .. } => None,
         TyKind::Record {
             def,
             flex: Flexivity::Rigid,
             ..
-        } if cap_of(def) == Some(DefaultCap::Regional) => None,
+        } if cap_of(def) == Some(DefaultCap::Regional) => (op
+            == crate::intrinsic::ObjectFn::IsUnique)
+            .then_some("uniqueness is not defined for frozen regional objects"),
         TyKind::BigInt(_) => Some("a built-in integer handle"),
         _ => arc_inner_rejection(cap_of, ty),
     }

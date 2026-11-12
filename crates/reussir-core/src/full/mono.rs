@@ -2972,6 +2972,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     if let Some(reason) = crate::semi::ty_eval::object_operand_rejection(
                         |def| self.record_defs.get(&def).map(|r| r.default_cap),
                         ty,
+                        func,
                     ) {
                         self.error(span, format!("`core::object::{}` can only be applied to an RC-managed object; this instantiation has {reason}", func.as_str()));
                     }

@@ -24,3 +24,9 @@ fn extra(x: Box) { core::object::unsafe_inc(x, x); }
 fn types(x: Box) { core::object::unsafe_dec<Box, Box>(x); }
 // CHECK-DAG: unknown object intrinsic `core::object::unknown`
 fn unknown(x: Box) { core::object::unknown(x); }
+
+// CHECK-DAG: uniqueness is not defined for frozen regional objects
+fn frozen(n: i64) -> bool {
+    let x = regional { Node{n} };
+    core::object::is_unique(x)
+}

@@ -26,7 +26,7 @@ use reussir_backend::melior::dialect::arith::{self, CmpfPredicate, CmpiPredicate
 use reussir_backend::melior::dialect::{func, memref, scf};
 use reussir_backend::melior::ir::attribute::{
     ArrayAttribute, Attribute, DenseI64ArrayAttribute, FlatSymbolRefAttribute, IntegerAttribute,
-    StringAttribute, TypeAttribute, UnitAttribute,
+    StringAttribute, TypeAttribute,
 };
 use reussir_backend::melior::ir::operation::{OperationBuilder, OperationMutLike};
 use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, MemRefType};
@@ -927,10 +927,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                             } else {
                                 self.build_rc_dec(value, arg.ty, loc)
                             };
-                            operation.set_attribute(
-                                "reussir.unsafe",
-                                UnitAttribute::new(self.context).into(),
-                            );
+                            operation
+                                .set_attribute("reussir.unsafe", Attribute::unit(self.context));
                             block.append_operation(operation);
                             Ok(None)
                         }
