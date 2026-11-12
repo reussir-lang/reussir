@@ -117,15 +117,18 @@ struct RcDecrementExpansionPattern
     // other thread's uses before the destruction. Destructuring decrements
     // never target atomic boxes (rejected by the `rc.dec` verifier).
     const bool atomic = type.getAtomicKind() == AtomicKind::atomic;
-    mlir::Value prevRcCount =
-        atomic
-            ? ReussirRcFetchSubOp::create(rewriter, op.getLoc(), op.getRcPtr())
-                  .getRefCount()
-            : ReussirRcFetchOp::create(rewriter, op.getLoc(), op.getRcPtr())
-                  .getRefCount();
-    if (isUnsafeRcOperation(op))
-      prevRcCount.getDefiningOp()->setAttr(kUnsafeRcAttr,
-                                           rewriter.getUnitAttr());
+    mlir::Value prevRcCount;
+    if (atomic) {
+      auto fetchSub =
+          ReussirRcFetchSubOp::create(rewriter, op.getLoc(), op.getRcPtr());
+      fetchSub.setUnsafe(op.getUnsafe());
+      prevRcCount = fetchSub.getRefCount();
+    } else {
+      auto fetch =
+          ReussirRcFetchOp::create(rewriter, op.getLoc(), op.getRcPtr());
+      fetch.setUnsafe(op.getUnsafe());
+      prevRcCount = fetch.getRefCount();
+    }
     auto isOne = mlir::arith::CmpIOp::create(
         rewriter, op.getLoc(), mlir::arith::CmpIPredicate::eq, prevRcCount,
         mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));
@@ -207,10 +210,8 @@ struct RcDecrementExpansionPattern
         auto decremented = mlir::arith::SubIOp::create(
             rewriter, op.getLoc(), prevRcCount,
             mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));
-        auto set = ReussirRcSetOp::create(rewriter, op.getLoc(), op.getRcPtr(),
-                                          decremented.getResult());
-        if (isUnsafeRcOperation(op))
-          set->setAttr(kUnsafeRcAttr, rewriter.getUnitAttr());
+        ReussirRcSetOp::create(rewriter, op.getLoc(), op.getRcPtr(),
+                               decremented.getResult());
       }
       if (op.isDestructuring()) {
         // The shared path keeps the box alive, so the consumer's bound
@@ -223,8 +224,6 @@ struct RcDecrementExpansionPattern
       mlir::scf::YieldOp::create(rewriter, op.getLoc(), null->getResults());
     }
     ifOp->setAttr(kExpandedDecrementAttr, rewriter.getUnitAttr());
-    if (isUnsafeRcOperation(op))
-      ifOp->setAttr(kUnsafeRcAttr, rewriter.getUnitAttr());
     rewriter.replaceOp(op, ifOp);
     return mlir::success();
   }

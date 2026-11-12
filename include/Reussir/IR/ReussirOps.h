@@ -57,14 +57,23 @@ namespace reussir {
 // the new function's accesses would silently escape instrumentation.
 //
 //===----------------------------------------------------------------------===//
-// Explicit manual RC effects cannot be removed by ownership optimizations.
-inline constexpr llvm::StringRef kUnsafeRcAttr = "reussir.unsafe";
-inline bool isUnsafeRcOperation(mlir::Operation *op) {
-  return op->hasAttr(kUnsafeRcAttr);
-}
-
 inline constexpr llvm::StringRef kMustTailCallAttr = "reussir.musttail";
 inline constexpr llvm::StringRef kSanitizeAttr = "reussir.sanitize";
+
+// Whether `op` is a manual count change (`unsafe` on `rc.inc`/`rc.dec`, or on
+// the `rc.fetch`/`rc.fetch_sub` of an expanded manual release). Ownership
+// optimizations must neither remove it nor move a count change across it.
+inline bool isUnsafeRcOperation(mlir::Operation *op) {
+  if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(op))
+    return inc.getUnsafe();
+  if (auto dec = llvm::dyn_cast<ReussirRcDecOp>(op))
+    return dec.getUnsafe();
+  if (auto fetch = llvm::dyn_cast<ReussirRcFetchOp>(op))
+    return fetch.getUnsafe();
+  if (auto fetchSub = llvm::dyn_cast<ReussirRcFetchSubOp>(op))
+    return fetchSub.getUnsafe();
+  return false;
+}
 
 // Appends the module's sanitizer attribute strings (if any) to `func`'s
 // passthrough list. `func` may be a `func.func` (discardable

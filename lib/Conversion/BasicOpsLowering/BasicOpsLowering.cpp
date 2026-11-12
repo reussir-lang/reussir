@@ -158,8 +158,8 @@ TagEncoding specialPtrTagEncoding(mlir::Operation *op) {
 // value land here and observe a well-formed shared box header carrying the
 // immediate's own tag. `rc.set` never writes the refcount (see above); under
 // TBI the unguarded `rc.inc` makes it grow and wrap, under the immortal
-// encoding it stays at its initial value. The dummy mirrors the fused box
-// header exactly: an i32 count and the i32 tag sharing one 8-byte word.
+// encoding it stays at its initial value. The dummy mirrors the fused box header exactly:
+// an i32 count and the i32 tag sharing one 8-byte word.
 mlir::LLVM::GlobalOp tagDummyBox(mlir::ModuleOp module, mlir::Location loc,
                                  uint64_t tag, TagEncoding encoding,
                                  mlir::OpBuilder &builder) {
@@ -249,15 +249,14 @@ mlir::Value isTaggedImmediate(mlir::Value topByte, mlir::Location loc,
 // wrap-around accounting on this path.
 void emitGuardedStore(mlir::ConversionPatternRewriter &rewriter,
                       mlir::Location loc, mlir::Value value, mlir::Value addr,
-                      mlir::Value skipCond, bool isVolatile = false) {
+                      mlir::Value skipCond) {
   mlir::Block *condBlock = rewriter.getInsertionBlock();
   mlir::Block *contBlock =
       rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
   mlir::Block *storeBlock = rewriter.createBlock(
       contBlock->getParent(), mlir::Region::iterator(contBlock));
   rewriter.setInsertionPointToEnd(storeBlock);
-  mlir::LLVM::StoreOp::create(rewriter, loc, value, addr)
-      .setVolatile_(isVolatile);
+  mlir::LLVM::StoreOp::create(rewriter, loc, value, addr);
   mlir::LLVM::BrOp::create(rewriter, loc, contBlock);
   rewriter.setInsertionPointToEnd(condBlock);
   auto condBr = mlir::LLVM::CondBrOp::create(rewriter, loc, skipCond, contBlock,
@@ -575,18 +574,15 @@ struct ReussirRcReinterpretConversionPattern
 // is the first i32 field of every RC box, including tagged-immediate dummies.
 static mlir::Value loadRcCount(mlir::Location loc, RcType rcType,
                                mlir::Value rcPtr,
-                               mlir::ConversionPatternRewriter &rewriter,
-                               bool isVolatile = false) {
+                               mlir::ConversionPatternRewriter &rewriter) {
   if (rcType.getAtomicKind() == AtomicKind::atomic)
     return mlir::LLVM::LoadOp::create(
         rewriter, loc, rewriter.getI32Type(), rcPtr,
-        /*alignment=*/4, /*isVolatile=*/isVolatile, /*isNonTemporal=*/false,
+        /*alignment=*/4, /*isVolatile=*/false, /*isNonTemporal=*/false,
         /*isInvariant=*/false, /*isInvariantGroup=*/false,
         mlir::LLVM::AtomicOrdering::acquire);
-  auto load =
-      mlir::LLVM::LoadOp::create(rewriter, loc, rewriter.getI32Type(), rcPtr);
-  load.setVolatile_(isVolatile);
-  return load;
+  return mlir::LLVM::LoadOp::create(rewriter, loc, rewriter.getI32Type(),
+                                    rcPtr);
 }
 
 struct ReussirRcFetchConversionPattern
@@ -601,8 +597,7 @@ struct ReussirRcFetchConversionPattern
             ->getIndexType();
     mlir::Location loc = op.getLoc();
     mlir::Value loaded =
-        loadRcCount(loc, op.getRcPtr().getType(), adaptor.getRcPtr(), rewriter,
-                    isUnsafeRcOperation(op));
+        loadRcCount(loc, op.getRcPtr().getType(), adaptor.getRcPtr(), rewriter);
     mlir::Value widened =
         llvm::cast<mlir::IntegerType>(indexTy).getWidth() > 32
             ? mlir::LLVM::ZExtOp::create(rewriter, loc, indexTy, loaded)
@@ -630,10 +625,9 @@ struct ReussirRcFetchSubConversionPattern
     // Acquire-release (see the op description): release orders this thread's
     // uses before the decrement, acquire lets the final decrementer see every
     // other thread's uses before destroying the box.
-    auto old = mlir::LLVM::AtomicRMWOp::create(
+    mlir::Value old = mlir::LLVM::AtomicRMWOp::create(
         rewriter, loc, mlir::LLVM::AtomicBinOp::sub, adaptor.getRcPtr(), one,
         mlir::LLVM::AtomicOrdering::acq_rel);
-    old.setVolatile_(isUnsafeRcOperation(op));
     mlir::Value widened =
         llvm::cast<mlir::IntegerType>(indexTy).getWidth() > 32
             ? mlir::LLVM::ZExtOp::create(rewriter, loc, indexTy, old)
@@ -680,14 +674,11 @@ struct ReussirRcSetConversionPattern
       } else {
         tagged = isImmortalCount(narrowCount, op.getLoc(), rewriter);
       }
-      emitGuardedStore(rewriter, op.getLoc(), narrowCount, addr, tagged,
-                       isUnsafeRcOperation(op));
+      emitGuardedStore(rewriter, op.getLoc(), narrowCount, addr, tagged);
       rewriter.eraseOp(op);
       return mlir::success();
     }
-    bool isVolatile = isUnsafeRcOperation(op);
-    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, narrowCount, addr)
-        .setVolatile_(isVolatile);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, narrowCount, addr);
     return mlir::success();
   }
 };
@@ -1721,10 +1712,8 @@ struct ReussirRcIncConversionPattern
           mlir::LLVM::ZExtOp::create(rewriter, op.getLoc(), countType, delta);
     mlir::Value oldRefCnt;
     if (rcPtrTy.getAtomicKind() == AtomicKind::normal) {
-      auto load = mlir::LLVM::LoadOp::create(rewriter, op.getLoc(), countType,
+      oldRefCnt = mlir::LLVM::LoadOp::create(rewriter, op.getLoc(), countType,
                                              refcntPtr);
-      load.setVolatile_(isUnsafeRcOperation(op));
-      oldRefCnt = load;
       auto newRefCnt = mlir::arith::AddIOp::create(rewriter, op.getLoc(),
                                                    countType, oldRefCnt, delta);
       if (steerNarrowImmortal) {
@@ -1733,18 +1722,15 @@ struct ReussirRcIncConversionPattern
         // word, so the store doesn't data-depend on the loaded count.
         mlir::Value immortal =
             isImmortalCount(oldRefCnt, op.getLoc(), rewriter);
-        emitGuardedStore(rewriter, op.getLoc(), newRefCnt, refcntPtr, immortal,
-                         isUnsafeRcOperation(op));
+        emitGuardedStore(rewriter, op.getLoc(), newRefCnt, refcntPtr, immortal);
       } else {
-        mlir::LLVM::StoreOp::create(rewriter, op.getLoc(), newRefCnt, refcntPtr)
-            .setVolatile_(isUnsafeRcOperation(op));
+        mlir::LLVM::StoreOp::create(rewriter, op.getLoc(), newRefCnt,
+                                    refcntPtr);
       }
     } else {
-      auto add = mlir::LLVM::AtomicRMWOp::create(
+      oldRefCnt = mlir::LLVM::AtomicRMWOp::create(
           rewriter, op.getLoc(), mlir::LLVM::AtomicBinOp::add, refcntPtr, delta,
           mlir::LLVM::AtomicOrdering::monotonic);
-      add.setVolatile_(isUnsafeRcOperation(op));
-      oldRefCnt = add;
     }
     // Under TBI an immediate's increment lands on its dummy box, whose 32-bit
     // count grows and wraps through 0 after 2^32 references, so `old >= 1`

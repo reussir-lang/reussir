@@ -540,8 +540,6 @@ static void getRcCountReadEffects(
 void ReussirRcFetchOp::getEffects(
     llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
   getRcCountReadEffects(getRcPtrMutable(), effects);
-  if (isUnsafeRcOperation(*this))
-    effects.emplace_back(mlir::MemoryEffects::Write::get());
 }
 
 void ReussirRcIsUniqueOp::getEffects(
@@ -691,6 +689,8 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
     return emitOpError("cannot decrease reference count of a flex RC type");
   if (getDestructureTagAttr() && !getBoundMembersAttr())
     return emitOpError("destructureTag requires boundMembers");
+  if (getUnsafe() && isDestructuring())
+    return emitOpError("an unsafe decrement cannot destructure");
   if (isDestructuring()) {
     if (RcType.getAtomicKind() != AtomicKind::normal)
       return emitOpError("destructuring decrement requires a nonatomic box");

@@ -734,8 +734,8 @@ struct UniqueCarryingRecursionAnalysisPass
     mlir::SymbolTable symbolTable(moduleOp);
     llvm::SmallVector<mlir::func::FuncOp> recursiveFunctions;
     moduleOp.walk([&](mlir::func::FuncOp funcOp) {
-      if (funcOp.isDeclaration() || isUniqueClone(funcOp) ||
-          !hasSelfRecursiveCall(funcOp))
+      if (!funcOp->hasAttr(kCarryingUniquenessAttr) || funcOp.isDeclaration() ||
+          isUniqueClone(funcOp) || !hasSelfRecursiveCall(funcOp))
         return;
       if (!collectCarriedRcArguments(funcOp, summaries).any())
         return;

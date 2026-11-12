@@ -3,16 +3,16 @@
 !R = !reussir.rc<i64>
 module {
   // CHECK-LABEL: @retain(
-  // CHECK: reussir.rc.inc{{.*}}{reussir.unsafe}
+  // CHECK: reussir.rc.inc{{.*}}{unsafe}
   func.func private @retain(%x: !R) {
-    reussir.rc.inc(%x : !R) {reussir.unsafe}
+    reussir.rc.inc(%x : !R) {unsafe}
     reussir.rc.dec(%x : !R)
     return
   }
   // CHECK-LABEL: @release(
-  // CHECK: reussir.rc.dec{{.*}}{reussir.unsafe}
+  // CHECK: reussir.rc.dec{{.*}}{unsafe}
   func.func private @release(%x: !R) {
-    reussir.rc.dec(%x : !R) {reussir.unsafe}
+    reussir.rc.dec(%x : !R) {unsafe}
     reussir.rc.dec(%x : !R)
     return
   }
@@ -32,18 +32,18 @@ module {
   }
   // CHECK-LABEL: func.func @release_then_return(
   // CHECK-NOT: reussir.carrying_uniqueness
-  // CHECK: reussir.rc.dec{{.*}}{reussir.unsafe}
+  // CHECK: reussir.rc.dec{{.*}}{unsafe}
   // CHECK: return
   func.func @release_then_return(%x: !R) -> !R {
-    reussir.rc.dec(%x : !R) {reussir.unsafe}
+    reussir.rc.dec(%x : !R) {unsafe}
     return %x : !R
   }
   // CHECK-LABEL: @loop(
-  // CHECK: reussir.rc.inc{{.*}}{reussir.unsafe}
+  // CHECK: reussir.rc.inc{{.*}}{unsafe}
   // CHECK: call @loop(
   func.func @loop(%x: !R, %n: i64) -> !R {
-    reussir.rc.inc(%x : !R) {reussir.unsafe}
-    reussir.rc.dec(%x : !R) {reussir.unsafe}
+    reussir.rc.inc(%x : !R) {unsafe}
+    reussir.rc.dec(%x : !R) {unsafe}
     %zero = arith.constant 0 : i64
     %one = arith.constant 1 : i64
     %done = arith.cmpi eq, %n, %zero : i64

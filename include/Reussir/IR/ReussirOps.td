@@ -490,8 +490,9 @@ def ReussirRcIncOp : ReussirRcOp<"inc", []> {
   let summary = "Increment reference count";
   let description = [{
     `reussir.rc.inc` adds `delta` to the reference count of an RC pointer.
-    The `reussir.unsafe` unit attribute marks a manual retain. Ownership
-    optimizations must not remove it or specialize its object as borrowed.
+    `unsafe` marks a manual retain. Ownership optimizations must not remove
+    it, move a count change of the object across it, or specialize its object
+    as borrowed.
     The optional index operand defaults to one. Delta must be non-negative
     and the resulting count must fit the reference-count representation.
     ```mlir
@@ -500,7 +501,8 @@ def ReussirRcIncOp : ReussirRcOp<"inc", []> {
   }];
 
   let arguments = (ins Arg<ReussirRcType, "Reference to increment",
-      [MemRead, MemWrite]>:$rcPtr, Optional<Index>:$delta);
+      [MemRead, MemWrite]>:$rcPtr, Optional<Index>:$delta,
+      UnitAttr:$unsafe);
 
   let assemblyFormat = [{
     `(` $rcPtr `:` qualified(type($rcPtr)) `)` (`by` $delta^)? attr-dict
@@ -529,8 +531,9 @@ def ReussirRcDecOp
     ```
 
     `cleanup(@hook, ...)` declares the FFI hooks reachable through this drop.
-    The `reussir.unsafe` unit attribute marks a manual release. Ownership
-    optimizations must not remove, defer, or fuse it into member transfers.
+    `unsafe` marks a manual release. Ownership optimizations must not
+    remove, defer, or fuse it into member transfers; it cannot destructure.
+    Its expansion carries the mark on `rc.fetch` or `rc.fetch_sub`.
 
     For rigid RC pointer, this operation is basically a function call to
     __reussir_release_rigid_object. There is no token shall be returned.
@@ -539,7 +542,7 @@ def ReussirRcDecOp
   let arguments = (ins Arg<ReussirRcType, "Reference to decrement">:$rcPtr,
       OptionalAttr<IndexAttr>:$destructureTag,
       OptionalAttr<DenseI64ArrayAttr>:$boundMembers,
-      OptionalAttr<FlatSymbolRefArrayAttr>:$cleanup);
+      OptionalAttr<FlatSymbolRefArrayAttr>:$cleanup, UnitAttr:$unsafe);
   let results = (outs Res<Optional<ReussirNullableTokenType>,
                           "Nullable token">:$nullableToken);
 
@@ -602,7 +605,8 @@ def ReussirRcFetchOp
     operation directly.
   }];
 
-  let arguments = (ins Arg<ReussirRcType, "Reference to inspect">:$rcPtr);
+  let arguments = (ins Arg<ReussirRcType, "Reference to inspect">:$rcPtr,
+      UnitAttr:$unsafe);
   let results = (outs Res<Index, "Reference count">:$refCount);
 
   let assemblyFormat = [{
@@ -630,7 +634,7 @@ def ReussirRcFetchSubOp : ReussirRcOp<"fetch_sub", []> {
   }];
 
   let arguments = (ins Arg<ReussirRcType, "Reference to decrement",
-      [MemRead, MemWrite]>:$rcPtr);
+      [MemRead, MemWrite]>:$rcPtr, UnitAttr:$unsafe);
   let results = (outs Res<Index, "Previous reference count">:$refCount);
 
   let assemblyFormat = [{
