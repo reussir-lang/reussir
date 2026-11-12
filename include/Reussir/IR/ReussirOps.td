@@ -490,6 +490,8 @@ def ReussirRcIncOp : ReussirRcOp<"inc", []> {
   let summary = "Increment reference count";
   let description = [{
     `reussir.rc.inc` adds `delta` to the reference count of an RC pointer.
+    The `reussir.unsafe` unit attribute marks a manual retain. Ownership
+    optimizations must not remove it or specialize its object as borrowed.
     The optional index operand defaults to one. Delta must be non-negative
     and the resulting count must fit the reference-count representation.
     ```mlir
@@ -527,6 +529,8 @@ def ReussirRcDecOp
     ```
 
     `cleanup(@hook, ...)` declares the FFI hooks reachable through this drop.
+    The `reussir.unsafe` unit attribute marks a manual release. Ownership
+    optimizations must not remove, defer, or fuse it into member transfers.
 
     For rigid RC pointer, this operation is basically a function call to
     __reussir_release_rigid_object. There is no token shall be returned.

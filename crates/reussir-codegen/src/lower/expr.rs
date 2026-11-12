@@ -26,7 +26,7 @@ use reussir_backend::melior::dialect::arith::{self, CmpfPredicate, CmpiPredicate
 use reussir_backend::melior::dialect::{func, memref, scf};
 use reussir_backend::melior::ir::attribute::{
     ArrayAttribute, Attribute, DenseI64ArrayAttribute, FlatSymbolRefAttribute, IntegerAttribute,
-    StringAttribute, TypeAttribute,
+    StringAttribute, TypeAttribute, UnitAttribute,
 };
 use reussir_backend::melior::ir::operation::{OperationBuilder, OperationMutLike};
 use reussir_backend::melior::ir::r#type::{FunctionType, IntegerType, MemRefType};
@@ -921,13 +921,17 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                                 .into(),
                             ),
                         )),
-                        ObjectFn::UnsafeInc => {
-                            block
-                                .append_operation(dialect::rc_inc(self.context, value, loc).into());
-                            Ok(None)
-                        }
-                        ObjectFn::UnsafeDec => {
-                            block.append_operation(self.build_rc_dec(value, arg.ty, loc));
+                        ObjectFn::UnsafeInc | ObjectFn::UnsafeDec => {
+                            let mut operation: Operation<'c> = if *func == ObjectFn::UnsafeInc {
+                                dialect::rc_inc(self.context, value, loc).into()
+                            } else {
+                                self.build_rc_dec(value, arg.ty, loc)
+                            };
+                            operation.set_attribute(
+                                "reussir.unsafe",
+                                UnitAttribute::new(self.context).into(),
+                            );
+                            block.append_operation(operation);
                             Ok(None)
                         }
                     }

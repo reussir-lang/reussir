@@ -43,6 +43,8 @@ bool isNonConsumingUse(mlir::OpOperand &use,
                        llvm::function_ref<bool(mlir::func::CallOp, unsigned)>
                            isBorrowablePosition) {
   mlir::Operation *user = use.getOwner();
+  if (isUnsafeRcOperation(user))
+    return false;
   if (llvm::isa<ReussirRcIncOp>(user))
     return true;
   if (auto borrow = llvm::dyn_cast<ReussirRcBorrowOp>(user))
@@ -132,6 +134,8 @@ bool isReadOnlyBorrow(ReussirRcBorrowOp borrow) {
 // at most read memory, cannot release anything (`leavesCountsAlone`).
 ReussirRcIncOp findFeedingRetain(mlir::Value value, mlir::func::CallOp call) {
   for (mlir::Operation *op = call->getPrevNode(); op; op = op->getPrevNode()) {
+    if (isUnsafeRcOperation(op))
+      return {};
     if (auto retain = llvm::dyn_cast<ReussirRcIncOp>(op)) {
       if (retain.getRcPtr() == value)
         return retain.isSingleAcquire() ? retain : ReussirRcIncOp();

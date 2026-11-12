@@ -540,6 +540,8 @@ static void getRcCountReadEffects(
 void ReussirRcFetchOp::getEffects(
     llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects) {
   getRcCountReadEffects(getRcPtrMutable(), effects);
+  if (isUnsafeRcOperation(*this))
+    effects.emplace_back(mlir::MemoryEffects::Write::get());
 }
 
 void ReussirRcIsUniqueOp::getEffects(
@@ -4141,6 +4143,8 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
 }
 
 bool leavesCountsAlone(mlir::Operation *op) {
+  if (isUnsafeRcOperation(op))
+    return false;
   if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op))
     return true;
   if (op->getNumRegions() > 0 || llvm::isa<mlir::CallOpInterface>(op))

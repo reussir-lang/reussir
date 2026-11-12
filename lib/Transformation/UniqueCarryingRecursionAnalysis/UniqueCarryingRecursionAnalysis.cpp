@@ -466,9 +466,17 @@ computeFunctionSummary(mlir::func::FuncOp funcOp,
                        const FunctionSummaryMap &summaries) {
   if (funcOp.isDeclaration())
     return initialFunctionSummary(funcOp);
-  ProvenanceEvaluator evaluator(summaries);
   llvm::SmallVector<UniqueCarryingValue> summary =
       initialFunctionSummary(funcOp);
+  auto unsafeEffect = funcOp.walk([](mlir::Operation *op) {
+    return isUnsafeRcOperation(op) ? mlir::WalkResult::interrupt()
+                                   : mlir::WalkResult::advance();
+  });
+  if (unsafeEffect.wasInterrupted()) {
+    llvm::fill(summary, UniqueCarryingValue::getUnknown());
+    return summary;
+  }
+  ProvenanceEvaluator evaluator(summaries);
   funcOp.walk([&](mlir::func::ReturnOp returnOp) {
     for (auto [index, operand] : llvm::enumerate(returnOp.getOperands())) {
       if (!isRcType(operand.getType()))

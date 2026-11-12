@@ -254,8 +254,8 @@ void releaseCaptures(mlir::OpBuilder &rewriter, ReussirRcDecOp boxRelease,
 
 bool isPlainRelease(mlir::Operation *op) {
   auto dec = llvm::dyn_cast<ReussirRcDecOp>(op);
-  return dec && dec->use_empty() && dec.getNumResults() == 0 &&
-         !dec.isDestructuring();
+  return dec && !isUnsafeRcOperation(dec) && dec->use_empty() &&
+         dec.getNumResults() == 0 && !dec.isDestructuring();
 }
 
 // Erases a fresh chain (bottom-up order in `chain`) and the create's dead
@@ -494,14 +494,14 @@ mlir::LogicalResult structuralBetaReduction(ReussirClosureEvalOp eval,
     if (user == firstLink)
       continue;
     if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(user)) {
-      if (!inc.isSingleAcquire() || inc->getBlock() != eval->getBlock() ||
-          !inc->isBeforeInBlock(eval))
+      if (isUnsafeRcOperation(inc) || !inc.isSingleAcquire() ||
+          inc->getBlock() != eval->getBlock() || !inc->isBeforeInBlock(eval))
         return mlir::failure();
       incs.push_back(inc);
       continue;
     }
     if (auto d = llvm::dyn_cast<ReussirRcDecOp>(user)) {
-      if (dec || d->getBlock() != defBlock ||
+      if (isUnsafeRcOperation(d) || dec || d->getBlock() != defBlock ||
           !outermostStructure->isBeforeInBlock(d))
         return mlir::failure();
       dec = d;
@@ -589,7 +589,7 @@ bool isClosureLiteralParameter(mlir::func::FuncOp function, unsigned index) {
   return llvm::all_of(param.getUses(), [&](mlir::OpOperand &use) {
     mlir::Operation *user = use.getOwner();
     if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(user))
-      return inc.isSingleAcquire();
+      return !isUnsafeRcOperation(inc) && inc.isSingleAcquire();
     if (isPlainRelease(user))
       return true;
     if (llvm::isa<ReussirClosureEvalOp>(user))

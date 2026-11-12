@@ -57,6 +57,12 @@ namespace reussir {
 // the new function's accesses would silently escape instrumentation.
 //
 //===----------------------------------------------------------------------===//
+// Explicit manual RC effects cannot be removed by ownership optimizations.
+inline constexpr llvm::StringRef kUnsafeRcAttr = "reussir.unsafe";
+inline bool isUnsafeRcOperation(mlir::Operation *op) {
+  return op->hasAttr(kUnsafeRcAttr);
+}
+
 inline constexpr llvm::StringRef kMustTailCallAttr = "reussir.musttail";
 inline constexpr llvm::StringRef kSanitizeAttr = "reussir.sanitize";
 

@@ -298,6 +298,10 @@ struct PjrtDonationAnalysis::Impl {
       for (Operation *user : current.getUsers()) {
         if (!tick())
           break;
+        if (isUnsafeRcOperation(user)) {
+          result.escapedBorrow = true;
+          continue;
+        }
         if (!borrowed) {
           if (auto dec = dyn_cast<ReussirRcDecOp>(user)) {
             result.releases.push_back(dec);

@@ -65,8 +65,8 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/Transformation/Passes.h"
 
-#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <mlir/Analysis/AliasAnalysis.h>
@@ -133,6 +133,8 @@ bool fuseArm(mlir::Region &region, int64_t tag,
   llvm::SmallVector<ReussirRcIncOp> boundIncs;
   llvm::SmallDenseSet<int64_t> boundIndices;
   for (mlir::Operation &op : region.front()) {
+    if (isUnsafeRcOperation(&op))
+      return false;
     if (auto candidate = llvm::dyn_cast<ReussirRcDecOp>(op)) {
       if (candidate.getRcPtr() == scrutinee) {
         dec = candidate;
@@ -146,7 +148,7 @@ bool fuseArm(mlir::Region &region, int64_t tag,
     }
     if (auto inc = llvm::dyn_cast<ReussirRcIncOp>(op)) {
       if (auto index = extractedMemberIndex(inc.getRcPtr(), payloadRef)) {
-        if (!inc.isSingleAcquire())
+        if (isUnsafeRcOperation(inc) || !inc.isSingleAcquire())
           return false;
         // The box owns one reference per member, so only one retain per
         // member can be replaced by the transferred owner; a further retain
@@ -283,8 +285,8 @@ matchCompoundExtraction(ReussirRefProjectOp project,
     if (directAcquire)
       return std::nullopt;
     auto inc = llvm::dyn_cast_if_present<ReussirRcIncOp>(load->getNextNode());
-    if (!inc || !inc.isSingleAcquire() || inc.getRcPtr() != load.getValue() ||
-        !inc->isBeforeInBlock(terminalDec))
+    if (!inc || isUnsafeRcOperation(inc) || !inc.isSingleAcquire() ||
+        inc.getRcPtr() != load.getValue() || !inc->isBeforeInBlock(terminalDec))
       return std::nullopt;
     extraction.retain = inc;
     extraction.chain.push_back(inc);
@@ -415,7 +417,7 @@ bool isUnsafeAcrossAdvancedRelease(mlir::Operation *op,
 // box itself safe when an unseen holder exists.
 bool scheduleCompleteCompoundMove(ReussirRcDecOp dec,
                                   mlir::AliasAnalysis &aliasAnalysis) {
-  if (dec.isDestructuring())
+  if (isUnsafeRcOperation(dec) || dec.isDestructuring())
     return false;
   if (dec.getNullableToken() && !dec.getNullableToken().use_empty())
     return false;
@@ -556,7 +558,7 @@ bool scheduleCompleteCompoundMove(ReussirRcDecOp dec,
 // Within the window only reads, spills, and unrelated retains may appear —
 // nothing that could free the box, mutate its fields, or observe a count.
 void fuseCompoundConsumption(ReussirRcDecOp dec) {
-  if (dec.isDestructuring())
+  if (isUnsafeRcOperation(dec) || dec.isDestructuring())
     return;
   RcType type = dec.getRcPtr().getType();
   if (type.getCapability() != Capability::shared ||
@@ -583,7 +585,7 @@ void fuseCompoundConsumption(ReussirRcDecOp dec) {
       // cancellation; do not shadow it.
       if (inc.getRcPtr() == dec.getRcPtr())
         return;
-      if (!inc.isSingleAcquire())
+      if (isUnsafeRcOperation(inc) || !inc.isSingleAcquire())
         break;
       if (auto idx = loadedMemberIndex(inc.getRcPtr(), dec.getRcPtr()))
         rememberRetain(*idx, cursor);

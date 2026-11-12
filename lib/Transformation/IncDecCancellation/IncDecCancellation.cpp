@@ -53,6 +53,8 @@ ReussirRcDecOp findPostDominantAliasedRcDec(
     mlir::PostDominanceInfo &postDominanceInfo, mlir::Region &dropRegion) {
   ReussirRcDecOp fusionTarget{};
   dropRegion.walk([&](ReussirRcDecOp decOp) {
+    if (isUnsafeRcOperation(decOp))
+      return mlir::WalkResult::advance();
     auto aliasResult = aliasAnalysis.alias(decOp.getRcPtr(), rcPtr);
     if (postDominanceInfo.postDominates(decOp->getBlock(),
                                         &dropRegion.front()) &&
@@ -95,7 +97,7 @@ bool cancelIntoIf(ReussirRcIncOp inc, mlir::scf::IfOp branch,
     return false;
   auto leadingRelease = [&](mlir::Region &region) {
     auto dec = llvm::dyn_cast<ReussirRcDecOp>(region.front().front());
-    return dec && !dec.isDestructuring() &&
+    return dec && !isUnsafeRcOperation(dec) && !dec.isDestructuring() &&
                    aliasAnalysis.alias(dec.getRcPtr(), inc.getRcPtr()) ==
                        mlir::AliasResult::MustAlias
                ? dec
@@ -149,6 +151,8 @@ bool armReleasesOnAllPaths(mlir::Region &region, mlir::TypedValue<RcType> rcPtr,
   if (!region.hasOneBlock())
     return false;
   for (mlir::Operation &op : region.front()) {
+    if (isUnsafeRcOperation(&op))
+      return false;
     if (auto dec = llvm::dyn_cast<ReussirRcDecOp>(op)) {
       if (aliasAnalysis.alias(dec.getRcPtr(), rcPtr) ==
           mlir::AliasResult::MustAlias) {
@@ -245,6 +249,8 @@ void cancelCountedWordRetains(mlir::func::FuncOp func,
     mlir::Value word = getRCGMPRetainedValue(retain);
     for (mlir::Operation *next = retain->getNextNode(); next;
          next = next->getNextNode()) {
+      if (isUnsafeRcOperation(next))
+        break;
       if (auto ifOp = llvm::dyn_cast<mlir::scf::IfOp>(next)) {
         if (!ifOp->hasAttr(kExpandedDecrementAttr))
           break;
@@ -284,11 +290,13 @@ llvm::LogicalResult runIncDecCancellation(mlir::func::FuncOp func) {
   llvm::SmallVector<ReussirRcIncOp> incOps;
   func->walk([&](ReussirRcIncOp op) { incOps.push_back(op); });
   for (auto op : incOps) {
-    if (!op.isSingleAcquire())
+    if (isUnsafeRcOperation(op) || !op.isSingleAcquire())
       continue;
     // iterate all succeeding operations in the same block
     mlir::Operation *next = op->getNextNode();
     while (next) {
+      if (isUnsafeRcOperation(next))
+        break;
       if (auto ifOp = llvm::dyn_cast<mlir::scf::IfOp>(next)) {
         // This is a similar situation as other aborting cases.
         if (!ifOp->hasAttr(kExpandedDecrementAttr)) {

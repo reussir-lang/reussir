@@ -51,7 +51,8 @@ namespace reussir {
 #include "Reussir/Conversion/Passes.h.inc"
 
 bool canScheduleDecrement(ReussirRcDecOp op) {
-  if (op.isDestructuring() || op->hasAttr(REUSSIR_NO_DEFER) ||
+  if (isUnsafeRcOperation(op) || op.isDestructuring() ||
+      op->hasAttr(REUSSIR_NO_DEFER) ||
       op.getRcPtr().getType().getCapability() != Capability::shared)
     return false;
   auto token = op.getNullableToken();
@@ -122,6 +123,9 @@ struct RcDecrementExpansionPattern
                   .getRefCount()
             : ReussirRcFetchOp::create(rewriter, op.getLoc(), op.getRcPtr())
                   .getRefCount();
+    if (isUnsafeRcOperation(op))
+      prevRcCount.getDefiningOp()->setAttr(kUnsafeRcAttr,
+                                           rewriter.getUnitAttr());
     auto isOne = mlir::arith::CmpIOp::create(
         rewriter, op.getLoc(), mlir::arith::CmpIPredicate::eq, prevRcCount,
         mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));
@@ -203,8 +207,10 @@ struct RcDecrementExpansionPattern
         auto decremented = mlir::arith::SubIOp::create(
             rewriter, op.getLoc(), prevRcCount,
             mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));
-        ReussirRcSetOp::create(rewriter, op.getLoc(), op.getRcPtr(),
-                               decremented.getResult());
+        auto set = ReussirRcSetOp::create(rewriter, op.getLoc(), op.getRcPtr(),
+                                          decremented.getResult());
+        if (isUnsafeRcOperation(op))
+          set->setAttr(kUnsafeRcAttr, rewriter.getUnitAttr());
       }
       if (op.isDestructuring()) {
         // The shared path keeps the box alive, so the consumer's bound
@@ -217,6 +223,8 @@ struct RcDecrementExpansionPattern
       mlir::scf::YieldOp::create(rewriter, op.getLoc(), null->getResults());
     }
     ifOp->setAttr(kExpandedDecrementAttr, rewriter.getUnitAttr());
+    if (isUnsafeRcOperation(op))
+      ifOp->setAttr(kUnsafeRcAttr, rewriter.getUnitAttr());
     rewriter.replaceOp(op, ifOp);
     return mlir::success();
   }
