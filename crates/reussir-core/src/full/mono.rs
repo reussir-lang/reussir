@@ -2974,7 +2974,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         ty,
                         func,
                     ) {
-                        self.error(span, format!("`core::object::{}` can only be applied to an RC-managed object; this instantiation has {reason}", func.as_str()));
+                        self.error(span, format!("`core::object::{}` can only be applied to an RC-managed object; rejected in this instantiation: {reason}", func.as_str()));
                     }
                 }
                 if let crate::intrinsic::IntrinsicOp::BigInt { func } = *op {

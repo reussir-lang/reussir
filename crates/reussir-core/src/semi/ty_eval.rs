@@ -802,6 +802,9 @@ pub fn object_operand_rejection(
             == crate::intrinsic::ObjectFn::IsUnique)
             .then_some("uniqueness is not defined for frozen regional objects"),
         TyKind::BigInt(_) => Some("a built-in integer handle"),
+        TyKind::Tensor { .. } | TyKind::Future(_) | TyKind::Token => {
+            Some("a scope-confined kernel SSA value")
+        }
         _ => arc_inner_rejection(cap_of, ty),
     }
 }

@@ -2,5 +2,5 @@
 // RUN: %not %rrc %t.hir --emit mir -o - 2>&1 | %FileCheck %s
 
 fn generic<T>(x: T) -> bool { core::object::is_unique(x) }
-// CHECK: `core::object::is_unique` can only be applied to an RC-managed object; this instantiation has not an rc box
+// CHECK: `core::object::is_unique` can only be applied to an RC-managed object; rejected in this instantiation: not an rc box
 pub fn scalar(x: i64) -> bool { generic(x) }
