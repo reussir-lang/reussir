@@ -1,0 +1,12 @@
+/// Whether the object currently has exactly one reference. Borrows `object`.
+#[lang("core::object::is_unique")]
+pub fn is_unique<T>(object: T) -> bool;
+
+/// Add one reference without transferring ownership. The caller must release it.
+#[lang("core::object::unsafe_inc")]
+pub fn unsafe_inc<T>(object: T);
+
+/// Release one reference without transferring ownership. The caller must own
+/// an extra reference; automatic lifetime management still releases its own.
+#[lang("core::object::unsafe_dec")]
+pub fn unsafe_dec<T>(object: T);

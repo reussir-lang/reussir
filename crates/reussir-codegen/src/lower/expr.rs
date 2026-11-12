@@ -897,6 +897,41 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             // dialect ops and attributes; the backend pipeline's dialect
             // conversions take the emitted op from there.
             Intrinsic { op, args } => match op {
+                IntrinsicOp::Object { func } => {
+                    use reussir_core::intrinsic::ObjectFn;
+                    let [arg] = args else {
+                        return err("object intrinsic expects one argument");
+                    };
+                    let value = self
+                        .expr(block, env, arg)?
+                        .ok_or_else(|| LoweringError("object operand produced no value".into()))?;
+                    if !self.tys.is_managed_rc(arg.ty) {
+                        return err("object intrinsic requires an RC-managed object");
+                    }
+                    match func {
+                        ObjectFn::IsUnique => Ok(Some(
+                            self.append(
+                                block,
+                                dialect::rc_is_unique(
+                                    self.context,
+                                    IntegerType::new(self.context, 1).into(),
+                                    value,
+                                    loc,
+                                )
+                                .into(),
+                            ),
+                        )),
+                        ObjectFn::UnsafeInc => {
+                            block
+                                .append_operation(dialect::rc_inc(self.context, value, loc).into());
+                            Ok(None)
+                        }
+                        ObjectFn::UnsafeDec => {
+                            block.append_operation(self.build_rc_dec(value, arg.ty, loc));
+                            Ok(None)
+                        }
+                    }
+                }
                 IntrinsicOp::Panic => {
                     debug_assert!(args.is_empty(), "panic has no value operands");
                     block.append_operation(

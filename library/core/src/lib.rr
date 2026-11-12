@@ -9,4 +9,5 @@ pub mod cmp;
 pub mod intrinsic;
 pub mod marker;
 pub mod num;
+pub mod object;
 pub mod pjrt;

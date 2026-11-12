@@ -1,0 +1,26 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+struct [shared] Box { value: i64 }
+struct [value] Inline { box: Box }
+struct [regional] Node { value: i64 }
+
+// CHECK-DAG: `core::object::is_unique` can only be applied to an RC-managed object; found `i64`
+fn scalar(x: i64) -> bool { core::object::is_unique(x) }
+// CHECK-DAG: `core::object::unsafe_inc` can only be applied to an RC-managed object; found `str`
+fn string(x: str) { core::object::unsafe_inc(x); }
+// CHECK-DAG: `core::object::unsafe_dec` can only be applied to an RC-managed object
+fn inline(x: Inline) { core::object::unsafe_dec(x); }
+// CHECK-DAG: `core::object::is_unique` can only be applied to an RC-managed object
+fn tuple(x: (Box, i64)) -> bool { core::object::is_unique(x) }
+// CHECK-DAG: `core::object::is_unique` can only be applied to an RC-managed object
+fn nullable(x: Nullable<Box>) -> bool { core::object::is_unique(x) }
+// CHECK-DAG: `core::object::is_unique` can only be applied to an RC-managed object
+fn regional(x: [flex] Node) -> bool { core::object::is_unique(x) }
+// CHECK-DAG: `core::object::is_unique` expects one argument
+fn missing() -> bool { core::object::is_unique() }
+// CHECK-DAG: `core::object::unsafe_inc` expects one argument
+fn extra(x: Box) { core::object::unsafe_inc(x, x); }
+// CHECK-DAG: `core::object::unsafe_dec` takes at most one type argument
+fn types(x: Box) { core::object::unsafe_dec<Box, Box>(x); }
+// CHECK-DAG: unknown object intrinsic `core::object::unknown`
+fn unknown(x: Box) { core::object::unknown(x); }
