@@ -259,9 +259,10 @@ static bool readsImmutableMemory(ReussirRefLoadOp load) {
 // must not conflict with the callee's. Besides pure ops, that admits reads of
 // immutable memory and the bookkeeping of retains and releases: counts,
 // tokens, and allocation. Another call, a store, or a read of memory the
-// callee may write does not qualify.
+// callee may write does not qualify, and neither does a manual count change
+// (an `unsafe` retain or release), whose place the program chose.
 static bool canPrecedeSelfCall(mlir::Operation *op) {
-  if (llvm::isa<mlir::CallOpInterface>(op))
+  if (llvm::isa<mlir::CallOpInterface>(op) || isUnsafeRcOperation(op))
     return false;
   if (auto load = llvm::dyn_cast<ReussirRefLoadOp>(op))
     return readsImmutableMemory(load);

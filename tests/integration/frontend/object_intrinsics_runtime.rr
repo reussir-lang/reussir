@@ -28,3 +28,24 @@ fn cell() -> bool {
     before && !shared && object::is_unique(c)
 }
 extern "C" trampoline "object_cell_counts" = cell;
+
+enum List { Nil, Cons(i64, List) }
+
+// The manual retain stays held across the self call.
+fn walk(n: i64, b: Box, seen: Cell<i64>) -> List {
+    if n == 0 {
+        core::intrinsic::cell::set(seen, if object::is_unique(b) { 1 } else { 0 });
+        List::Nil
+    } else {
+        object::unsafe_inc(b);
+        let rest = walk(n - 1, b, seen);
+        object::unsafe_dec(b);
+        List::Cons { n, rest }
+    }
+}
+fn recursion() -> bool {
+    let seen: Cell<i64> = core::intrinsic::cell::alloc(1);
+    let list = walk(3, Box{0}, seen);
+    core::intrinsic::cell::get(seen) == 0
+}
+extern "C" trampoline "object_recursion_counts" = recursion;

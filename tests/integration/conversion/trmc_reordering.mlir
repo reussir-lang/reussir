@@ -141,4 +141,34 @@ module {
     }
     return %result : !rc_list
   }
+
+  // A manual release after the self call keeps its retain held across it.
+  // CHECK-LABEL: func.func @manual_release_after(
+  // CHECK-NOT: .trmc
+  // CHECK: call @manual_release_after(
+  // CHECK-NEXT: reussir.rc.dec{{.*}}{unsafe}
+  func.func @manual_release_after(%n: i64, %box: !box) -> !rc_list {
+    %zero = arith.constant 0 : i64
+    %done = arith.cmpi eq, %n, %zero : i64
+    %result = scf.if %done -> (!rc_list) {
+      reussir.rc.dec(%box : !box)
+      %nil = reussir.record.compound : !list_nil
+      %variant = reussir.record.variant[1] (%nil : !list_nil) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    } else {
+      %one = arith.constant 1 : i64
+      %next = arith.subi %n, %one : i64
+      reussir.rc.inc(%box : !box) {unsafe}
+      reussir.rc.inc(%box : !box)
+      %rest = func.call @manual_release_after(%next, %box) : (i64, !box) -> !rc_list
+      reussir.rc.dec(%box : !box) {unsafe}
+      reussir.rc.dec(%box : !box)
+      %cons = reussir.record.compound(%n, %rest : i64, !rc_list) : !list_cons
+      %variant = reussir.record.variant[0] (%cons : !list_cons) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    }
+    return %result : !rc_list
+  }
 }
