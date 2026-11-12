@@ -11,17 +11,11 @@ pub struct [shared] Box { value: i64 }
 pub struct [shared] Outer { inner: Box }
 struct [regional] Node { value: i64 }
 
-// CHECK-LABEL: func.func {{.*}}unique
-// CHECK-NOT: reussir.rc.inc
-// CHECK: reussir.rc.is_unique
-// CHECK: reussir.rc.dec
-pub fn unique(b: Box) -> bool { object::is_unique(b) }
-
 // CHECK-LABEL: func.func {{.*}}adjust
-// CHECK: reussir.rc.inc {{.*}} {reussir.unsafe}
+// CHECK: reussir.rc.inc{{.*}}{reussir.unsafe}
 // CHECK-NOT: reussir.rc.inc
 // CHECK: reussir.rc.is_unique
-// CHECK: reussir.rc.dec {{.*}} {reussir.unsafe}
+// CHECK: reussir.rc.dec{{.*}}{reussir.unsafe}
 // CHECK: reussir.rc.dec
 pub fn adjust(b: Box) -> bool {
     object::unsafe_inc(b);
@@ -29,6 +23,12 @@ pub fn adjust(b: Box) -> bool {
     object::unsafe_dec(b);
     result
 }
+
+// CHECK-LABEL: func.func {{.*}}unique
+// CHECK-NOT: reussir.rc.inc
+// CHECK: reussir.rc.is_unique
+// CHECK: reussir.rc.dec
+pub fn unique(b: Box) -> bool { object::is_unique(b) }
 
 fn generic<T>(x: T) -> bool { object::is_unique<T>(x) }
 pub fn array(x: [i64; 3]) -> bool { generic(x) }

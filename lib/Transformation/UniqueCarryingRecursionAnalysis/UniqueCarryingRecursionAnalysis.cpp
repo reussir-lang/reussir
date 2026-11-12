@@ -466,9 +466,9 @@ computeFunctionSummary(mlir::func::FuncOp funcOp,
                        const FunctionSummaryMap &summaries) {
   if (funcOp.isDeclaration())
     return initialFunctionSummary(funcOp);
+  ProvenanceEvaluator evaluator(summaries);
   llvm::SmallVector<UniqueCarryingValue> summary =
       initialFunctionSummary(funcOp);
-  ProvenanceEvaluator evaluator(summaries);
   funcOp.walk([&](mlir::func::ReturnOp returnOp) {
     for (auto [index, operand] : llvm::enumerate(returnOp.getOperands())) {
       if (!isRcType(operand.getType()))

@@ -12,7 +12,7 @@ module {
   // BORROW-LABEL: @caller(
   // BORROW: reussir.rc.inc(%arg0
   // BORROW-NOT: reussir.rc.inc(%arg1
-  // BORROW: call @touch.borrow_1(
+  // BORROW: call @touch.borrowed_1(
   func.func @caller(%manual: !R, %automatic: !R) -> (i1, i1) {
     reussir.rc.inc(%manual : !R)
     reussir.rc.inc(%automatic : !R)
@@ -42,12 +42,12 @@ module {
     }
     return %m, %a : !R, !R
   }
-  // BORROW-LABEL: @touch.borrow_1(
+  // BORROW-LABEL: func.func private @touch.borrowed_1(
   // BORROW: reussir.rc.inc(%arg0{{.*}}{reussir.unsafe}
   // BORROW: reussir.rc.dec(%arg0
   // BORROW-NOT: reussir.rc.dec(%arg1
   // BORROW: return
-  // UNIQUE-LABEL: @mixed_loop.unique(
+  // UNIQUE-LABEL: func.func private @mixed_loop.unique(
   // UNIQUE-NOT: reussir.rc.assume_unique(%arg0
   // UNIQUE: reussir.rc.assume_unique(%arg1
   // UNIQUE: reussir.rc.inc(%arg0{{.*}}{reussir.unsafe}

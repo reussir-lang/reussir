@@ -905,6 +905,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     let value = self
                         .expr(block, env, arg)?
                         .ok_or_else(|| LoweringError("object operand produced no value".into()))?;
+                    self.remember_temp(env, arg, value);
                     if !self.tys.is_managed_rc(arg.ty) {
                         return err("object intrinsic requires an RC-managed object");
                     }

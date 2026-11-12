@@ -30,6 +30,14 @@ module {
     reussir.rc.dec(%x : !R)
     return %u : i1
   }
+  // CHECK-LABEL: func.func @release_then_return(
+  // CHECK-NOT: reussir.carrying_uniqueness
+  // CHECK: reussir.rc.dec{{.*}}{reussir.unsafe}
+  // CHECK: return
+  func.func @release_then_return(%x: !R) -> !R {
+    reussir.rc.dec(%x : !R) {reussir.unsafe}
+    return %x : !R
+  }
   // CHECK-LABEL: @loop(
   // CHECK: reussir.rc.inc{{.*}}{reussir.unsafe}
   // CHECK: call @loop(
