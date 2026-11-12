@@ -1,0 +1,37 @@
+// RUN: %rrc %s -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/trmc_effect_order.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/trmc_effect_order.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+import core::intrinsic::cell;
+enum List { Nil, Cons(i64, List) }
+
+// The store follows the recursion, so the outermost call writes last.
+fn store_after(n: i64, c: Cell<i64>) -> List {
+    if n == 0 { List::Nil } else {
+        let rest = store_after(n - 1, c);
+        cell::set(c, n);
+        List::Cons { n, rest }
+    }
+}
+fn last_store(n: i64) -> i64 {
+    let c: Cell<i64> = cell::alloc(0);
+    let l = store_after(n, c);
+    cell::get(c)
+}
+extern "C" trampoline "last_store" = last_store;
+
+// The read follows the recursion, so it sees what the inner calls wrote.
+fn read_after(n: i64, c: Cell<i64>) -> List {
+    if n == 0 { cell::set(c, 7); List::Nil } else {
+        let rest = read_after(n - 1, c);
+        List::Cons { cell::get(c), rest }
+    }
+}
+fn sum(l: List) -> i64 {
+    match l { List::Nil => 0, List::Cons(x, rest) => x + sum(rest) }
+}
+fn reads(n: i64) -> i64 { sum(read_after(n, cell::alloc(0))) }
+extern "C" trampoline "reads" = reads;
