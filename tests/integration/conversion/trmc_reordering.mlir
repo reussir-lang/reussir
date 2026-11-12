@@ -115,4 +115,30 @@ module {
     }
     return %result : !rc_list
   }
+
+  // A division may trap, and the recursion may not return, so it stays after.
+  // CHECK-LABEL: func.func @div_after(
+  // CHECK-NOT: .trmc
+  // CHECK: call @div_after(
+  // CHECK-NEXT: arith.divsi
+  func.func @div_after(%n: i64, %d: i64) -> !rc_list {
+    %zero = arith.constant 0 : i64
+    %done = arith.cmpi eq, %n, %zero : i64
+    %result = scf.if %done -> (!rc_list) {
+      %nil = reussir.record.compound : !list_nil
+      %variant = reussir.record.variant[1] (%nil : !list_nil) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    } else {
+      %one = arith.constant 1 : i64
+      %next = arith.subi %n, %one : i64
+      %rest = func.call @div_after(%next, %d) : (i64, i64) -> !rc_list
+      %quotient = arith.divsi %n, %d : i64
+      %cons = reussir.record.compound(%quotient, %rest : i64, !rc_list) : !list_cons
+      %variant = reussir.record.variant[0] (%cons : !list_cons) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    }
+    return %result : !rc_list
+  }
 }

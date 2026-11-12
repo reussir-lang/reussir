@@ -29,8 +29,9 @@
 ///
 /// Shapes A and B re-create the self call at the leaf, so the call moves past
 /// everything that ran between it and the leaf. A call is linearized only
-/// when all of that may run first (`canPrecedeSelfCall`); otherwise it stays
-/// where it is and its leaf takes the apply fallback.
+/// when each of those ops is speculatable and free of effects that conflict
+/// with the callee's (`canPrecedeSelfCall`); otherwise it stays where it is
+/// and its leaf takes the apply fallback.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -254,9 +255,11 @@ static bool readsImmutableMemory(ReussirRefLoadOp load) {
 }
 
 // Whether running `op` before a self call it used to follow is unobservable.
-// Pure ops qualify, and so do reads of immutable memory and the bookkeeping
-// of retains and releases: counts, tokens, and allocation. Another call, a
-// store, or a read of memory the callee may write does not.
+// The op must be speculatable, since the call may not return, and its effects
+// must not conflict with the callee's. Besides pure ops, that admits reads of
+// immutable memory and the bookkeeping of retains and releases: counts,
+// tokens, and allocation. Another call, a store, or a read of memory the
+// callee may write does not qualify.
 static bool canPrecedeSelfCall(mlir::Operation *op) {
   if (llvm::isa<mlir::CallOpInterface>(op))
     return false;
@@ -272,8 +275,14 @@ static bool canPrecedeSelfCall(mlir::Operation *op) {
       op->hasAttr(kExpandedDecrementAttr))
     return true;
   if (op->getNumRegions() == 0)
-    return mlir::isMemoryEffectFree(op);
+    return mlir::isPure(op);
+  // Nested ops are judged one by one, so the region op only has to defer
+  // both its effects and its speculatability to them.
   if (!op->hasTrait<mlir::OpTrait::HasRecursiveMemoryEffects>())
+    return false;
+  auto speculatable = llvm::dyn_cast<mlir::ConditionallySpeculatable>(op);
+  if (!speculatable ||
+      speculatable.getSpeculatability() == mlir::Speculation::NotSpeculatable)
     return false;
   return llvm::all_of(op->getRegions(), [](mlir::Region &region) {
     return llvm::all_of(region.getOps(), [](mlir::Operation &nested) {
