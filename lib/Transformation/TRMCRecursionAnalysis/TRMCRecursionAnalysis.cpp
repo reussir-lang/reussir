@@ -27,8 +27,14 @@
 /// no longer disables the constructor arms next to it — it simply takes the
 /// apply fallback, exactly like Koka's ctail compilation.
 ///
+/// Shapes A and B re-create the self call at the leaf, so the call moves past
+/// everything that ran between it and the leaf. A call is linearized only
+/// when all of that may run first (`canPrecedeSelfCall`); otherwise it stays
+/// where it is and its leaf takes the apply fallback.
+///
 //===----------------------------------------------------------------------===//
 
+#include "Reussir/Conversion/RcDecrementExpansion.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
@@ -40,7 +46,10 @@
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/IRMapping.h>
 #include <mlir/IR/SymbolTable.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Pass/Pass.h>
+
+#include <generator>
 
 namespace reussir {
 
@@ -209,17 +218,124 @@ static bool isSameCreateSite(mlir::Operation *lhs, mlir::Operation *rhs,
   return true;
 }
 
+// The ops that run before `op` in its function, nearest first: its
+// predecessors in the block, then those of each enclosing op.
+static std::generator<mlir::Operation *> precedingOps(mlir::Operation *op) {
+  for (; op && !llvm::isa<mlir::func::FuncOp>(op); op = op->getParentOp())
+    for (mlir::Operation *prev = op->getPrevNode(); prev;
+         prev = prev->getPrevNode())
+      co_yield prev;
+}
+
+// Whether the callee cannot write what `load` reads: the reference comes from
+// a box by projection and passes neither a cell nor a mutable field.
+static bool readsImmutableMemory(ReussirRefLoadOp load) {
+  mlir::Value ref = load.getRef();
+  for (;;) {
+    auto type = llvm::cast<RefType>(ref.getType());
+    if (type.getCapability() == Capability::field ||
+        llvm::isa<CellType>(type.getElementType()))
+      return false;
+    if (auto argument = llvm::dyn_cast<mlir::BlockArgument>(ref)) {
+      auto dispatch = llvm::dyn_cast<ReussirRecordDispatchOp>(
+          argument.getOwner()->getParentOp());
+      if (!dispatch)
+        return false;
+      ref = dispatch.getVariant();
+      continue;
+    }
+    mlir::Operation *def = ref.getDefiningOp();
+    if (llvm::isa<ReussirRcBorrowOp>(def))
+      return true;
+    if (!llvm::isa<ReussirRefProjectOp, ReussirRecordCoerceOp>(def))
+      return false;
+    ref = def->getOperand(0);
+  }
+}
+
+// Whether running `op` before a self call it used to follow is unobservable.
+// Pure ops qualify, and so do reads of immutable memory and the bookkeeping
+// of retains and releases: counts, tokens, and allocation. Another call, a
+// store, or a read of memory the callee may write does not.
+static bool canPrecedeSelfCall(mlir::Operation *op) {
+  if (llvm::isa<mlir::CallOpInterface>(op))
+    return false;
+  if (auto load = llvm::dyn_cast<ReussirRefLoadOp>(op))
+    return readsImmutableMemory(load);
+  if (llvm::isa<ReussirRcIncOp, ReussirRcDecOp, ReussirRcFetchOp,
+                ReussirRcFetchSubOp, ReussirRcSetOp, ReussirRcReinterpretOp,
+                ReussirRcCreateOp, ReussirRcCreateCompoundOp,
+                ReussirRcCreateVariantOp, ReussirRefAcquireOp, ReussirRefDropOp,
+                ReussirRefSpilledOp, ReussirTokenAllocOp, ReussirTokenFreeOp,
+                ReussirTokenEnsureOp, ReussirTokenLaunderOp,
+                ReussirTokenReallocOp>(op) ||
+      op->hasAttr(kExpandedDecrementAttr))
+    return true;
+  if (op->getNumRegions() == 0)
+    return mlir::isMemoryEffectFree(op);
+  if (!op->hasTrait<mlir::OpTrait::HasRecursiveMemoryEffects>())
+    return false;
+  return llvm::all_of(op->getRegions(), [](mlir::Region &region) {
+    return llvm::all_of(region.getOps(), [](mlir::Operation &nested) {
+      return canPrecedeSelfCall(&nested);
+    });
+  });
+}
+
+// Whether `call` can be re-created at `terminator`.
+static bool canMoveCallTo(mlir::func::CallOp call,
+                          mlir::Operation *terminator) {
+  for (mlir::Operation *op : precedingOps(terminator)) {
+    if (op == call.getOperation())
+      return true;
+    if (!canPrecedeSelfCall(op))
+      return false;
+  }
+  return false;
+}
+
+// Keeps the recursive fields of `create` whose calls can be re-created at
+// `terminator`. The rewrite emits the calls in field order, so walking back
+// from the leaf they must appear in reverse field order; the first call that
+// stays in place (a `pinned` one included) keeps every earlier one in place.
+static void
+retainMovableFields(mlir::Operation *terminator, mlir::Operation *create,
+                    llvm::SmallVectorImpl<RecursiveFieldInfo> &fields,
+                    const llvm::SmallPtrSetImpl<mlir::Operation *> &pinned) {
+  size_t firstMovable = fields.size();
+  for (mlir::Operation *op : precedingOps(terminator)) {
+    if (firstMovable == 0)
+      break;
+    if (op == create)
+      continue;
+    auto *field = llvm::find_if(fields, [&](RecursiveFieldInfo &info) {
+      return info.call.getOperation() == op;
+    });
+    if (field == fields.end()) {
+      if (!canPrecedeSelfCall(op))
+        break;
+      continue;
+    }
+    size_t position = field - fields.begin();
+    if (pinned.contains(op) || position + 1 != firstMovable)
+      break;
+    firstMovable = position;
+  }
+  fields.erase(fields.begin(), fields.begin() + firstMovable);
+}
+
 struct LeafInfo {
   mlir::Operation *terminator;
   mlir::Value value;
 };
 
-// The per-function rewrite plan: every return-position leaf, plus the set of
-// class-A creates with their linearizable recursive fields.
+// The per-function rewrite plan: every return-position leaf, the class-A
+// creates with their linearizable recursive fields, and the class-B calls.
 struct TrmcPlan {
   llvm::SmallVector<LeafInfo> leaves;
   llvm::SmallDenseMap<mlir::Operation *, llvm::SmallVector<RecursiveFieldInfo>>
       constructorLeaves;
+  llvm::SmallPtrSet<mlir::Operation *, 4> tailCalls;
 };
 
 // Walks the value spine from a return down through single-result,
@@ -289,21 +405,44 @@ static TrmcPlan buildPlan(mlir::func::FuncOp funcOp, llvm::StringRef callee) {
     return true;
   };
 
-  for (mlir::Operation *create : candidates) {
-    llvm::SmallVector<RecursiveFieldInfo> fields =
-        collectRecursiveFields(createFields(create), callee);
-    llvm::erase_if(fields, [&](RecursiveFieldInfo &info) {
-      return !isLinearizable(info.call, create);
-    });
-    if (!fields.empty())
-      plan.constructorLeaves.try_emplace(create, std::move(fields));
+  // A shared call is consumed by several creates. If one of them cannot
+  // take it, it stays in place for all of them, which in turn pins the calls
+  // before it; repeat until no further call is pinned.
+  llvm::SmallPtrSet<mlir::Operation *, 4> pinned;
+  for (bool changed = true; changed;) {
+    changed = false;
+    plan.constructorLeaves.clear();
+    for (LeafInfo &leaf : plan.leaves) {
+      mlir::Operation *create = leaf.value.getDefiningOp();
+      if (!candidates.contains(create))
+        continue;
+      llvm::SmallVector<RecursiveFieldInfo> fields =
+          collectRecursiveFields(createFields(create), callee);
+      llvm::erase_if(fields, [&](RecursiveFieldInfo &info) {
+        return !isLinearizable(info.call, create);
+      });
+      llvm::SmallVector<RecursiveFieldInfo> movable(fields);
+      retainMovableFields(leaf.terminator, create, movable, pinned);
+      for (RecursiveFieldInfo &info :
+           llvm::MutableArrayRef(fields).drop_back(movable.size()))
+        changed |= pinned.insert(info.call.getOperation()).second;
+      if (!movable.empty())
+        plan.constructorLeaves.try_emplace(create, std::move(movable));
+    }
+  }
+
+  for (LeafInfo &leaf : plan.leaves) {
+    auto call = llvm::dyn_cast_if_present<mlir::func::CallOp>(
+        leaf.value.getDefiningOp());
+    if (call && call.getCallee() == callee && call.getNumResults() == 1 &&
+        leaf.value.hasOneUse() && canMoveCallTo(call, leaf.terminator))
+      plan.tailCalls.insert(call);
   }
   return plan;
 }
 
 struct TrmcRewriteContext {
   mlir::IRRewriter &rewriter;
-  llvm::StringRef originalName;
   llvm::StringRef helperName;
   mlir::Value ctxArg;
   CctxType ctxType;
@@ -402,13 +541,9 @@ static void rewriteConstructorLeaf(mlir::Operation *terminator,
 }
 
 // Class B: a plain self tail call threads the context through unchanged.
-static bool rewriteTailCallLeaf(mlir::Operation *terminator, mlir::Value value,
+static void rewriteTailCallLeaf(mlir::Operation *terminator, mlir::Value value,
                                 TrmcRewriteContext &ctx) {
-  auto call =
-      llvm::dyn_cast_if_present<mlir::func::CallOp>(value.getDefiningOp());
-  if (!call || call.getCallee() != ctx.originalName || !value.hasOneUse() ||
-      call.getNumResults() != 1)
-    return false;
+  auto call = llvm::cast<mlir::func::CallOp>(value.getDefiningOp());
   mlir::IRRewriter &rewriter = ctx.rewriter;
   rewriter.setInsertionPoint(terminator);
   llvm::SmallVector<mlir::Value> args(call.getOperands());
@@ -418,7 +553,6 @@ static bool rewriteTailCallLeaf(mlir::Operation *terminator, mlir::Value value,
       mlir::TypeRange{ctx.ctxType.getElementType()}, args);
   setLeafValue(terminator, value, newCall.getResult(0));
   rewriter.eraseOp(call);
-  return true;
 }
 
 // Class C: any other leaf completes the context with its value.
@@ -440,9 +574,11 @@ static void rewriteLeaf(mlir::Operation *terminator, mlir::Value value,
       rewriteConstructorLeaf(terminator, value, planned->second, ctx);
       return;
     }
+    if (plan.tailCalls.contains(def)) {
+      rewriteTailCallLeaf(terminator, value, ctx);
+      return;
+    }
   }
-  if (rewriteTailCallLeaf(terminator, value, ctx))
-    return;
   rewriteApplyLeaf(terminator, value, ctx);
 }
 
@@ -480,7 +616,7 @@ static mlir::func::FuncOp createTrmcHelper(mlir::func::FuncOp funcOp,
 
   mlir::IRRewriter rewriter(context);
   TrmcRewriteContext ctx{
-      rewriter, funcOp.getName(), helperFunc.getName(),
+      rewriter, helperFunc.getName(),
       helperFunc.getArgument(helperFunc.getNumArguments() - 1), ctxType};
 
   // Plan on the clone: the plan owns the leaf list and the batch decision of
