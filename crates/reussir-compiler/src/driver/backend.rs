@@ -173,6 +173,7 @@ pub(crate) fn backend_module<'c>(
         nullary_variant_encoding: cli.nullary_variant_encoding.resolve(machine.triple()),
         pack_record_members: !cli.no_pack_record_members,
         closure_wpd,
+        arm_sve: machine.has_arm_sve(),
         transform_scripts: parse_transform_scripts(&cli.transform_script)?,
         ..LoweringOptions::default()
     };
