@@ -4322,7 +4322,91 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             SimdFn::Insert => {
                 builders::vector_insert(self.context, values[1], values[0], &positions(2)?, loc)
             }
+            SimdFn::Select => arith::select(values[0], values[1], values[2], loc),
             SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
+            _ => {
+                // The lanewise operations: the lane type of the operands
+                // picks the integer, unsigned or floating-point form.
+                let TyKind::Simd { elem, .. } = *args[0].ty.kind() else {
+                    return err("a lanewise vector operation takes vectors");
+                };
+                let operands = self.tys.mlir_ty(args[0].ty)?;
+                let lane = self.tys.mlir_ty(elem)?;
+                let float = matches!(elem.kind(), TyKind::Fp(_));
+                let signed = matches!(elem.kind(), TyKind::Int(IntTy::Signed(_)));
+                let (a, b) = (values[0], values.get(1).copied().unwrap_or(values[0]));
+                // Every lane set to an integer constant, for `neg` and `not`.
+                let all = |n: i64| {
+                    let constant = self.append(
+                        block,
+                        arith::constant(self.context, IntegerAttribute::new(lane, n).into(), loc),
+                    );
+                    self.append(block, builders::vector_broadcast(constant, operands, loc))
+                };
+                let unary = |name: &str| {
+                    OperationBuilder::new(name, loc)
+                        .add_operands(&[a])
+                        .add_results(&[operands])
+                        .build()
+                        .map_err(|_| LoweringError("invalid lanewise vector operation".into()))
+                };
+                let cmp = |int: [CmpiPredicate; 2], fp: CmpfPredicate| match float {
+                    true => arith::cmpf(self.context, fp, a, b, loc),
+                    false => arith::cmpi(self.context, int[usize::from(signed)], a, b, loc),
+                };
+                use CmpfPredicate as F;
+                use CmpiPredicate as I;
+                match (func, float, signed) {
+                    (SimdFn::Add, false, _) => arith::addi(a, b, loc),
+                    (SimdFn::Add, true, _) => arith::addf(a, b, loc),
+                    (SimdFn::Sub, false, _) => arith::subi(a, b, loc),
+                    (SimdFn::Sub, true, _) => arith::subf(a, b, loc),
+                    (SimdFn::Mul, false, _) => arith::muli(a, b, loc),
+                    (SimdFn::Mul, true, _) => arith::mulf(a, b, loc),
+                    (SimdFn::Div, true, _) => arith::divf(a, b, loc),
+                    (SimdFn::Div, false, true) => arith::divsi(a, b, loc),
+                    (SimdFn::Div, false, false) => arith::divui(a, b, loc),
+                    (SimdFn::Rem, true, _) => arith::remf(a, b, loc),
+                    (SimdFn::Rem, false, true) => arith::remsi(a, b, loc),
+                    (SimdFn::Rem, false, false) => arith::remui(a, b, loc),
+                    // `melior` has no builder for `arith.minnumf`.
+                    (SimdFn::Min, true, _) => OperationBuilder::new("arith.minnumf", loc)
+                        .add_operands(&[a, b])
+                        .add_results(&[operands])
+                        .build()
+                        .map_err(|_| LoweringError("invalid `arith.minnumf`".into()))?,
+                    (SimdFn::Min, false, true) => arith::minsi(a, b, loc),
+                    (SimdFn::Min, false, false) => arith::minui(a, b, loc),
+                    (SimdFn::Max, true, _) => arith::maxnumf(a, b, loc),
+                    (SimdFn::Max, false, true) => arith::maxsi(a, b, loc),
+                    (SimdFn::Max, false, false) => arith::maxui(a, b, loc),
+                    (SimdFn::Neg, true, _) => arith::negf(a, loc),
+                    (SimdFn::Neg, false, _) => arith::subi(all(0), a, loc),
+                    (SimdFn::Abs, true, _) => unary("math.absf")?,
+                    (SimdFn::Abs, false, true) => unary("math.absi")?,
+                    // An unsigned lane is its own magnitude.
+                    (SimdFn::Abs, false, false) => return Ok(Some(a)),
+                    (SimdFn::And, ..) => arith::andi(a, b, loc),
+                    (SimdFn::Or, ..) => arith::ori(a, b, loc),
+                    (SimdFn::Xor, ..) => arith::xori(a, b, loc),
+                    (SimdFn::Not, ..) => arith::xori(a, all(-1), loc),
+                    (SimdFn::Shl, ..) => arith::shli(a, b, loc),
+                    (SimdFn::Shr, _, true) => arith::shrsi(a, b, loc),
+                    (SimdFn::Shr, _, false) => arith::shrui(a, b, loc),
+                    (SimdFn::Fma, ..) => OperationBuilder::new("math.fma", loc)
+                        .add_operands(&[a, b, values[2]])
+                        .add_results(&[operands])
+                        .build()
+                        .map_err(|_| LoweringError("invalid `math.fma`".into()))?,
+                    (SimdFn::Eq, ..) => cmp([I::Eq, I::Eq], F::Oeq),
+                    (SimdFn::Ne, ..) => cmp([I::Ne, I::Ne], F::Une),
+                    (SimdFn::Lt, ..) => cmp([I::Ult, I::Slt], F::Olt),
+                    (SimdFn::Le, ..) => cmp([I::Ule, I::Sle], F::Ole),
+                    (SimdFn::Gt, ..) => cmp([I::Ugt, I::Sgt], F::Ogt),
+                    (SimdFn::Ge, ..) => cmp([I::Uge, I::Sge], F::Oge),
+                    _ => return err("vector operation reached lowering unelaborated"),
+                }
+            }
         };
         Ok(Some(self.append(block, built)))
     }

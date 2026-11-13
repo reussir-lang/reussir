@@ -527,6 +527,66 @@ pub enum SimdFn {
     Extract,
     /// `insert(v, x, i...)`: `v` with that lane or sub-vector replaced.
     Insert,
+    /// `add sub mul div rem min max`: lanewise arithmetic on two vectors of
+    /// one numeric type; signedness comes from the lane type.
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Min,
+    Max,
+    /// `neg abs`: lanewise on one numeric vector.
+    Neg,
+    Abs,
+    /// `and or xor not`: lanewise on integer vectors and on masks.
+    And,
+    Or,
+    Xor,
+    Not,
+    /// `shl shr`: lanewise shifts of integer vectors; `shr` is arithmetic
+    /// for signed lanes.
+    Shl,
+    Shr,
+    /// `fma(a, b, c)`: lanewise `a * b + c` on floating-point vectors.
+    Fma,
+    /// `eq ne lt le gt ge`: lanewise comparison; the result is a mask of
+    /// the same shape. `eq` and `ne` also compare masks.
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    /// `select(m, a, b)`: `a` where the mask is set, else `b`.
+    Select,
+}
+
+/// The lanes a lanewise vector operation works on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SimdLanes {
+    /// Integers and floating-point numbers.
+    Numeric,
+    /// Integers.
+    Integer,
+    /// Integers and `bool`.
+    Bits,
+    /// Floating-point numbers.
+    Float,
+    /// Any lane type.
+    Any,
+}
+
+impl SimdLanes {
+    pub fn describe(self) -> &'static str {
+        match self {
+            SimdLanes::Numeric => "integer or floating-point",
+            SimdLanes::Integer => "integer",
+            SimdLanes::Bits => "integer or `bool`",
+            SimdLanes::Float => "floating-point",
+            SimdLanes::Any => "any",
+        }
+    }
 }
 
 impl SimdFn {
@@ -538,6 +598,29 @@ impl SimdFn {
         SimdFn::FromElements,
         SimdFn::Extract,
         SimdFn::Insert,
+        SimdFn::Add,
+        SimdFn::Sub,
+        SimdFn::Mul,
+        SimdFn::Div,
+        SimdFn::Rem,
+        SimdFn::Neg,
+        SimdFn::Min,
+        SimdFn::Max,
+        SimdFn::Abs,
+        SimdFn::And,
+        SimdFn::Or,
+        SimdFn::Xor,
+        SimdFn::Not,
+        SimdFn::Shl,
+        SimdFn::Shr,
+        SimdFn::Fma,
+        SimdFn::Eq,
+        SimdFn::Ne,
+        SimdFn::Lt,
+        SimdFn::Le,
+        SimdFn::Gt,
+        SimdFn::Ge,
+        SimdFn::Select,
     ];
 
     pub fn parse(name: &str) -> Option<SimdFn> {
@@ -553,7 +636,48 @@ impl SimdFn {
             SimdFn::FromElements => "from_elements",
             SimdFn::Extract => "extract",
             SimdFn::Insert => "insert",
+            SimdFn::Add => "add",
+            SimdFn::Sub => "sub",
+            SimdFn::Mul => "mul",
+            SimdFn::Div => "div",
+            SimdFn::Rem => "rem",
+            SimdFn::Neg => "neg",
+            SimdFn::Min => "min",
+            SimdFn::Max => "max",
+            SimdFn::Abs => "abs",
+            SimdFn::And => "and",
+            SimdFn::Or => "or",
+            SimdFn::Xor => "xor",
+            SimdFn::Not => "not",
+            SimdFn::Shl => "shl",
+            SimdFn::Shr => "shr",
+            SimdFn::Fma => "fma",
+            SimdFn::Eq => "eq",
+            SimdFn::Ne => "ne",
+            SimdFn::Lt => "lt",
+            SimdFn::Le => "le",
+            SimdFn::Gt => "gt",
+            SimdFn::Ge => "ge",
+            SimdFn::Select => "select",
         }
+    }
+
+    /// For an operation applied lane by lane to vectors of one type: the
+    /// number of operands, the lanes it accepts, and whether it yields a
+    /// mask and not a vector of that type.
+    pub fn lanewise(self) -> Option<(usize, SimdLanes, bool)> {
+        use SimdFn::*;
+        Some(match self {
+            Add | Sub | Mul | Div | Rem | Min | Max => (2, SimdLanes::Numeric, false),
+            Neg | Abs => (1, SimdLanes::Numeric, false),
+            And | Or | Xor => (2, SimdLanes::Bits, false),
+            Not => (1, SimdLanes::Bits, false),
+            Shl | Shr => (2, SimdLanes::Integer, false),
+            Fma => (3, SimdLanes::Float, false),
+            Eq | Ne => (2, SimdLanes::Any, true),
+            Lt | Le | Gt | Ge => (2, SimdLanes::Numeric, true),
+            _ => return None,
+        })
     }
 
     /// Whether the function survives elaboration; `lanes` does not.

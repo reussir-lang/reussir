@@ -42,3 +42,100 @@ pub fn extract<V, T>(v: V, index: u64) -> T;
 /// `v` with the lane or sub-vector at the indices replaced by `x`.
 #[lang("core::simd::insert")]
 pub fn insert<V, T>(v: V, x: T, index: u64) -> V;
+
+// The lanewise operations take vectors of one type `V` and apply to each
+// lane. Signedness follows the lane type.
+
+/// Lanewise `a + b`. Integer lanes wrap.
+#[lang("core::simd::add")]
+pub fn add<V>(a: V, b: V) -> V;
+
+/// Lanewise `a - b`.
+#[lang("core::simd::sub")]
+pub fn sub<V>(a: V, b: V) -> V;
+
+/// Lanewise `a * b`.
+#[lang("core::simd::mul")]
+pub fn mul<V>(a: V, b: V) -> V;
+
+/// Lanewise `a / b`. An integer lane divided by zero is undefined.
+#[lang("core::simd::div")]
+pub fn div<V>(a: V, b: V) -> V;
+
+/// Lanewise remainder of `a / b`.
+#[lang("core::simd::rem")]
+pub fn rem<V>(a: V, b: V) -> V;
+
+/// Lanewise minimum. A floating-point lane ignores a NaN operand.
+#[lang("core::simd::min")]
+pub fn min<V>(a: V, b: V) -> V;
+
+/// Lanewise maximum. A floating-point lane ignores a NaN operand.
+#[lang("core::simd::max")]
+pub fn max<V>(a: V, b: V) -> V;
+
+/// Lanewise negation.
+#[lang("core::simd::neg")]
+pub fn neg<V>(a: V) -> V;
+
+/// Lanewise absolute value.
+#[lang("core::simd::abs")]
+pub fn abs<V>(a: V) -> V;
+
+/// Lanewise bitwise and, on integer vectors and on masks.
+#[lang("core::simd::and")]
+pub fn and<V>(a: V, b: V) -> V;
+
+/// Lanewise bitwise or.
+#[lang("core::simd::or")]
+pub fn or<V>(a: V, b: V) -> V;
+
+/// Lanewise bitwise exclusive or.
+#[lang("core::simd::xor")]
+pub fn xor<V>(a: V, b: V) -> V;
+
+/// Lanewise complement.
+#[lang("core::simd::not")]
+pub fn not<V>(a: V) -> V;
+
+/// Lanewise shift left by the lanes of `b`.
+#[lang("core::simd::shl")]
+pub fn shl<V>(a: V, b: V) -> V;
+
+/// Lanewise shift right by the lanes of `b`: arithmetic for signed lanes.
+#[lang("core::simd::shr")]
+pub fn shr<V>(a: V, b: V) -> V;
+
+/// Lanewise `a * b + c` on floating-point vectors, rounded once.
+#[lang("core::simd::fma")]
+pub fn fma<V>(a: V, b: V, c: V) -> V;
+
+// The comparisons yield a mask `M`: a vector of `bool` of the shape of `V`.
+
+/// Lanewise `a == b`.
+#[lang("core::simd::eq")]
+pub fn eq<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a != b`. A NaN lane differs from everything.
+#[lang("core::simd::ne")]
+pub fn ne<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a < b`.
+#[lang("core::simd::lt")]
+pub fn lt<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a <= b`.
+#[lang("core::simd::le")]
+pub fn le<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a > b`.
+#[lang("core::simd::gt")]
+pub fn gt<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a >= b`.
+#[lang("core::simd::ge")]
+pub fn ge<V, M>(a: V, b: V) -> M;
+
+/// The lanes of `a` where the mask is set and of `b` elsewhere.
+#[lang("core::simd::select")]
+pub fn select<V, M>(mask: M, a: V, b: V) -> V;
