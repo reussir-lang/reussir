@@ -24,6 +24,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
+#include <mlir/Dialect/Ptr/IR/PtrTypes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/SymbolTable.h>

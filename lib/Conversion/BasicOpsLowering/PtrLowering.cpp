@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #include "Reussir/Conversion/BasicOpsLowering.h"
+#include "Reussir/IR/ReussirOps.h"
 #include <mlir/Conversion/LLVMCommon/Pattern.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/Ptr/IR/PtrOps.h>
@@ -115,11 +116,56 @@ struct PtrDiffConversion : ConvertOpToLLVMPattern<ptr::PtrDiffOp> {
   }
 };
 
+struct PtrAddrConversion : ConvertOpToLLVMPattern<ReussirPtrAddrOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ReussirPtrAddrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getAddr().getType());
+    IntegerType address = addressType(*getTypeConverter(), adaptor.getPtr());
+    Value addr = LLVM::PtrToAddrOp::create(rewriter, op.getLoc(), address,
+                                           adaptor.getPtr());
+    rewriter.replaceOp(op, resize(rewriter, op.getLoc(), addr, type, false));
+    return success();
+  }
+};
+
+struct PtrFromAddrConversion : ConvertOpToLLVMPattern<ReussirPtrFromAddrOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ReussirPtrFromAddrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getPtr().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the pointer type");
+    // `inttoptr` extends or truncates the address itself.
+    rewriter.replaceOpWithNewOp<LLVM::IntToPtrOp>(op, type, adaptor.getAddr());
+    return success();
+  }
+};
+
+struct PtrMaskConversion : ConvertOpToLLVMPattern<ReussirPtrMaskOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ReussirPtrMaskOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    IntegerType address = addressType(*getTypeConverter(), adaptor.getPtr());
+    Value mask =
+        resize(rewriter, op.getLoc(), adaptor.getMask(), address, false);
+    rewriter.replaceOpWithNewOp<LLVM::PtrMaskOp>(op, adaptor.getPtr().getType(),
+                                                 adaptor.getPtr(), mask);
+    return success();
+  }
+};
 } // namespace
 
 void populatePtrLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                  mlir::RewritePatternSet &patterns) {
-  patterns.add<PtrLoadConversion, PtrStoreConversion, PtrDiffConversion>(
+  patterns.add<PtrLoadConversion, PtrStoreConversion, PtrDiffConversion,
+               PtrAddrConversion, PtrFromAddrConversion, PtrMaskConversion>(
       converter);
 }
 } // namespace reussir

@@ -52,6 +52,8 @@ def ReussirDialect : Dialect {
       // pass can declare a pass-level dependency, e.g. the parser-time
       // `cell.create` verifier sizing a token-attached mutex cell box.
       "mlir::sync::SyncDialect",
+      // Opaque pointer operations take and produce `!ptr.ptr` values.
+      "mlir::ptr::PtrDialect",
   ];
   let extraClassDeclaration = [{
   private:

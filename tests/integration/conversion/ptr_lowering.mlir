@@ -38,6 +38,21 @@ func.func @memory(%p: !P, %v: i32) -> i32 {
   return %c : i32
 }
 
+// CHECK-LABEL: define ptr @addresses(ptr %0, i32 %1)
+// CHECK: %[[ADDR:.*]] = ptrtoaddr ptr %0 to i64
+// CHECK: %[[MASK:.*]] = zext i32 %1 to i64
+// CHECK: %[[MASKED:.*]] = call ptr @llvm.ptrmask.p0.i64(ptr %0, i64 %[[MASK]])
+// CHECK: inttoptr i64 %[[ADDR]] to ptr
+func.func @addresses(%p: !P, %mask: i32) -> !P {
+  %addr = reussir.ptr.addr %p : !P -> i64
+  %masked = reussir.ptr.mask %p, %mask : !P, i32
+  %q = reussir.ptr.from_addr %addr : i64 -> !P
+  %r = ptr.ptr_add %masked, %addr : !P, i64
+  %d = ptr.ptr_diff %q, %r : !P -> i64
+  %s = ptr.ptr_add %q, %d : !P, i64
+  return %s : !P
+}
+
 // CHECK-LABEL: define ptr @null()
 // CHECK: ret ptr null
 func.func @null() -> !P {
