@@ -2963,4 +2963,73 @@ def ReussirTrampolineOp
     $direction $abi_name $sym_name `=` $target attr-dict
   }];
 }
+//===----------------------------------------------------------------------===//
+// Reussir Opaque Pointer Operations
+//===----------------------------------------------------------------------===//
+// Opaque pointers are `!ptr.ptr` values and use the upstream `ptr` dialect for
+// arithmetic and memory access. The operations here cover the address
+// manipulations that dialect does not provide.
+
+def ReussirOpaquePtrType : Type<CPred<"::llvm::isa<::mlir::ptr::PtrType>($_self)">,
+                             "opaque pointer", "::mlir::ptr::PtrType">;
+
+class ReussirPtrOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"ptr."#mnemonic, traits>;
+
+def ReussirPtrAddrOp : ReussirPtrOp<"addr", [Pure]> {
+  let summary = "The address of an opaque pointer";
+  let description = [{
+    `reussir.ptr.addr` returns the address of `ptr` as an integer. The address
+    has the index width of the pointer's memory space and is zero-extended or
+    truncated to the result type. The pointer's provenance is not exposed.
+
+    ```mlir
+    %addr = reussir.ptr.addr %p : !ptr.ptr<#ptr.generic_space> -> i64
+    ```
+  }];
+  let arguments = (ins Arg<ReussirOpaquePtrType, "pointer">:$ptr);
+  let results = (outs Res<AnySignlessIntegerOrIndex, "address">:$addr);
+  let assemblyFormat = [{
+    $ptr `:` qualified(type($ptr)) `->` type($addr) attr-dict
+  }];
+}
+
+def ReussirPtrFromAddrOp : ReussirPtrOp<"from_addr", [Pure]> {
+  let summary = "An opaque pointer to an address";
+  let description = [{
+    `reussir.ptr.from_addr` converts an integer address to a pointer. The
+    address is zero-extended or truncated to the index width of the pointer's
+    memory space.
+
+    ```mlir
+    %p = reussir.ptr.from_addr %addr : i64 -> !ptr.ptr<#ptr.generic_space>
+    ```
+  }];
+  let arguments = (ins Arg<AnySignlessIntegerOrIndex, "address">:$addr);
+  let results = (outs Res<ReussirOpaquePtrType, "pointer">:$ptr);
+  let assemblyFormat = [{
+    $addr `:` type($addr) `->` qualified(type($ptr)) attr-dict
+  }];
+}
+
+def ReussirPtrMaskOp
+    : ReussirPtrOp<"mask", [Pure, AllTypesMatch<["ptr", "result"]>]> {
+  let summary = "Mask the address bits of an opaque pointer";
+  let description = [{
+    `reussir.ptr.mask` clears the address bits of `ptr` that are zero in
+    `mask` and keeps the pointer's provenance, as `llvm.ptrmask` does. The
+    mask is zero-extended or truncated to the index width of the pointer's
+    memory space.
+
+    ```mlir
+    %q = reussir.ptr.mask %p, %mask : !ptr.ptr<#ptr.generic_space>, i64
+    ```
+  }];
+  let arguments = (ins Arg<ReussirOpaquePtrType, "pointer">:$ptr,
+      Arg<AnySignlessIntegerOrIndex, "mask">:$mask);
+  let results = (outs Res<ReussirOpaquePtrType, "masked pointer">:$result);
+  let assemblyFormat = [{
+    $ptr `,` $mask `:` qualified(type($ptr)) `,` type($mask) attr-dict
+  }];
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD

@@ -3,6 +3,7 @@ add_mlir_conversion_library(MLIRReussirBasicOpsLowering
   DropStackLowering.cpp
   TargetArrayLowering.cpp
   PjrtLowering.cpp
+  PtrLowering.cpp
   CABISignatureConversion.cpp
   DbgInfoConversion.cpp
   VariantDebugInfo.cpp
@@ -20,6 +21,7 @@ add_mlir_conversion_library(MLIRReussirBasicOpsLowering
   MLIRReussirTypeConverter
   MLIRLLVMCommonConversion
   MLIRLLVMDialect
+  MLIRPtrDialect
   MLIRPtrToLLVM
   MLIRTransforms
   MLIRSync
