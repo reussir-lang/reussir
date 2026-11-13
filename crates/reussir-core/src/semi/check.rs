@@ -3990,6 +3990,75 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
+    /// Whether a lane type is one the operation accepts.
+    fn simd_lanes_accept(lanes: crate::intrinsic::SimdLanes, elem: Ty<'tcx>) -> bool {
+        use crate::intrinsic::SimdLanes;
+        let integer = matches!(elem.kind(), TyKind::Int(_));
+        let float = matches!(elem.kind(), TyKind::Fp(_));
+        match lanes {
+            SimdLanes::Numeric => integer || float,
+            SimdLanes::Integer => integer,
+            SimdLanes::Bits => !float,
+            SimdLanes::Float => float,
+            SimdLanes::Any => true,
+        }
+    }
+
+    /// A reduction: a vector, and optionally the mask of the lanes that
+    /// take part.
+    fn infer_simd_reduction(
+        &mut self,
+        fc: &surface::FuncCall,
+        func: crate::intrinsic::SimdFn,
+        lanes: crate::intrinsic::SimdLanes,
+        shown: &str,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        use crate::intrinsic::IntrinsicOp;
+        if !fc.ty_args.is_empty() {
+            self.error(span, format!("{shown} takes no type arguments"));
+            return self.poison(span);
+        }
+        if fc.args.is_empty() || fc.args.len() > 2 {
+            self.error(
+                span,
+                format!(
+                    "{shown} expects a vector and an optional mask, got {} argument(s)",
+                    fc.args.len()
+                ),
+            );
+            return self.poison(span);
+        }
+        let Some((vector, elem, dims, scalable)) = self.infer_simd_operand(&fc.args[0], shown)
+        else {
+            return self.poison(span);
+        };
+        if !Self::simd_lanes_accept(lanes, elem) {
+            self.error(
+                vector.span,
+                format!(
+                    "{shown} works on {} lanes, found `{}`",
+                    lanes.describe(),
+                    self.ty_display(vector.ty)
+                ),
+            );
+            return self.poison(span);
+        }
+        let mut args = vec![vector];
+        if let Some(mask) = fc.args.get(1) {
+            let mask_ty = self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable);
+            args.push(self.check_expr(mask, mask_ty));
+        }
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::Simd { func },
+                args,
+            },
+            elem,
+            span,
+        )
+    }
+
     /// An operation applied lane by lane: `arity` vectors of one type.
     #[allow(clippy::too_many_arguments)]
     fn infer_simd_lanewise(
@@ -4089,6 +4158,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         );
         if let Some((arity, lanes, compares)) = func.lanewise() {
             return self.infer_simd_lanewise(fc, func, arity, lanes, compares, &shown, span);
+        }
+        if let Some(lanes) = func.reduction() {
+            return self.infer_simd_reduction(fc, func, lanes, &shown, span);
         }
         if !takes_type && !fc.ty_args.is_empty() {
             self.error(span, format!("{shown} takes no type arguments"));

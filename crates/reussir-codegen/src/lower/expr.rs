@@ -4347,7 +4347,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     _ => self.append(block, builders::vector_shape_cast(values[0], flat_ty, loc)),
                 };
                 let reduce = |kind, vector, ty| {
-                    builders::vector_reduction(self.context, kind, vector, ty, loc)
+                    builders::vector_reduction(self.context, kind, vector, ty, None, loc)
                 };
                 match func {
                     SimdFn::Any => reduce(Kind::Or, mask, i1),
@@ -4388,6 +4388,71 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 }
             }
             SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
+            _ if func.reduction().is_some() => {
+                use builders::VectorCombiningKind as Kind;
+                use reussir_backend::melior::ir::attribute::FloatAttribute;
+                let TyKind::Simd {
+                    elem,
+                    dims,
+                    scalable,
+                } = *args[0].ty.kind()
+                else {
+                    return err("a reduction takes a vector");
+                };
+                let lane = self.tys.mlir_ty(elem)?;
+                let width = match elem.kind() {
+                    TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) => u32::from(*w),
+                    _ => 1,
+                };
+                let float = matches!(elem.kind(), TyKind::Fp(_));
+                let signed = matches!(elem.kind(), TyKind::Int(IntTy::Signed(_)));
+                // A reduction reads one dimension, so several are flattened.
+                let lanes = dims.iter().product::<u64>() as i64;
+                let flat = reussir_backend::dialect::ty::vector(lane, &[lanes], scalable);
+                let flatten = |value, ty| match dims.len() {
+                    1 => value,
+                    _ => self.append(block, builders::vector_shape_cast(value, ty, loc)),
+                };
+                // The kind, and the value a lane contributes when it is
+                // masked off: the identity of the combination.
+                let int_min = if width >= 64 {
+                    i64::MIN
+                } else {
+                    -(1i64 << (width - 1))
+                };
+                let (kind, identity, float_identity) = match (func, float, signed) {
+                    (SimdFn::ReduceAdd | SimdFn::ReduceAddReassoc, ..) => (Kind::Add, 0, -0.0),
+                    (SimdFn::ReduceMul | SimdFn::ReduceMulReassoc, ..) => (Kind::Mul, 1, 1.0),
+                    (SimdFn::ReduceMin, true, _) => (Kind::MinNumF, 0, f64::INFINITY),
+                    (SimdFn::ReduceMin, false, true) => (Kind::MinSI, !int_min, 0.0),
+                    (SimdFn::ReduceMin, false, false) => (Kind::MinUI, -1, 0.0),
+                    (SimdFn::ReduceMax, true, _) => (Kind::MaxNumF, 0, f64::NEG_INFINITY),
+                    (SimdFn::ReduceMax, false, true) => (Kind::MaxSI, int_min, 0.0),
+                    (SimdFn::ReduceMax, false, false) => (Kind::MaxUI, 0, 0.0),
+                    (SimdFn::ReduceAnd, ..) => (Kind::And, -1, 0.0),
+                    (SimdFn::ReduceOr, ..) => (Kind::Or, 0, 0.0),
+                    _ => (Kind::Xor, 0, 0.0),
+                };
+                let mut vector = flatten(values[0], flat);
+                if let Some(&mask) = values.get(1) {
+                    let i1 = IntegerType::new(self.context, 1).into();
+                    let mask_ty = reussir_backend::dialect::ty::vector(i1, &[lanes], scalable);
+                    let mask = flatten(mask, mask_ty);
+                    let attribute: Attribute = match float {
+                        true => FloatAttribute::new(self.context, lane, float_identity).into(),
+                        false => IntegerAttribute::new(lane, identity).into(),
+                    };
+                    let scalar = self.append(block, arith::constant(self.context, attribute, loc));
+                    let spread = self.append(block, builders::vector_broadcast(scalar, flat, loc));
+                    vector = self.append(block, arith::select(mask, vector, spread, loc));
+                }
+                let reassoc = matches!(func, SimdFn::ReduceAddReassoc | SimdFn::ReduceMulReassoc);
+                let fastmath = reassoc.then(|| {
+                    Attribute::parse(self.context, "#arith.fastmath<reassoc>")
+                        .expect("valid fastmath attribute")
+                });
+                builders::vector_reduction(self.context, kind, vector, lane, fastmath, loc)
+            }
             _ => {
                 // The lanewise operations: the lane type of the operands
                 // picks the integer, unsigned or floating-point form.
