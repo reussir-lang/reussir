@@ -2466,7 +2466,7 @@ def ReussirClosureWpdTestOp : ReussirClosureOp<"wpd_test", []> {
   let description = [{
     `reussir.closure.wpd_test` asserts that `vtable` (a lowered pointer to a
     closure vtable global) carries the whole-program-devirtualization type id
-    `id` — see `ClosureWpd.h` and docs/design/closure-wpd.md for the id
+    `id` — see `ClosureWpd.h` and *agentic-note*: design-closure-wpd for the id
     scheme (one id per closure return type).
 
     The op is created by the closure dispatch conversion patterns (when the

@@ -207,6 +207,6 @@ boundary become generated `#[repr(transparent)]` pointer wrappers whose
 drop flow correctly in both directions. Ownership is uniform: the boundary
 consumes, exactly like every other call.
 
-See `docs/design/polymorphic-ffi.md` for the full design (boundary
+See #link("https://reussir-lang.github.io/reussir-agentic-journal/design-polymorphic-ffi/")[`design-polymorphic-ffi`] for the full design (boundary
 classification, symbol scheme, the `Rc`-wrapper contract for exposing new
 types).

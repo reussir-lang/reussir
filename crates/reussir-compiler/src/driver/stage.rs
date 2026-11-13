@@ -26,7 +26,7 @@ pub(crate) enum Stage {
     /// behind a versioned header — what a foreign package needs to
     /// type-check against this one and monomorphize its generics locally.
     /// Emit-only, and only from a package: a plain dump carries no
-    /// authoritative package name for the header. See `docs/design/rri.md`.
+    /// authoritative package name for the header. See *agentic-note*: design-rri.
     Rri,
     /// Monomorphized ground MIR (`.mir`).
     Mir,

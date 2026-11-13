@@ -8,7 +8,7 @@
 //! MIR is immutable, so the result is a side-table keyed by [`mir::ExprId`]
 //! anchors rather than a rewritten tree — see [`OwnershipTable`].
 //!
-//! Every Full MIR form is handled (see `crates/reussir-core/docs/ownership-analysis.md` §10): the
+//! Every Full MIR form is handled (see *agentic-note*: design-ownership-analysis-s10): the
 //! linear core (`Var` / `Let` / `Seq` / `Call` / `Ctor` / `Variant` /
 //! `NullableCall`), the [`is_rr`](Rr::is_rr) predicate (including transitive
 //! value-records), `If` branch reconciliation, discarded-result drops, **pattern
@@ -118,7 +118,7 @@
 //! and we reconcile sibling control-flow branches at joins. Unlike Tree Borrows —
 //! a *runtime* semantics that defines UB — this is a *static rewrite* that
 //! inserts the rc ops so the corresponding UB is unrepresentable. See
-//! `crates/reussir-core/docs/ownership-analysis.md` §7.1.
+//! *agentic-note*: design-ownership-analysis-s7-1.
 
 use std::cell::RefCell;
 

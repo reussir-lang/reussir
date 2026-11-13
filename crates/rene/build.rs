@@ -1,7 +1,7 @@
 //! Bundles the `reussir-rt` crate source into the `rene` binary as a
 //! zstd-compressed tar, so `rene build` can materialize and bake the runtime
 //! inside any project's build directory with the user's own Rust toolchain
-//! (docs/design/system-rust-runtime.md). Shipping *source* is what makes the
+//! (*agentic-note*: design-system-rust-runtime). Shipping *source* is what makes the
 //! bundle cross-platform: the produced rlib/staticlib are version-locked to
 //! the rustc that builds them, so they must be baked on the user's machine,
 //! never prebuilt here.
@@ -295,7 +295,7 @@ fn standalone_manifest(crate_toml: &Path, workspace_toml: &Path, is_root: bool) 
         // comment in reussir-rt/Cargo.toml). The workspace pins a nightly
         // toolchain, but the bundled runtime is built by the *user's* rust —
         // drop the feature so a stable toolchain works
-        // (docs/design/system-rust-runtime.md §2).
+        // (*agentic-note*: design-system-rust-runtime-s2).
         if let Some(features) = deps
             .get_mut("mlir_sync")
             .and_then(|s| s.get_mut("features"))

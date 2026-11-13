@@ -2,7 +2,7 @@
 // RUN:   --pass-pipeline='builtin.module(reussir-convert-to-std,convert-scf-to-cf,reussir-lowering-basic-ops{closure-wpd=1},reussir-convert-to-llvm,reconcile-unrealized-casts)' \
 // RUN: | %FileCheck %s
 
-// Closure WPD call-site type tests (docs/design/closure-wpd.md). Every
+// Closure WPD call-site type tests (*agentic-note*: design-closure-wpd). Every
 // indirect vtable call site — eval (evaluate slot), the uniqify expansion's
 // closure.clone (clone slot), rc.dec of a closure (drop slot) — asserts its
 // operand's return-type family id with a `reussir.closure.wpd_test`, which

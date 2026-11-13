@@ -1,7 +1,7 @@
 //! Loading dependency package interfaces (`--extern name=path.rri`).
 //!
 //! An `.rri` is a textual HIR document reduced to the export closure behind
-//! a versioned header (`docs/design/rri.md`). This module owns the consumer
+//! a versioned header (*agentic-note*: design-rri). This module owns the consumer
 //! side of the contract: parsing the `--extern`/`--extern-src` spellings,
 //! gating the header (format, package name, reserved names) before anything
 //! is offered to resolution, and re-anchoring the interface's file table

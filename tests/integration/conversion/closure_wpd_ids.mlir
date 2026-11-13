@@ -5,7 +5,7 @@
 // RUN:   --pass-pipeline='builtin.module(reussir-closure-outlining,convert-scf-to-cf,reussir-lowering-basic-ops)' \
 // RUN: | %FileCheck %s --check-prefix=CHECK-OFF
 
-// Closure WPD type ids (docs/design/closure-wpd.md). Every outlined closure
+// Closure WPD type ids (*agentic-note*: design-closure-wpd). Every outlined closure
 // vtable carries exactly ONE id, keyed by the closure's RETURN type:
 // apply/uniqify/clone never change a vtable — only the static type — so the
 // return type is the one component every value the vtable backs agrees on.

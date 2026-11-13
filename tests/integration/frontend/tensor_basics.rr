@@ -1,6 +1,6 @@
 // REQUIRES: openxla
 // The tensor type and its boundary intrinsics
-// (docs/design/tensor-kernels.md): `Tensor<[T; dims]>` is the transient
+// (*agentic-note*: design-tensor-kernels): `Tensor<[T; dims]>` is the transient
 // value-semantics view of an array — `of` takes the view (consuming the
 // reference; the tensor owns the rooted dup), `materialize` builds a fresh
 // array back, `dim` reads an extent. Frontend-complete; lowering is pending

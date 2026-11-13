@@ -1,5 +1,5 @@
 //! The package export closure: what `--emit rri` ships, computed over the
-//! elaborated HIR. See `docs/design/rri.md`.
+//! elaborated HIR. See *agentic-note*: design-rri.
 //!
 //! An `.rri` interface must let a foreign package type-check against this one
 //! and monomorphize its generics locally. That fixes the contents exactly:

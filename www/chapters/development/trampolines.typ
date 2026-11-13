@@ -68,7 +68,7 @@ the packed-argument alloca, the return slot, and the call — so Reussir-side
 callers use the plain native signature. The external boundary symbol must be
 defined elsewhere with the boundary shape; the frontend's polymorphic FFI
 generates exactly that shape for its Rust wrapper functions (see the
-Polymorphic FFI chapter and `docs/design/polymorphic-ffi.md`).
+Polymorphic FFI chapter and #link("https://reussir-lang.github.io/reussir-agentic-journal/design-polymorphic-ffi/")[`design-polymorphic-ffi`]).
 
 === Operation Shape
 
@@ -86,4 +86,4 @@ Currently only the `"C"` ABI is supported.
 `extern "C" trampoline "sym" = path<T,...>;` emits the export direction. The
 import direction is not written by hand: every `#[ffi(import)]` function
 instance emits one, binding its generated Rust boundary wrapper to the
-native declaration (`docs/design/polymorphic-ffi.md`).
+native declaration (#link("https://reussir-lang.github.io/reussir-agentic-journal/design-polymorphic-ffi/")[`design-polymorphic-ffi`]).

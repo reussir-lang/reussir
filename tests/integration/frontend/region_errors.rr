@@ -3,7 +3,7 @@
 // Negative-path coverage for the region/flexivity discipline: values of a
 // `[regional]` record are flex (writable) only inside their region, and a
 // flex value can never escape it — not by call, parameter, capture, nor
-// closure result. See docs/design and the positive tests in region.rr.
+// closure result. See the positive tests in region.rr.
 
 struct [regional] Cell<T> {
     value: T

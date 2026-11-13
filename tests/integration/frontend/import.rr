@@ -1,4 +1,4 @@
-// The `import` path abbreviations (docs/design/import.md): file-scoped
+// The `import` path abbreviations (*agentic-note*: design-import): file-scoped
 // bindings that expand before resolution, so the abbreviated spellings
 // elaborate to exactly the same HIR as the fully-qualified ones.
 

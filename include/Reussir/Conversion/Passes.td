@@ -47,7 +47,7 @@ def ReussirBasicOpsLoweringPass
     the backend pipeline's speculative `WholeProgramDevirt` folds
     single-implementation families into guarded direct calls (sound on any
     world: a vtable the module has never seen takes the indirect fallback
-    arm). See docs/design/closure-wpd.md.
+    arm). See *agentic-note*: design-closure-wpd.
   }];
   let options =
       [Option<

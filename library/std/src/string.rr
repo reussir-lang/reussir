@@ -1,7 +1,7 @@
 //! A growable UTF-8 string backed by the runtime's Rust `String`.
 //!
 //! `str` is the immutable static literal; this is the buildable
-//! counterpart (`docs/design/str.md`): one heap buffer behind an rc box,
+//! counterpart (*agentic-note*: design-str): one heap buffer behind an rc box,
 //! crossing the polymorphic FFI the same way the `cow` collections do.
 //! Appends on a uniquely owned string mutate in place; appends on a
 //! shared string clone the buffer once (copy-on-write).

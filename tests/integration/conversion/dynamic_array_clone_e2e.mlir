@@ -8,7 +8,7 @@
 // RUN: %t.exe
 
 // Executable proof of the dynamic-extent clone branch of
-// `array.with_unique_view` (docs/design/dynamic-extent-arrays.md, "Clone
+// `array.with_unique_view` (*agentic-note*: design-dynamic-extent-arrays, "Clone
 // compacts"): a shared [0, 1, ..., n-1] is updated through a unique view, so
 // the box is cloned with a runtime-sized token and an element initializer.
 // The source must keep its sum (45) and the clone carry the update

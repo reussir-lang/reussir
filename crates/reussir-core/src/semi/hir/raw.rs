@@ -115,7 +115,7 @@ pub struct ImplItem {
 
 /// The `.rri` header: format integer, the package the interface describes,
 /// and the exact producing-compiler version string. Both strings gate loading
-/// (see `docs/design/rri.md`); the parser only carries them.
+/// (see *agentic-note*: design-rri); the parser only carries them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InterfaceHeader {
     pub format: u32,

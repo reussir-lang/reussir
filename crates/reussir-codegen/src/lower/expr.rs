@@ -1204,7 +1204,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             Closure(c) => self.closure(block, env, c).map(Some),
             ClosureCall { target, args } => self.closure_call(block, env, target, args),
             ArrayOp { op, args } => self.lower_array_op(block, env, e, *op, args),
-            // Frontend-complete, backend-pending (docs/design/tensor-kernels.md):
+            // Frontend-complete, backend-pending (*agentic-note*: design-tensor-kernels):
             // the tensor boundary ops lower to array views / linalg once the
             // bufferization stages land in the pipeline.
             Async(_) => err("async blocks are only available inside kernels"),
@@ -1621,7 +1621,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             dialect::rc_borrow(self.context, ref_ty, dst_val, loc).into(),
         );
         // A `[field]` assignment target is regional; regional boxes are never
-        // atomic (design doc §6 — regions and threads do not mix).
+        // atomic (*agentic-note*: design-thread-safety-s6 — regions and threads do not mix).
         let proj = self.projected_member(dst.ty, ReussirCapability::Flex, false, field)?;
         let field_ref_ty = self.tys.ref_type_with_cap(proj.elem_ty, proj.proj_cap);
         let index = IntegerAttribute::new(Type::index(self.context), i64::from(field));

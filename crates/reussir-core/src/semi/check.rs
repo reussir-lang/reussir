@@ -4841,7 +4841,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// The tensor boundary intrinsics (docs/design/tensor-kernels.md):
+    /// The tensor boundary intrinsics (*agentic-note*: design-tensor-kernels):
     /// `of(a)` views an array as a tensor of the same shape (consuming the
     /// reference — the tensor owns the rooted dup, which is what keeps a
     /// later in-place update of the array from mutating the viewed buffer);

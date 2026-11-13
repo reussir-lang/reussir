@@ -263,7 +263,7 @@ pub enum ExprKind<'tcx> {
         args: Vec<Expr<'tcx>>,
     },
     /// A built-in operation on a transient tensor
-    /// (docs/design/tensor-kernels.md): the resolved op and its value
+    /// (*agentic-note*: design-tensor-kernels): the resolved op and its value
     /// operands (see [`crate::intrinsic::TensorFn`]).
     TensorOp {
         op: crate::intrinsic::TensorFn,
