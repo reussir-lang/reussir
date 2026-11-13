@@ -579,7 +579,7 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateSCFToControlFlowPass();
         module: sys::reussirCreateBasicOpsLoweringPass(options.closure_wpd);
         if options.arm_sve => {
-            module: sys::reussirCreateArmSVELegalizeVectorStoragePass();
+            func: sys::reussirCreateArmSVELegalizeVectorStoragePass();
         }
         module: sys::reussirCreateConvertVectorToLLVMPass(options.arm_sve);
         module: sys::reussirCreateConvertToLLVMPass();

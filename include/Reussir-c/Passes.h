@@ -136,7 +136,8 @@ MlirPass reussirCreateLowerAffinePass(void);
 // `convert-vector-to-llvm` pass. `armSVE` selects the Arm SVE lowerings.
 MlirPass reussirCreateConvertVectorToLLVMPass(bool armSVE);
 // Makes stored scalable masks and multi-dimensional scalable vectors legal
-// for Arm SVE, as the upstream `arm-sve-legalize-vector-storage` pass.
+// for Arm SVE, as the upstream `arm-sve-legalize-vector-storage` pass. It
+// runs on a function.
 MlirPass reussirCreateArmSVELegalizeVectorStoragePass(void);
 MlirPass reussirCreateConvertToLLVMPass(void);
 MlirPass reussirCreateReconcileUnrealizedCastsPass(void);

@@ -1,5 +1,5 @@
 // RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,convert-vector-to-llvm,reussir-convert-to-llvm,reconcile-unrealized-casts)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s
-// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,arm-sve-legalize-vector-storage,convert-vector-to-llvm{enable-arm-sve},reussir-convert-to-llvm,reconcile-unrealized-casts)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s
+// RUN: %reussir-opt %s --pass-pipeline='builtin.module(reussir-attach-native-target,func.func(arm-sve-legalize-vector-storage),convert-vector-to-llvm{enable-arm-sve},reussir-convert-to-llvm,reconcile-unrealized-casts)' | %reussir-translate --mlir-to-llvmir | %FileCheck %s
 
 // CHECK-LABEL: define <8 x float> @fixed(
 // CHECK-SAME: <8 x float> %[[A:.*]], float %[[X:.*]])
