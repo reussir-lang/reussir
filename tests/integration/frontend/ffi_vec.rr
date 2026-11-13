@@ -1,5 +1,5 @@
 // UNSUPPORTED: darwin
-// The polymorphic-FFI frontend surface (docs/design/polymorphic-ffi.md):
+// The polymorphic-FFI frontend surface (*agentic-note*: design-polymorphic-ffi):
 // an opaque `#[ffi]` record lowers to an rc'd `ffi_object`, every
 // `#[ffi(import)]` instance gets a boundary wrapper texture plus an import
 // trampoline, and each opaque instance gets a drop-hook texture.

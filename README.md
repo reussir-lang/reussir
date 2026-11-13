@@ -200,8 +200,8 @@ This adds StableHLO/CHLO/VHLO frontend passes and IFRT/VIFRT outlining and
 program serialization. The separate build targets use Reussir's LLVM/MLIR;
 IFRT requires Bazel and native Linux with Clang. Serialized artifacts contain
 portable IR; CPU/GPU compilation and execution are not wired yet.
-See the [StableHLO](docs/design/stablehlo-build.md) and
-[IFRT](docs/design/ifrt-build.md) build notes.
+See the [StableHLO](https://reussir-lang.github.io/reussir-agentic-journal/design-stablehlo-build/) and
+[IFRT](https://reussir-lang.github.io/reussir-agentic-journal/design-ifrt-build/) build notes.
 
 ### 4. Typical local workflows
 
@@ -274,7 +274,7 @@ All three caches use [compcache](https://github.com/reussir-lang/compcache).
 On Linux, the roots are `${XDG_CACHE_HOME:-~/.cache}` and
 `${XDG_CONFIG_HOME:-~/.config}`. Directory overrides replace the complete
 application directory. Nickel configuration is evaluated in process.
-See the [cache design notes](docs/design/bundled-library-cache.md)
+See the [cache design notes](https://reussir-lang.github.io/reussir-agentic-journal/design-bundled-library-cache/)
 and [polyffi binding](crates/reussir-polyffi-cache/README.md) for details.
 
 ## Testing

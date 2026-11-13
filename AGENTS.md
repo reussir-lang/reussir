@@ -28,11 +28,29 @@
 - Do not introduce deferred tasks or workarounds that are not in context. If a
   new change is needed outside the initial scope, pause and report it. Prefer to
   fix a small bug directly, or at least locate its root cause.
-- Do not eagerly update the changelog or the maintainer's design documents. Ask
-  first if you think an update is important.
-- Never refer to a conversation in a code comment. Code comments may refer to
-  PRs or issues, but design documents must not. Write for future developers and
-  users who have no access to the conversation context.
+- Design notes, changelog entries, decisions, open problems, examples, and
+  motivations live out of tree in the agentic journal,
+  `reussir-lang/reussir-agentic-journal`, a Forester forest. Do not add design
+  documents or a changelog to this repository. Look for the journal at
+  `$REUSSIR_JOURNAL`, then at `../reussir-agentic-journal`; clone it there if
+  it is missing. Its `AGENTS.md` describes the layout and the markup.
+- Keep the journal current as part of the work, without asking first: when a
+  change adds or alters a design, settles a decision, or leaves a question
+  open, write or update the matching tree, add a dated changelog entry for a
+  user-visible change, and leave a session tree. Record yourself as the author
+  under the identity tree of your exact model version, and the maintainer who
+  directed the work as contributor.
+- Code refers to a journal tree only through the marker
+  `*agentic-note*: <address>`, for example
+  `*agentic-note*: design-thread-safety-s2-2`. Never cite a file path inside
+  the journal. Resolve a marker with `rg -F '<address>' trees/` in the journal
+  checkout, or at
+  `https://reussir-lang.github.io/reussir-agentic-journal/<address>/`. An
+  address that code cites must exist in the journal and is never renamed.
+- Never refer to a conversation in a code comment or in a journal tree. Both
+  may refer to PRs or issues, and journal trees may also refer to session
+  trees. Write for future developers and users who have no access to the
+  conversation context.
 - The comprehensive benchmark suite is at `reussir-lang/benchmark`. Report
   performance regressions when a patch affects code generation. Run relevant
   suites rather than making yourself or other developers wait for an excessive

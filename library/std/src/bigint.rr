@@ -3,7 +3,7 @@
 //! The integers live in `core`; the parts that need `String`, `Option` and
 //! `Hasher` live here. Conversion goes through the rcgmp runtime: the
 //! integers cross the FFI boundary as raw handles that the Rust bodies
-//! borrow (`docs/design/polymorphic-ffi.md`).
+//! borrow (*agentic-note*: design-polymorphic-ffi).
 
 import std::hash::Hash;
 import std::hash::Hasher;

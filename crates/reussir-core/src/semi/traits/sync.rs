@@ -3,7 +3,7 @@
 //! `Sync(τ)` holds when a value of type `τ` may be reached — aliased, read,
 //! cloned, stored, dropped — from any thread concurrently. It subsumes both of
 //! Rust's `Send` and `Sync` (duplicable rc handles collapse transfer into
-//! sharing); the rules live in `docs/design/thread-safety.md` §2.2 and this
+//! sharing); the rules live in *agentic-note*: design-thread-safety-s2-2 and this
 //! module is their implementation.
 //!
 //! The check is **structural** (an auto trait: derived, never written by the
@@ -299,7 +299,7 @@ impl<'tcx> Cx<'_, 'tcx> {
             | TyKind::Unit
             // `str` values are immutable byte references; the frontend type
             // does not carry a lifescope (yet), so global and local strs are
-            // not distinguished here — see the design doc's str caveat.
+            // not distinguished here — see the str caveat in *agentic-note*: design-thread-safety.
             | TyKind::Str
             // Immutable static data with scalar elements.
             | TyKind::ConstSeq(_)

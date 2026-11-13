@@ -88,7 +88,7 @@ enum FfiSpec {
 
 /// One `import` binding: within `file`, reference paths headed by `name`
 /// expand through `path` (see [`Elaborator::expand_path`] and
-/// `docs/design/import.md`).
+/// *agentic-note*: design-import).
 #[derive(Clone, Debug)]
 pub struct ImportBinding {
     pub file: FileId,
@@ -245,7 +245,7 @@ pub struct FuncProto<'tcx> {
 }
 
 /// Whether Tensor, Future, or Token occurs anywhere in `ty`'s structure. These are
-/// scope-confined values (docs/design/tensor-kernels.md); this is the
+/// scope-confined values (*agentic-note*: design-tensor-kernels); this is the
 /// predicate behind the escape rules (record members, function signatures,
 /// closure captures).
 pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
@@ -500,7 +500,7 @@ pub struct Elaborator<'a, 'tcx> {
     /// Foreign bodies of `#[ffi(import)]` functions, keyed by their def.
     pub ffi_imports: FxHashMap<DefId, FfiImport>,
     /// File-scoped `import` path bindings, in declaration order (see
-    /// `docs/design/import.md`). Append-only so checkpoint/rollback
+    /// *agentic-note*: design-import). Append-only so checkpoint/rollback
     /// restores it by truncation; lookups scan backwards filtered by the
     /// current file — files hold a handful of bindings at most.
     pub imports: Vec<ImportBinding>,

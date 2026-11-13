@@ -223,7 +223,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let self_ty = args[0];
                 // `Sync` is the structural thread-safety auto trait: answered
                 // by the checker over the type's shape, never by impl search
-                // (docs/design/thread-safety.md §2.2).
+                // (*agentic-note*: design-thread-safety-s2-2).
                 if tref.trait_id == self.lang.sync {
                     use crate::semi::traits::sync::{SyncVerdict, sync_verdict};
                     use crate::semi::ty_eval::ElabSyncEnv;

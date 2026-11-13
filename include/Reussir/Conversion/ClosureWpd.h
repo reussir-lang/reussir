@@ -31,7 +31,7 @@
 /// composite types such as closure types are still repeated). Ids are
 /// metadata strings, never symbols, so no mangling scheme applies.
 ///
-/// See docs/design/closure-wpd.md for the full design.
+/// See *agentic-note*: design-closure-wpd for the full design.
 ///
 //===----------------------------------------------------------------------===//
 

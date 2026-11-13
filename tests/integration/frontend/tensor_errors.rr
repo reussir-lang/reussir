@@ -1,5 +1,5 @@
 // REQUIRES: openxla
-// Tensor escape rules (docs/design/tensor-kernels.md): a tensor is
+// Tensor escape rules (*agentic-note*: design-tensor-kernels): a tensor is
 // scope-confined — flex : freeze :: tensor : materialize. It may not be
 // stored in a record, captured or returned by a closure, appear in a
 // function signature, or sit inside another container.

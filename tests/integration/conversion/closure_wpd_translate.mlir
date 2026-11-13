@@ -1,7 +1,7 @@
 // RUN: %reussir-translate %s --reussir-to-llvmir | %FileCheck %s
 
 // The Reussir dialect's LLVM translation interface materializes the closure
-// WPD artifacts the LLVM dialect cannot express (docs/design/closure-wpd.md):
+// WPD artifacts the LLVM dialect cannot express (*agentic-note*: design-closure-wpd):
 //
 //  * `reussir.wpd.type_id` on a vtable global becomes a
 //    `!type {i64 0, !"<id>"}` entry plus translation-unit

@@ -34,7 +34,7 @@ builtin_traits! {
     /// Marker (auto) trait: a value may be reached from any thread,
     /// concurrently. It subsumes both of Rust's `Send` and `Sync` —
     /// duplicable rc handles make transfer-without-sharing unprovable, so
-    /// the two predicates collapse (see `docs/design/thread-safety.md`).
+    /// the two predicates collapse (see *agentic-note*: design-thread-safety).
     /// Declared for name resolution and bound syntax only: ground `Sync`
     /// goals are answered *structurally* by [`crate::semi::traits::sync`],
     /// never by impl search, so it has (and can have) no impls.

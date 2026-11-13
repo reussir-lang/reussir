@@ -1,5 +1,5 @@
 //! Coherence: the head keying and the unification engine behind the overlap
-//! and orphan gates (RFC §5.2).
+//! and orphan gates (*agentic-note*: design-trait-system-s5-2).
 //!
 //! One matching engine serves two callers with different variable sets:
 //! coherence's overlap check passes BOTH impls' generics as unifiable —

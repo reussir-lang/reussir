@@ -594,7 +594,7 @@ jobs:
             artifacts/*.tar.xz
             artifacts/*.zip
           body: |
-            Reussir ${{ github.ref_name }}, built from `${{ github.sha }}`. See `CHANGELOG.md` for the release notes.
+            Reussir ${{ github.ref_name }}, built from `${{ github.sha }}`. See https://reussir-lang.github.io/reussir-agentic-journal/changelog/ for the release notes.
 
             **Contents:** the Reussir toolchain — `rrc` (ahead-of-time compiler), `rene` (package manager), `rrepl` (REPL), and `reussir-lsp` (semantic-token language server). LLVM/MLIR and the Reussir backend are linked statically into the binaries; no shared libraries ship and nothing needs `LD_LIBRARY_PATH`.
 

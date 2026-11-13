@@ -4,7 +4,7 @@
 //! (packed by `build.rs` — source, not binaries, is what keeps the bundle
 //! cross-platform: rlibs and symbol hashes are version-locked to the rustc
 //! that produced them, so the runtime must be built by the user's toolchain;
-//! see docs/design/system-rust-runtime.md). One immutable runtime is shared by
+//! see *agentic-note*: design-system-rust-runtime). One immutable runtime is shared by
 //! every project with the same toolchain, target and runtime settings. Project
 //! records hold its paths; live artifacts share its reader lease through use.
 

@@ -155,7 +155,7 @@ pub(crate) struct Cli {
     /// A dependency package interface: `NAME=PATH` loads the `.rri` at PATH
     /// under the package name NAME (which must match the interface's own
     /// header). Repeatable; names must be distinct, and neither `core` nor
-    /// this compilation's package name. See `docs/design/rri.md`.
+    /// this compilation's package name. See *agentic-note*: design-rri.
     #[arg(long = "extern", value_name = "NAME=PATH")]
     pub(crate) externs: Vec<crate::externs::ExternPair>,
 

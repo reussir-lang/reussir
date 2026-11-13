@@ -8,7 +8,7 @@ pub trait PtrLike {}
 /// A value may be reached from any thread, concurrently — subsuming both
 /// of Rust's `Send` and `Sync` (duplicable rc handles make
 /// transfer-without-sharing unprovable, so the two predicates collapse;
-/// see the thread-safety design note). Declared for name resolution and
+/// see *agentic-note*: design-thread-safety). Declared for name resolution and
 /// bound syntax; ground `Sync` goals are answered *structurally* by the
 /// compiler, never by impl search.
 #[lang("sync")]
