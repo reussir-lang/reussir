@@ -4014,6 +4014,285 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
+    /// A constant sequence of integers given as an argument: the expression
+    /// kept in the IR, and its values.
+    fn simd_const_seq(&mut self, arg: &surface::Expr) -> Option<(Expr<'tcx>, Vec<i64>)> {
+        use crate::semi::const_eval::{ConstScalar, ConstValue};
+        let i64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Signed(64));
+        let seq_ty = self.tcx.mk_const_seq(i64_ty);
+        let value = self.eval_const(arg, seq_ty)?;
+        let ConstValue::Seq { elems, .. } = &value else {
+            return None;
+        };
+        let values = elems
+            .iter()
+            .map(|e| match e {
+                ConstValue::Scalar(ConstScalar::Int(n)) => i64::try_from(n).ok(),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some((
+            self.const_value_expr(&value, seq_ty, Some(arg.span())),
+            values,
+        ))
+    }
+
+    /// The operations that change the shape of vectors. Their positions are
+    /// constants, checked here against the extents.
+    fn infer_simd_shape(
+        &mut self,
+        fc: &surface::FuncCall,
+        func: crate::intrinsic::SimdFn,
+        shown: &str,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, SimdFn};
+        let typed = matches!(
+            func,
+            SimdFn::ShapeCast | SimdFn::Bitcast | SimdFn::Broadcast | SimdFn::ScalableExtract
+        );
+        let arity = match func {
+            SimdFn::ShapeCast
+            | SimdFn::Bitcast
+            | SimdFn::Broadcast
+            | SimdFn::DeinterleaveEven
+            | SimdFn::DeinterleaveOdd => 1,
+            SimdFn::Transpose | SimdFn::Interleave | SimdFn::ScalableExtract | SimdFn::Outer => 2,
+            _ => 3,
+        };
+        if !typed && !fc.ty_args.is_empty() {
+            self.error(span, format!("{shown} takes no type arguments"));
+            return self.poison(span);
+        }
+        if fc.args.len() != arity {
+            self.error(
+                span,
+                format!("{shown} expects {arity} argument(s), got {}", fc.args.len()),
+            );
+            return self.poison(span);
+        }
+        let target = match typed {
+            true => match self.simd_type_arg(fc, shown, span) {
+                Some(target) => Some(target),
+                None => return self.poison(span),
+            },
+            false => None,
+        };
+        let Some((first, elem, dims, scalable)) = self.infer_simd_operand(&fc.args[0], shown)
+        else {
+            return self.poison(span);
+        };
+        let lanes = |dims: &[u64]| dims.iter().product::<u64>();
+        let bits = |ty: Ty<'tcx>| match ty.kind() {
+            TyKind::Int(
+                crate::semi::ty::IntTy::Signed(w) | crate::semi::ty::IntTy::Unsigned(w),
+            ) => u64::from(*w),
+            TyKind::Fp(crate::semi::ty::FpTy::Ieee(w)) => u64::from(*w),
+            _ => 0,
+        };
+        let from = self.ty_display(first.ty);
+        let fail = |this: &mut Self, why: String| {
+            this.error(span, format!("{shown} on a `{from}`: {why}"));
+            this.poison(span)
+        };
+        let mut args = vec![first];
+        let result = match func {
+            SimdFn::ShapeCast => {
+                let (ty, to_elem, to_dims, to_scalable) = target.expect("typed");
+                if to_elem != elem || to_scalable != scalable || lanes(to_dims) != lanes(dims) {
+                    let shown_ty = self.ty_display(ty);
+                    return fail(self, format!("`{shown_ty}` does not have the same lanes"));
+                }
+                ty
+            }
+            SimdFn::Bitcast => {
+                let (ty, to_elem, to_dims, to_scalable) = target.expect("typed");
+                let (rank, to_rank) = (dims.len(), to_dims.len());
+                let same_bits = bits(elem) != 0
+                    && bits(to_elem) != 0
+                    && bits(elem) * dims[rank - 1] == bits(to_elem) * to_dims[to_rank - 1];
+                if to_scalable != scalable
+                    || dims[..rank - 1] != to_dims[..to_rank - 1]
+                    || !same_bits
+                {
+                    let shown_ty = self.ty_display(ty);
+                    return fail(self, format!("`{shown_ty}` does not have the same bits"));
+                }
+                ty
+            }
+            SimdFn::Broadcast => {
+                let (ty, to_elem, to_dims, to_scalable) = target.expect("typed");
+                if to_elem != elem || to_scalable != scalable || !to_dims.ends_with(dims) {
+                    let shown_ty = self.ty_display(ty);
+                    return fail(self, format!("`{shown_ty}` does not end with its extents"));
+                }
+                ty
+            }
+            SimdFn::Transpose => {
+                let Some((seq, order)) = self.simd_const_seq(&fc.args[1]) else {
+                    return self.poison(span);
+                };
+                let mut seen = vec![false; dims.len()];
+                let valid = order.len() == dims.len()
+                    && order.iter().all(|&p| {
+                        usize::try_from(p)
+                            .is_ok_and(|p| p < seen.len() && !std::mem::replace(&mut seen[p], true))
+                    });
+                // A scalable extent stays the last one.
+                if !valid || (scalable && order.last() != Some(&(dims.len() as i64 - 1))) {
+                    return fail(self, "the order is not a permutation of its extents that keeps a scalable extent last".into());
+                }
+                args.push(seq);
+                let permuted: Vec<u64> = order.iter().map(|&p| dims[p as usize]).collect();
+                self.tcx.mk_simd(elem, &permuted, scalable)
+            }
+            SimdFn::Shuffle => {
+                let other = self.check_expr(&fc.args[1], args[0].ty);
+                let Some((seq, picks)) = self.simd_const_seq(&fc.args[2]) else {
+                    return self.poison(span);
+                };
+                let in_range = picks.iter().all(|&p| p >= 0 && (p as u64) < 2 * dims[0]);
+                if scalable || dims.len() != 1 || picks.is_empty() || !in_range {
+                    return fail(
+                        self,
+                        "a shuffle picks lanes of two fixed one-dimensional vectors".into(),
+                    );
+                }
+                args.push(other);
+                args.push(seq);
+                self.tcx.mk_simd(elem, &[picks.len() as u64], false)
+            }
+            SimdFn::Interleave => {
+                args.push(self.check_expr(&fc.args[1], args[0].ty));
+                let mut doubled = dims.to_vec();
+                *doubled.last_mut().expect("a vector has an extent") *= 2;
+                self.tcx.mk_simd(elem, &doubled, scalable)
+            }
+            SimdFn::DeinterleaveEven | SimdFn::DeinterleaveOdd => {
+                let mut halved = dims.to_vec();
+                let last = halved.last_mut().expect("a vector has an extent");
+                if *last % 2 != 0 {
+                    return fail(self, "its last extent is odd".into());
+                }
+                *last /= 2;
+                self.tcx.mk_simd(elem, &halved, scalable)
+            }
+            SimdFn::Slice => {
+                let (Some((offsets, at)), Some((sizes, take))) = (
+                    self.simd_const_seq(&fc.args[1]),
+                    self.simd_const_seq(&fc.args[2]),
+                ) else {
+                    return self.poison(span);
+                };
+                let fits = at.len() == take.len()
+                    && !at.is_empty()
+                    && at.len() <= dims.len()
+                    && at.iter().zip(&take).zip(dims).all(|((&o, &s), &d)| {
+                        o >= 0 && s > 0 && (o as u64).saturating_add(s as u64) <= d
+                    });
+                if scalable || !fits {
+                    return fail(self, "a slice takes ranges inside a fixed vector".into());
+                }
+                args.push(offsets);
+                args.push(sizes);
+                let mut sliced: Vec<u64> = take.iter().map(|&s| s as u64).collect();
+                sliced.extend(&dims[take.len()..]);
+                self.tcx.mk_simd(elem, &sliced, false)
+            }
+            SimdFn::InsertSlice => {
+                let Some((part, part_elem, part_dims, part_scalable)) =
+                    self.infer_simd_operand(&fc.args[1], shown)
+                else {
+                    return self.poison(span);
+                };
+                let Some((offsets, at)) = self.simd_const_seq(&fc.args[2]) else {
+                    return self.poison(span);
+                };
+                // The part covers the trailing extents of the vector.
+                let lead = dims.len().saturating_sub(part_dims.len());
+                let fits = part_elem == elem
+                    && part_dims.len() <= dims.len()
+                    && at.len() == dims.len()
+                    && at.iter().zip(dims).enumerate().all(|(i, (&o, &d))| {
+                        let size = if i < lead { 1 } else { part_dims[i - lead] };
+                        o >= 0 && (o as u64).saturating_add(size) <= d
+                    });
+                if scalable || part_scalable || !fits {
+                    return fail(
+                        self,
+                        "the part does not fit at those offsets of a fixed vector".into(),
+                    );
+                }
+                args.push(part);
+                args.push(offsets);
+                args[0].ty
+            }
+            SimdFn::ScalableExtract | SimdFn::ScalableInsert => {
+                // The sub-vector: the type argument of an extract, the
+                // second operand of an insert.
+                let (part_ty, part_elem, part_dims, at) = match func {
+                    SimdFn::ScalableExtract => {
+                        let (ty, e, d, _) = target.expect("typed");
+                        (ty, e, d, 1)
+                    }
+                    _ => {
+                        let Some((part, e, d, _)) = self.infer_simd_operand(&fc.args[1], shown)
+                        else {
+                            return self.poison(span);
+                        };
+                        let ty = part.ty;
+                        args.push(part);
+                        (ty, e, d, 2)
+                    }
+                };
+                let u64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
+                let pos = self.check_expr(&fc.args[at], u64_ty);
+                let aligned = match pos.kind {
+                    ExprKind::ConstInt(n) => u64::try_from(n)
+                        .is_ok_and(|n| part_dims.len() == 1 && n % part_dims[0] == 0),
+                    _ => false,
+                };
+                if !scalable || dims.len() != 1 || part_elem != elem || !aligned {
+                    return fail(self, "a sub-vector of a one-dimensional scalable vector starts at a literal multiple of its own length".into());
+                }
+                args.push(pos);
+                if func == SimdFn::ScalableExtract {
+                    part_ty
+                } else {
+                    args[0].ty
+                }
+            }
+            SimdFn::Outer => {
+                let Some((other, other_elem, other_dims, other_scalable)) =
+                    self.infer_simd_operand(&fc.args[1], shown)
+                else {
+                    return self.poison(span);
+                };
+                let numeric = matches!(elem.kind(), TyKind::Int(_) | TyKind::Fp(_));
+                if scalable
+                    || dims.len() != 1
+                    || other_dims.len() != 1
+                    || other_elem != elem
+                    || !numeric
+                {
+                    return fail(self, "an outer product takes a fixed and a second one-dimensional vector of the same numbers".into());
+                }
+                args.push(other);
+                self.tcx
+                    .mk_simd(elem, &[dims[0], other_dims[0]], other_scalable)
+            }
+            _ => unreachable!("routed here only for shape operations"),
+        };
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::Simd { func },
+                args,
+            },
+            result,
+            span,
+        )
+    }
+
     /// Whether a lane type is one the operation accepts.
     fn simd_lanes_accept(lanes: crate::intrinsic::SimdLanes, elem: Ty<'tcx>) -> bool {
         use crate::intrinsic::SimdLanes;
@@ -4192,6 +4471,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         if let Some(lanes) = func.reduction() {
             return self.infer_simd_reduction(fc, func, lanes, &shown, span);
+        }
+        if func.is_shape() {
+            return self.infer_simd_shape(fc, func, &shown, span);
         }
         if !takes_type && !fc.ty_args.is_empty() {
             self.error(span, format!("{shown} takes no type arguments"));

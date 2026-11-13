@@ -601,6 +601,39 @@ pub enum SimdFn {
     LoadExpand,
     /// `store_compress(p, v, m)`: the set lanes are written consecutively.
     StoreCompress,
+    /// `shape_cast<V>(v)`: the same lanes, in row-major order, in the shape
+    /// of `V`.
+    ShapeCast,
+    /// `bitcast<V>(v)`: the same bits as other lanes; only the last extent
+    /// changes.
+    Bitcast,
+    /// `broadcast<V>(v)`: `v` repeated along the leading extents of `V`.
+    Broadcast,
+    /// `transpose(v, p)`: extent `i` of the result is extent `p[i]` of `v`;
+    /// `p` is a constant sequence.
+    Transpose,
+    /// `shuffle(a, b, i)`: lane `k` is lane `i[k]` of `a` followed by `b`;
+    /// `i` is a constant sequence and the vectors are fixed.
+    Shuffle,
+    /// `interleave(a, b)`: the lanes of the last extent alternate.
+    Interleave,
+    /// `deinterleave_even(v)`, `deinterleave_odd(v)`: every other lane of
+    /// the last extent.
+    DeinterleaveEven,
+    DeinterleaveOdd,
+    /// `slice(v, offsets, sizes)`: a sub-vector of a fixed vector, from
+    /// constant positions.
+    Slice,
+    /// `insert_slice(v, w, offsets)`: `v` with `w` written at constant
+    /// positions.
+    InsertSlice,
+    /// `scalable_extract<V>(v, pos)`: the sub-vector `V` of a scalable
+    /// vector at the constant lane `pos`.
+    ScalableExtract,
+    /// `scalable_insert(v, w, pos)`: `v` with the sub-vector `w` at `pos`.
+    ScalableInsert,
+    /// `outer(a, b)`: the product of each lane of `a` with each lane of `b`.
+    Outer,
     /// `reduce_add_reassoc`, `reduce_mul_reassoc`: the floating-point sum
     /// and product in any order, which lets the target reduce in parallel.
     /// `reduce_add` and `reduce_mul` combine in lane order.
@@ -678,6 +711,19 @@ impl SimdFn {
         SimdFn::Scatter,
         SimdFn::LoadExpand,
         SimdFn::StoreCompress,
+        SimdFn::ShapeCast,
+        SimdFn::Bitcast,
+        SimdFn::Broadcast,
+        SimdFn::Transpose,
+        SimdFn::Shuffle,
+        SimdFn::Interleave,
+        SimdFn::DeinterleaveEven,
+        SimdFn::DeinterleaveOdd,
+        SimdFn::Slice,
+        SimdFn::InsertSlice,
+        SimdFn::ScalableExtract,
+        SimdFn::ScalableInsert,
+        SimdFn::Outer,
         SimdFn::ReduceAdd,
         SimdFn::ReduceMul,
         SimdFn::ReduceMin,
@@ -736,6 +782,19 @@ impl SimdFn {
             SimdFn::Scatter => "scatter",
             SimdFn::LoadExpand => "load_expand",
             SimdFn::StoreCompress => "store_compress",
+            SimdFn::ShapeCast => "shape_cast",
+            SimdFn::Bitcast => "bitcast",
+            SimdFn::Broadcast => "broadcast",
+            SimdFn::Transpose => "transpose",
+            SimdFn::Shuffle => "shuffle",
+            SimdFn::Interleave => "interleave",
+            SimdFn::DeinterleaveEven => "deinterleave_even",
+            SimdFn::DeinterleaveOdd => "deinterleave_odd",
+            SimdFn::Slice => "slice",
+            SimdFn::InsertSlice => "insert_slice",
+            SimdFn::ScalableExtract => "scalable_extract",
+            SimdFn::ScalableInsert => "scalable_insert",
+            SimdFn::Outer => "outer",
             SimdFn::ReduceAdd => "reduce_add",
             SimdFn::ReduceMul => "reduce_mul",
             SimdFn::ReduceMin => "reduce_min",
@@ -746,6 +805,27 @@ impl SimdFn {
             SimdFn::ReduceAddReassoc => "reduce_add_reassoc",
             SimdFn::ReduceMulReassoc => "reduce_mul_reassoc",
         }
+    }
+
+    /// Whether the operation changes the shape of vectors.
+    pub fn is_shape(self) -> bool {
+        use SimdFn::*;
+        matches!(
+            self,
+            ShapeCast
+                | Bitcast
+                | Broadcast
+                | Transpose
+                | Shuffle
+                | Interleave
+                | DeinterleaveEven
+                | DeinterleaveOdd
+                | Slice
+                | InsertSlice
+                | ScalableExtract
+                | ScalableInsert
+                | Outer
+        )
     }
 
     /// For a reduction: the lanes it accepts.
