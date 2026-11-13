@@ -4716,6 +4716,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// the member type spells its own atomic link (§3.3).
     /// Kernel SSA values have no host record storage representation.
     fn reject_tensor_member(&mut self, fty: Ty<'tcx>, span: Option<Span>) {
+        if crate::semi::ty::mentions_scalable_simd(fty) {
+            self.error(
+                span,
+                "a record member cannot contain a scalable vector, which has no fixed size",
+            );
+        }
         if contains_kernel_value(fty) {
             self.error(
                 span,
