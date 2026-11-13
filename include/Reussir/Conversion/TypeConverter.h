@@ -29,6 +29,13 @@ namespace reussir {
 mlir::LowerToLLVMOptions getReussirToLLVMOptions(mlir::ModuleOp op);
 
 void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter);
+
+/// `mlir::translateDataLayout`, with the pointer layout of the `ptr` dialect:
+/// the upstream translation describes `!llvm.ptr` only, and a `!ptr.ptr`
+/// without an entry is laid out as a byte-aligned 64-bit value.
+mlir::DataLayoutSpecInterface
+translateDataLayout(const llvm::DataLayout &dataLayout,
+                    mlir::MLIRContext *context);
 } // namespace reussir
 
 #endif // REUSSIR_CONVERSION_TYPECONVERTER_H

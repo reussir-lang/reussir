@@ -12,6 +12,7 @@ add_mlir_conversion_library(MLIRReussirAttachNativeTarget
 
   LINK_LIBS PUBLIC
   MLIRReussir
+  MLIRReussirTypeConverter
   MLIRLLVMDialect
   MLIRDLTIDialect
 )

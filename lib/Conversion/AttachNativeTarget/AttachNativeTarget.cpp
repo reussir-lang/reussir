@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Conversion/AttachNativeTarget.h"
+#include "Reussir/Conversion/TypeConverter.h"
 
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
@@ -81,7 +82,7 @@ struct ReussirAttachNativeTargetPass
                     mlir::StringAttr::get(context, triple));
 
     mlir::DataLayoutSpecInterface dlSpec =
-        mlir::translateDataLayout(dl, context);
+        reussir::translateDataLayout(dl, context);
     module->setAttr(mlir::DLTIDialect::kDataLayoutAttrName, dlSpec);
   }
 };

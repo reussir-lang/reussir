@@ -56,6 +56,7 @@
 #include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/Conversion/ConvertToSTD.h"
 #include "Reussir/Conversion/Passes.h"
+#include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/Transformation/Passes.h"
@@ -344,7 +345,7 @@ bool reussirModuleAttachTargetSpec(MlirModule module, const char *dataLayout,
   moduleOp->setAttr(mlir::LLVM::LLVMDialect::getTargetTripleAttrName(),
                     mlir::StringAttr::get(context, triple));
   mlir::DataLayoutSpecInterface dlSpec =
-      mlir::translateDataLayout(*dl, context);
+      reussir::translateDataLayout(*dl, context);
   // `translateDataLayout` emits no `index` entry, and without one MLIR's
   // `DataLayout` reports a 64-bit index on every target. Append the entry at
   // the pointer width so index-type queries (and data-layout-aware upstream

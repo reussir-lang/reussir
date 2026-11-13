@@ -86,6 +86,7 @@ module;
 #include "Reussir/Conversion/BasicOpsLowering.h"
 #include "Reussir/Conversion/ConvertToSTD.h"
 #include "Reussir/Conversion/Passes.h"
+#include "Reussir/Conversion/TypeConverter.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/LLVMPass/AllocationSimplication.h"
@@ -438,7 +439,7 @@ translateToModule(llvm::StringRef texture, llvm::LLVMContext &llvmCtx,
       mlir::LLVM::LLVMDialect::getDataLayoutAttrName(),
       mlir::StringAttr::get(&context, dl.getStringRepresentation()));
   mlir::DataLayoutSpecInterface dlSpec =
-      mlir::translateDataLayout(dl, &context);
+      reussir::translateDataLayout(dl, &context);
   module->getOperation()->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
                                   dlSpec);
   module->getOperation()->setAttr(

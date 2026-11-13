@@ -29,6 +29,8 @@
 #include <memory>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/Ptr/IR/PtrAttrs.h>
+#include <mlir/Dialect/Ptr/IR/PtrTypes.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Target/LLVMIR/Import.h>
@@ -84,7 +86,7 @@ buildMLIRDataLayout(const mlir::LLVMTypeConverter &converter) {
                           mlir::StringAttr::get(context, dataLayoutString));
     layoutModule->setAttr(
         mlir::DLTIDialect::kDataLayoutAttrName,
-        mlir::translateDataLayout(converter.getDataLayout(), context));
+        reussir::translateDataLayout(converter.getDataLayout(), context));
   }
   return std::make_shared<mlir::DataLayout>(layoutModule);
 }
@@ -513,5 +515,22 @@ void populateReussirToLLVMTypeConversions(mlir::LLVMTypeConverter &converter) {
       lowered = mlir::LLVM::LLVMArrayType::get(lowered, extent);
     return lowered;
   });
+}
+
+mlir::DataLayoutSpecInterface
+translateDataLayout(const llvm::DataLayout &dataLayout,
+                    mlir::MLIRContext *context) {
+  mlir::DataLayoutSpecInterface spec =
+      mlir::translateDataLayout(dataLayout, context);
+  llvm::SmallVector<mlir::DataLayoutEntryInterface> entries(spec.getEntries());
+  // The generic memory space is LLVM address space 0.
+  entries.push_back(mlir::DataLayoutEntryAttr::get(
+      mlir::ptr::PtrType::get(mlir::ptr::GenericSpaceAttr::get(context)),
+      mlir::ptr::SpecAttr::get(
+          context, dataLayout.getPointerSizeInBits(0),
+          8 * dataLayout.getPointerABIAlignment(0).value(),
+          8 * dataLayout.getPointerPrefAlignment(0).value(),
+          dataLayout.getIndexSizeInBits(0))));
+  return mlir::DataLayoutSpecAttr::get(context, entries);
 }
 } // namespace reussir
