@@ -23,14 +23,8 @@ use melior::ir::{Identifier, Location, Operation, Region, Type, Value, ValueLike
 /// `!rcgmp.mpz`, the nonatomic integer handle, or `!rcgmp.mpz<atomic>` with
 /// `atomic`; `None` when this build lacks the dialect.
 pub fn mpz_type(context: &Context, atomic: bool) -> Option<Type<'_>> {
-    Type::parse(
-        context,
-        if atomic {
-            "!rcgmp.mpz<atomic>"
-        } else {
-            "!rcgmp.mpz"
-        },
-    )
+    let raw = unsafe { reussir_backend_sys::reussirRcgmpMpzTypeGet(context.to_raw(), atomic) };
+    (!raw.ptr.is_null()).then(|| unsafe { Type::from_raw(raw) })
 }
 
 /// `rcgmp.constant <value> : <ty>`. `value` is an integer attribute of the
