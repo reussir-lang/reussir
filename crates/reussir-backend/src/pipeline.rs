@@ -206,6 +206,9 @@ pub struct LoweringOptions {
     pub nullary_variant_encoding: NullaryVariantEncoding,
     /// Run the invariant-group analysis pass.
     pub enable_invariant_analysis: bool,
+    /// Lower vectors with the Arm SVE legalizations. Set for an AArch64
+    /// target that has SVE.
+    pub arm_sve: bool,
     /// Lay out compound record members in packed physical order (descending
     /// storage alignment) rather than declaration order. On by default — the
     /// layout contract external consumers compile against; `rrc` exposes the
@@ -250,6 +253,7 @@ impl Default for LoweringOptions {
             // Off by default, mirroring the C++ `createLoweringPipeline`
             // (`enableInvariantAnalysis = false`).
             enable_invariant_analysis: false,
+            arm_sve: false,
             // On by default: packed layout is the shipped default and the
             // layout contract; only an explicit driver flag turns it off.
             pack_record_members: true,
@@ -574,6 +578,10 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateControlFlowSinkPass();
         module: sys::reussirCreateSCFToControlFlowPass();
         module: sys::reussirCreateBasicOpsLoweringPass(options.closure_wpd);
+        if options.arm_sve => {
+            module: sys::reussirCreateArmSVELegalizeVectorStoragePass();
+        }
+        module: sys::reussirCreateConvertVectorToLLVMPass(options.arm_sve);
         module: sys::reussirCreateConvertToLLVMPass();
         module: sys::reussirCreateReconcileUnrealizedCastsPass();
         // Convert fused Reussir debug-info attributes to LLVM DI now that

@@ -132,6 +132,12 @@ MlirPass reussirCreateSCFToControlFlowPass(void);
 MlirPass reussirCreateConvertRCGMPToSCFPass(void);
 MlirPass reussirCreateExpandStridedMetadataPass(void);
 MlirPass reussirCreateLowerAffinePass(void);
+// Lowers the `vector` dialect to the LLVM dialect, as the upstream
+// `convert-vector-to-llvm` pass. `armSVE` selects the Arm SVE lowerings.
+MlirPass reussirCreateConvertVectorToLLVMPass(bool armSVE);
+// Makes stored scalable masks and multi-dimensional scalable vectors legal
+// for Arm SVE, as the upstream `arm-sve-legalize-vector-storage` pass.
+MlirPass reussirCreateArmSVELegalizeVectorStoragePass(void);
 MlirPass reussirCreateConvertToLLVMPass(void);
 MlirPass reussirCreateReconcileUnrealizedCastsPass(void);
 
