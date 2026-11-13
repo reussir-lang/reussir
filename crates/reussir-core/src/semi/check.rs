@@ -3905,6 +3905,73 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         Some(indices)
     }
 
+    /// An operation applied lane by lane: `arity` vectors of one type.
+    #[allow(clippy::too_many_arguments)]
+    fn infer_simd_lanewise(
+        &mut self,
+        fc: &surface::FuncCall,
+        func: crate::intrinsic::SimdFn,
+        arity: usize,
+        lanes: crate::intrinsic::SimdLanes,
+        compares: bool,
+        shown: &str,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, SimdLanes};
+        if !fc.ty_args.is_empty() {
+            self.error(span, format!("{shown} takes no type arguments"));
+            return self.poison(span);
+        }
+        if fc.args.len() != arity {
+            self.error(
+                span,
+                format!("{shown} expects {arity} argument(s), got {}", fc.args.len()),
+            );
+            return self.poison(span);
+        }
+        let Some((first, elem, dims, scalable)) = self.infer_simd_operand(&fc.args[0], shown)
+        else {
+            return self.poison(span);
+        };
+        let integer = matches!(elem.kind(), TyKind::Int(_));
+        let float = matches!(elem.kind(), TyKind::Fp(_));
+        let accepted = match lanes {
+            SimdLanes::Numeric => integer || float,
+            SimdLanes::Integer => integer,
+            SimdLanes::Bits => !float,
+            SimdLanes::Float => float,
+            SimdLanes::Any => true,
+        };
+        let ty = first.ty;
+        if !accepted {
+            self.error(
+                first.span,
+                format!(
+                    "{shown} works on {} lanes, found `{}`",
+                    lanes.describe(),
+                    self.ty_display(ty)
+                ),
+            );
+            return self.poison(span);
+        }
+        let mut args = vec![first];
+        for arg in &fc.args[1..] {
+            args.push(self.check_expr(arg, ty));
+        }
+        let result = match compares {
+            true => self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable),
+            false => ty,
+        };
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::Simd { func },
+                args,
+            },
+            result,
+            span,
+        )
+    }
+
     fn infer_simd_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
         use crate::intrinsic::{IntrinsicOp, SimdFn};
         use crate::semi::ty::IntTy;
@@ -3930,6 +3997,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             func,
             SimdFn::Splat | SimdFn::Step | SimdFn::Lanes | SimdFn::FromElements
         );
+        if let Some((arity, lanes, compares)) = func.lanewise() {
+            return self.infer_simd_lanewise(fc, func, arity, lanes, compares, &shown, span);
+        }
         if !takes_type && !fc.ty_args.is_empty() {
             self.error(span, format!("{shown} takes no type arguments"));
             return self.poison(span);
@@ -3937,7 +4007,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let arity = match func {
             SimdFn::Splat => Some(1),
             SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale => Some(0),
-            SimdFn::FromElements | SimdFn::Extract | SimdFn::Insert => None,
+            SimdFn::Select => Some(3),
+            _ => None,
         };
         if arity.is_some_and(|n| n != fc.args.len()) {
             self.error(
@@ -4010,6 +4081,32 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let values = fc.args.iter().map(|a| self.check_expr(a, elem)).collect();
                 mk(self, func, values, ty)
             }
+            SimdFn::Select => {
+                let Some((mask, lane, dims, scalable)) =
+                    self.infer_simd_operand(&fc.args[0], &shown)
+                else {
+                    return self.poison(span);
+                };
+                let Some((on, elem, ..)) = self.infer_simd_operand(&fc.args[1], &shown) else {
+                    return self.poison(span);
+                };
+                let chosen = on.ty;
+                if !matches!(lane.kind(), TyKind::Bool)
+                    || self.tcx.mk_simd(elem, dims, scalable) != chosen
+                {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} takes a mask of the shape of the vectors it chooses between, found `{}` and `{}`",
+                            self.ty_display(mask.ty),
+                            self.ty_display(chosen)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let off = self.check_expr(&fc.args[2], chosen);
+                mk(self, func, vec![mask, on, off], chosen)
+            }
             SimdFn::Extract | SimdFn::Insert => {
                 let fixed = if func == SimdFn::Insert { 2 } else { 1 };
                 if fc.args.len() < fixed {
@@ -4043,6 +4140,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 args.extend(indices);
                 mk(self, func, args, result)
             }
+            _ => unreachable!("lanewise functions are checked above"),
         }
     }
 
