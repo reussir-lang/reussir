@@ -4356,6 +4356,149 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
 
     /// A `core::simd` operation, as the `vector` dialect operation of the
     /// same meaning.
+    /// The values of a constant sequence of integers given as an operand.
+    fn simd_const_seq(e: &Expr<'tcx>) -> Result<Vec<i64>> {
+        use reussir_core::semi::const_eval::{ConstScalar, ConstValue};
+        let ExprKind::ConstSeq(elems) = e.kind else {
+            return err("a vector shape operation takes a constant sequence");
+        };
+        elems
+            .iter()
+            .map(|v| match v {
+                ConstValue::Scalar(ConstScalar::Int(n)) => i64::try_from(n)
+                    .map_err(|_| LoweringError("vector position is out of range".into())),
+                _ => err("vector positions are integers"),
+            })
+            .collect()
+    }
+
+    /// The `core::simd` operations that change the shape of vectors. Their
+    /// positions are constant operands, read here and never evaluated.
+    fn lower_simd_shape<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        e: &Expr<'tcx>,
+        func: reussir_core::intrinsic::SimdFn,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        use builders::{dense_i64_array, i64_array, i64_attribute, vector_operation};
+        use reussir_core::intrinsic::SimdFn;
+        let loc = self.loc();
+        let context = self.context;
+        let result = self.tys.mlir_ty(e.ty)?;
+        let mut vector = |a: &'tcx Expr<'tcx>| {
+            self.expr(block, env, a)?
+                .ok_or_else(|| LoweringError("vector operand produced no value".into()))
+        };
+        let ones = |n: usize| vec![1i64; n];
+        let built = match func {
+            SimdFn::ShapeCast => builders::vector_shape_cast(vector(&args[0])?, result, loc),
+            SimdFn::Bitcast => {
+                vector_operation("vector.bitcast", &[vector(&args[0])?], &[result], &[], loc)
+            }
+            SimdFn::Broadcast => builders::vector_broadcast(vector(&args[0])?, result, loc),
+            SimdFn::Transpose => {
+                let order = dense_i64_array(context, &Self::simd_const_seq(&args[1])?);
+                vector_operation(
+                    "vector.transpose",
+                    &[vector(&args[0])?],
+                    &[result],
+                    &[("permutation", order)],
+                    loc,
+                )
+            }
+            SimdFn::Shuffle => {
+                let picks = dense_i64_array(context, &Self::simd_const_seq(&args[2])?);
+                let operands = [vector(&args[0])?, vector(&args[1])?];
+                vector_operation(
+                    "vector.shuffle",
+                    &operands,
+                    &[result],
+                    &[("mask", picks)],
+                    loc,
+                )
+            }
+            SimdFn::Interleave => {
+                let operands = [vector(&args[0])?, vector(&args[1])?];
+                vector_operation("vector.interleave", &operands, &[result], &[], loc)
+            }
+            SimdFn::DeinterleaveEven | SimdFn::DeinterleaveOdd => {
+                let halves = block.append_operation(vector_operation(
+                    "vector.deinterleave",
+                    &[vector(&args[0])?],
+                    &[result, result],
+                    &[],
+                    loc,
+                ));
+                let half = usize::from(func == SimdFn::DeinterleaveOdd);
+                return Ok(halves.result(half).expect("deinterleave result").into());
+            }
+            SimdFn::Slice => {
+                let offsets = Self::simd_const_seq(&args[1])?;
+                let sizes = Self::simd_const_seq(&args[2])?;
+                let strides = ones(offsets.len());
+                vector_operation(
+                    "vector.extract_strided_slice",
+                    &[vector(&args[0])?],
+                    &[result],
+                    &[
+                        ("offsets", i64_array(context, &offsets)),
+                        ("sizes", i64_array(context, &sizes)),
+                        ("strides", i64_array(context, &strides)),
+                    ],
+                    loc,
+                )
+            }
+            SimdFn::InsertSlice => {
+                let offsets = Self::simd_const_seq(&args[2])?;
+                let rank = match args[1].ty.kind() {
+                    TyKind::Simd { dims, .. } => dims.len(),
+                    _ => return err("an inserted slice is a vector"),
+                };
+                let operands = [vector(&args[1])?, vector(&args[0])?];
+                vector_operation(
+                    "vector.insert_strided_slice",
+                    &operands,
+                    &[result],
+                    &[
+                        ("offsets", i64_array(context, &offsets)),
+                        ("strides", i64_array(context, &ones(rank))),
+                    ],
+                    loc,
+                )
+            }
+            SimdFn::ScalableExtract | SimdFn::ScalableInsert => {
+                let insert = func == SimdFn::ScalableInsert;
+                let ExprKind::ConstInt(pos) = args[1 + usize::from(insert)].kind else {
+                    return err("a scalable sub-vector position is a literal");
+                };
+                let pos = i64::try_from(pos)
+                    .map_err(|_| LoweringError("vector position is out of range".into()))?;
+                let pos = [("pos", i64_attribute(context, pos))];
+                match insert {
+                    false => vector_operation(
+                        "vector.scalable.extract",
+                        &[vector(&args[0])?],
+                        &[result],
+                        &pos,
+                        loc,
+                    ),
+                    true => {
+                        let operands = [vector(&args[1])?, vector(&args[0])?];
+                        vector_operation("vector.scalable.insert", &operands, &[result], &pos, loc)
+                    }
+                }
+            }
+            SimdFn::Outer => {
+                let operands = [vector(&args[0])?, vector(&args[1])?];
+                vector_operation("vector.outerproduct", &operands, &[result], &[], loc)
+            }
+            _ => return err("not a vector shape operation"),
+        };
+        Ok(self.append(block, built))
+    }
+
     fn lower_simd_intrinsic<'b>(
         &self,
         block: &'b Block<'c>,
@@ -4367,6 +4510,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         use builders::VectorPosition;
         use reussir_core::intrinsic::SimdFn;
         let loc = self.loc();
+        if func.is_shape() {
+            return self.lower_simd_shape(block, env, e, func, args).map(Some);
+        }
         let mut values = Vec::with_capacity(args.len());
         for a in args.iter() {
             values.push(

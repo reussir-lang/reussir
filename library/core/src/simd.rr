@@ -244,3 +244,62 @@ pub fn load_expand<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
 /// `ptr`, in order: the lanes a filter keeps, packed.
 #[lang("core::simd::store_compress")]
 pub fn store_compress<V, P, M>(ptr: P, v: V, mask: M);
+
+// Shape. Positions are constants: a `ConstSeq<i64>` written as `[1, 0]`, or a
+// literal.
+
+/// The lanes of `v`, in row-major order, in the shape of `V`.
+#[lang("core::simd::shape_cast")]
+pub fn shape_cast<V, W>(v: W) -> V;
+
+/// The bits of `v` as the lanes of `V`; only the last extent may differ.
+#[lang("core::simd::bitcast")]
+pub fn bitcast<V, W>(v: W) -> V;
+
+/// `v` repeated along the leading extents of `V`.
+#[lang("core::simd::broadcast")]
+pub fn broadcast<V, W>(v: W) -> V;
+
+/// `v` with its extents reordered: extent `i` of the result is extent
+/// `order[i]` of `v`. A scalable extent stays last.
+#[lang("core::simd::transpose")]
+pub fn transpose<V, W>(v: W, order: ConstSeq<i64>) -> V;
+
+/// The fixed vector whose lane `k` is lane `picks[k]` of `a` followed by `b`.
+#[lang("core::simd::shuffle")]
+pub fn shuffle<V, W>(a: W, b: W, picks: ConstSeq<i64>) -> V;
+
+/// The lanes of `a` and `b` alternating along the last extent.
+#[lang("core::simd::interleave")]
+pub fn interleave<V, W>(a: W, b: W) -> V;
+
+/// The lanes 0, 2, 4, ... of the last extent.
+#[lang("core::simd::deinterleave_even")]
+pub fn deinterleave_even<V, W>(v: W) -> V;
+
+/// The lanes 1, 3, 5, ... of the last extent.
+#[lang("core::simd::deinterleave_odd")]
+pub fn deinterleave_odd<V, W>(v: W) -> V;
+
+/// The part of the fixed vector `v` that starts at `offsets` and has `sizes`
+/// lanes in each of the leading extents the two sequences name.
+#[lang("core::simd::slice")]
+pub fn slice<V, W>(v: W, offsets: ConstSeq<i64>, sizes: ConstSeq<i64>) -> V;
+
+/// The fixed vector `v` with `part` written at `offsets`, one per extent of
+/// `v`.
+#[lang("core::simd::insert_slice")]
+pub fn insert_slice<V, W>(v: V, part: W, offsets: ConstSeq<i64>) -> V;
+
+/// The sub-vector `V` of the scalable vector `v` that starts at lane `pos`, a
+/// literal multiple of the length of `V`.
+#[lang("core::simd::scalable_extract")]
+pub fn scalable_extract<V, W>(v: W, pos: u64) -> V;
+
+/// The scalable vector `v` with `part` written from lane `pos` on.
+#[lang("core::simd::scalable_insert")]
+pub fn scalable_insert<V, W>(v: V, part: W, pos: u64) -> V;
+
+/// The product of each lane of the fixed vector `a` with each lane of `b`.
+#[lang("core::simd::outer")]
+pub fn outer<V, A, B>(a: A, b: B) -> V;
