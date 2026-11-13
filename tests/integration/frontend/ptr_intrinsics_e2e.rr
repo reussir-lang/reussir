@@ -1,0 +1,57 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name ptrs --extern core=%t.core.rri -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/ptr_intrinsics_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name ptrs --extern core=%t.core.rri -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/ptr_intrinsics_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+import core::ptr;
+import core::ptr::Generic;
+
+// Sum `count` 32-bit values, walking the buffer one element at a time.
+fn sum(base: ConstPtr<Generic>, count: i64) -> i64 {
+    let state = while [s = (base, 0 as i64, 0 as i64)] (s.1 < count) {
+        let value: i32 = ptr::load(s.0);
+        (ptr::advance<i32>(s.0, 1), s.1 + 1, s.2 + (value as i64))
+    };
+    state.2
+}
+extern "C" trampoline "ptr_sum" = sum;
+
+// Fill `count` values and return how far the pointer moved.
+fn fill(base: Ptr<Generic>, count: i64, value: i32) -> i64 {
+    let end = while [s = (base, 0 as i64)] (s.1 < count) {
+        ptr::store(s.0, value);
+        (ptr::advance<i32>(s.0, 1), s.1 + 1)
+    };
+    ptr::diff(end.0, base)
+}
+extern "C" trampoline "ptr_fill" = fill;
+
+fn stride() -> u64 { ptr::type_offset<i32>() }
+extern "C" trampoline "ptr_stride" = stride;
+
+// Clear the low tag bits and recover them from the addresses.
+fn untag(p: Ptr<Generic>) -> u64 {
+    ptr::addr(p) - ptr::addr(ptr::mask(p, 18446744073709551608))
+}
+extern "C" trampoline "ptr_untag" = untag;
+
+fn rebuild(p: Ptr<Generic>) -> Ptr<Generic> {
+    ptr::offset(ptr::offset(ptr::from_addr<Ptr<Generic> >(ptr::addr(p)), 8), -8)
+}
+extern "C" trampoline "ptr_rebuild" = rebuild;
+
+fn flagged(p: Ptr<Generic>, value: u64) -> u64 {
+    ptr::store_extended(p, value, true, false, false, 1);
+    ptr::load_extended<u64>(p, true, false, false, false, 1)
+}
+extern "C" trampoline "ptr_flagged" = flagged;
+
+// Follow a pointer stored in memory.
+fn chase(slot: ConstPtr<Generic>) -> i64 {
+    let value: f64 = ptr::load(ptr::load<ConstPtr<Generic> >(slot));
+    value as i64
+}
+extern "C" trampoline "ptr_chase" = chase;

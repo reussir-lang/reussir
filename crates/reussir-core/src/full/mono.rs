@@ -262,6 +262,7 @@ pub(crate) fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&
         | ConstFloat(_)
         | ConstBool(_)
         | ConstSeq(_)
+        | TypeOffset(_)
         | Var(_)
         | TraitConst { .. }
         | Poison => {}
@@ -2626,11 +2627,18 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         }
     }
 
-    /// A numeric literal is arbitrary-precision until here; now that its type
-    /// is ground, reject values the type cannot hold. Integers must be in
-    /// range; a float that would round to infinity is an error (there is no
-    /// literal syntax for `inf`, so it can only be a mistake). Checked on the
-    /// *lowered* kind so folded negations (`-128 : i8`) see the signed value.
+    /// The ground backstop of the checker's pointee check.
+    fn check_ptr_pointee(&mut self, op: &str, ty: Ty<'tcx>, span: Option<Span>) {
+        if let Some(reason) = crate::semi::ty_eval::ptr_pointee_rejection(ty) {
+            self.error(
+                span,
+                format!(
+                    "`core::ptr::{op}` cannot access the type of this instantiation ({reason})"
+                ),
+            );
+        }
+    }
+
     /// The `bigint` intrinsics take a `Nat` or an `Int`, and
     /// `trunci_overflow` truncates to a fixed-width integer. The checker
     /// enforces this where it sees the types; generic callers reach here.
@@ -2660,6 +2668,11 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         }
     }
 
+    /// A numeric literal is arbitrary-precision until here; now that its type
+    /// is ground, reject values the type cannot hold. Integers must be in
+    /// range; a float that would round to infinity is an error (there is no
+    /// literal syntax for `inf`, so it can only be a mistake). Checked on the
+    /// *lowered* kind so folded negations (`-128 : i8`) see the signed value.
     fn check_literal_range(
         &mut self,
         kind: &mir::ExprKind<'tcx>,
@@ -2873,6 +2886,12 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 M::Cmp(self.lower_ref(l, subst), *op, self.lower_ref(r, subst))
             }
+            ExprKind::TypeOffset(t) => {
+                let t = subst_ty(self.tcx, *t, subst);
+                self.note_records(t);
+                self.check_ptr_pointee("type_offset", t, span);
+                M::TypeOffset(t)
+            }
             ExprKind::Cast(e, t) => {
                 let t = subst_ty(self.tcx, *t, subst);
                 self.note_records(t);
@@ -2981,6 +3000,18 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
                 if let crate::intrinsic::IntrinsicOp::BigInt { func } = *op {
                     self.check_bigint_intrinsic(func, args, result_ty, subst, span);
+                }
+                if let crate::intrinsic::IntrinsicOp::Ptr { func, .. } = *op {
+                    let accessed = match func {
+                        crate::intrinsic::PtrFn::Load => Some(result_ty),
+                        crate::intrinsic::PtrFn::Store => {
+                            Some(subst_ty(self.tcx, args[1].ty, subst))
+                        }
+                        _ => None,
+                    };
+                    if let Some(ty) = accessed {
+                        self.check_ptr_pointee(func.as_str(), ty, span);
+                    }
                 }
                 M::Intrinsic {
                     op: *op,
@@ -4564,7 +4595,7 @@ mod tests {
         match e.kind {
             ArrayOp { args, .. } | TensorOp { args, .. } => args.iter().collect(),
             GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_)
-            | ConstSeq(_) | Var(_) | Poison => vec![],
+            | ConstSeq(_) | TypeOffset(_) | Var(_) | Poison => vec![],
             Negate(x) | Not(x) | Cast(x, _) | RegionRun(x) | Proj(x, _) => vec![x],
             Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
             If(c, t, f) => vec![c, t, f],

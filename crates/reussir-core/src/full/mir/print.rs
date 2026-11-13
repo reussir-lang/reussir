@@ -568,6 +568,7 @@ impl Render<'_> {
             Arith(l, op, r) => self.binop(l, arith_sym(op), r),
             Cmp(l, op, r) => self.binop(l, cmp_sym(op), r),
             Cast(x, t) => text("(") + self.value(x) + text(" as ") + self.ty(t) + text(")"),
+            TypeOffset(t) => text("type_offset(") + self.ty(t) + text(")"),
             RegionRun(x) => text("region { ") + self.value(x) + text(" }"),
             Proj(base, path) => {
                 let mut d = text("proj(") + self.value(base);

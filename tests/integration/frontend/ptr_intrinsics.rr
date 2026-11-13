@@ -1,0 +1,122 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+
+import core::ptr;
+import core::ptr::Generic;
+
+// HIR-DAG: intrinsic#ptr#from_addr#0(v0 : u64) : ConstPtr<GenericAddrSpace>
+// CHECK-LABEL: func.func @{{.*}}at
+// CHECK: reussir.ptr.from_addr %arg0 : i64 -> !ptr.ptr<#ptr.generic_space>
+// LLVM-LABEL: define {{.*}}ptr @{{.*}}at
+// LLVM: inttoptr i64 %0 to ptr
+pub fn at(a: u64) -> ConstPtr<Generic> { ptr::from_addr<ConstPtr<Generic> >(a) }
+
+// CHECK-LABEL: func.func @{{.*}}get
+// CHECK: ptr.load %arg0 : !ptr.ptr<#ptr.generic_space> -> i32
+pub fn get(p: ConstPtr<Generic>) -> i32 { ptr::load<i32>(p) }
+
+// CHECK-LABEL: func.func @{{.*}}put
+// CHECK: ptr.store %arg1, %arg0 : i32, !ptr.ptr<#ptr.generic_space>
+pub fn put(p: Ptr<Generic>, v: i32) { ptr::store(p, v) }
+
+// CHECK-LABEL: func.func @{{.*}}tag
+// CHECK: reussir.ptr.mask %arg0, %{{.*}} : !ptr.ptr<#ptr.generic_space>, i64
+// LLVM-LABEL: define {{.*}}ptr @{{.*}}tag
+// LLVM: call ptr @llvm.ptrmask.p0.i64(ptr %0, i64 7)
+pub fn tag(p: ConstPtr<Generic>) -> ConstPtr<Generic> { ptr::mask(p, 7) }
+
+// CHECK-LABEL: func.func @{{.*}}bits
+// CHECK: reussir.ptr.addr %arg0 : !ptr.ptr<#ptr.generic_space> -> i64
+// LLVM-LABEL: define {{.*}}i64 @{{.*}}bits
+// LLVM: ptrtoaddr ptr %0 to i64
+pub fn bits(p: Ptr<Generic>) -> u64 { ptr::addr(p) }
+
+// A `bool` is a byte in memory.
+// CHECK-LABEL: func.func @{{.*}}flip
+// CHECK: %[[BYTE:.*]] = ptr.load %arg0 : !ptr.ptr<#ptr.generic_space> -> i8
+// CHECK: %[[FLAG:.*]] = arith.trunci %[[BYTE]] : i8 to i1
+// CHECK: %[[WIDE:.*]] = arith.extui %{{.*}} : i1 to i8
+// CHECK: ptr.store %[[WIDE]], %arg0 : i8, !ptr.ptr<#ptr.generic_space>
+// LLVM-LABEL: define {{.*}}void @{{.*}}flip
+// LLVM: load i8, ptr %0, align 1
+// LLVM: store i8 %{{.*}}, ptr %0, align 1
+pub fn flip(p: Ptr<Generic>) { ptr::store(p, !ptr::load<bool>(p)) }
+
+// HIR-DAG: intrinsic#ptr#load#769(v0 : Ptr<GenericAddrSpace>) : u32
+// MIR-DAG: intrinsic#ptr#load#769(v0 : Ptr<GenericAddrSpace>) : u32
+// CHECK-LABEL: func.func @{{.*}}mmio
+// CHECK: ptr.load volatile %arg0 alignment = 4 : !ptr.ptr<#ptr.generic_space> -> i32
+// LLVM-LABEL: define {{.*}}i32 @{{.*}}mmio
+// LLVM: load volatile i32, ptr %0, align 4
+pub fn mmio(p: Ptr<Generic>) -> u32 { ptr::load_extended<u32>(p, true, false, false, false, 4) }
+
+// HIR-DAG: intrinsic#ptr#offset#0(intrinsic#ptr#offset#0(v0 : Ptr<GenericAddrSpace>, v1 : i64) : Ptr<GenericAddrSpace>, (2 : i64 * type_offset(i32) : i64) : i64) : Ptr<GenericAddrSpace>
+// MIR-DAG: intrinsic#ptr#offset#0(intrinsic#ptr#offset#0(v0 : Ptr<GenericAddrSpace>, v1 : i64) : Ptr<GenericAddrSpace>, (2 : i64 * type_offset(i32) : i64) : i64) : Ptr<GenericAddrSpace>
+// CHECK-LABEL: func.func @{{.*}}walk
+// CHECK: %[[STEP:.*]] = ptr.ptr_add %arg0, %arg1 : !ptr.ptr<#ptr.generic_space>, i64
+// CHECK: %[[SIZE:.*]] = ptr.type_offset i32 : i64
+// CHECK: %[[BYTES:.*]] = arith.muli %{{.*}}, %[[SIZE]]
+// CHECK: ptr.ptr_add %[[STEP]], %[[BYTES]] : !ptr.ptr<#ptr.generic_space>, i64
+// LLVM-LABEL: define ptr @{{.*}}walk
+// LLVM: getelementptr i8, ptr %{{.*}}, i64 8
+pub fn walk(p: Ptr<Generic>, n: i64) -> Ptr<Generic> { ptr::advance<i32>(ptr::offset(p, n), 2) }
+
+// A pointer is itself a value pointers access.
+// CHECK-LABEL: func.func @{{.*}}chase
+// CHECK: ptr.load %arg0 : !ptr.ptr<#ptr.generic_space> -> !ptr.ptr<#ptr.generic_space>
+// CHECK: ptr.load %{{.*}} : !ptr.ptr<#ptr.generic_space> -> i32
+pub fn chase(p: ConstPtr<Generic>) -> char { ptr::load<char>(ptr::load<ConstPtr<Generic> >(p)) }
+
+// CHECK-LABEL: func.func @{{.*}}fixed
+// CHECK: ptr.load %arg0 invariant invariant_group alignment = 1 : !ptr.ptr<#ptr.generic_space> -> i64
+// LLVM-LABEL: define {{.*}}i64 @{{.*}}fixed
+// LLVM: load i64, ptr %0, align 1, !invariant.load !{{.*}}, !invariant.group
+pub fn fixed(p: ConstPtr<Generic>) -> i64 { ptr::load_extended<i64>(p, false, false, true, true, 1) }
+
+// The loaded type may come from the context.
+// CHECK-LABEL: func.func @{{.*}}infer
+// CHECK: ptr.load %arg0 : !ptr.ptr<#ptr.generic_space> -> f64
+pub fn infer(p: Ptr<Generic>) -> f64 { ptr::load(p) }
+
+// CHECK-LABEL: func.func @{{.*}}sizes
+// CHECK-DAG: ptr.type_offset i128 : i64
+// CHECK-DAG: ptr.type_offset !ptr.ptr<#ptr.generic_space> : i64
+// CHECK-DAG: ptr.type_offset i1 : i64
+// LLVM-LABEL: define {{.*}}i64 @{{.*}}sizes
+// LLVM: ret i64 25
+pub fn sizes() -> u64 {
+    ptr::type_offset<i128>() + ptr::type_offset<ConstPtr<Generic> >() + ptr::type_offset<bool>()
+}
+
+// HIR-DAG: intrinsic#ptr#store#2(v0 : Ptr<GenericAddrSpace>, v1 : u64) : ()
+// CHECK-LABEL: func.func @{{.*}}stream
+// CHECK: ptr.store %arg1, %arg0 nontemporal : i64, !ptr.ptr<#ptr.generic_space>
+// LLVM-LABEL: define void @{{.*}}stream
+// LLVM: store i64 %1, ptr %0, align 8, !nontemporal
+pub fn stream(p: Ptr<Generic>, v: u64) { ptr::store_extended(p, v, false, true, false, 0) }
+
+// HIR-DAG: intrinsic#ptr#diff#0(v0 : Ptr<GenericAddrSpace>, v1 : ConstPtr<GenericAddrSpace>) : i64
+// CHECK-LABEL: func.func @{{.*}}distance
+// CHECK: ptr.ptr_diff %arg0, %arg1 : !ptr.ptr<#ptr.generic_space> -> i64
+pub fn distance(p: Ptr<Generic>, q: ConstPtr<Generic>) -> i64 { ptr::diff(p, q) }
+
+// The address space and the accessed type may both be generic.
+fn generic<A: AddrSpace, T>(p: Ptr<A>, v: T) -> T {
+    ptr::store<T>(p, v);
+    ptr::load<T>(ptr::advance<T>(p, -1))
+}
+// CHECK-LABEL: func.func @{{.*}}instance
+// CHECK: call @{{.*}}generic
+// CHECK-LABEL: func.func private @{{.*}}generic{{.*}}(%arg0: !ptr.ptr<#ptr.generic_space>, %arg1: i16) -> i16
+// CHECK: ptr.store %arg1, %arg0 : i16, !ptr.ptr<#ptr.generic_space>
+// CHECK: ptr.type_offset i16 : i64
+// CHECK: ptr.load %{{.*}} : !ptr.ptr<#ptr.generic_space> -> i16
+pub fn instance(p: Ptr<Generic>) -> i16 { generic(p, 3) }

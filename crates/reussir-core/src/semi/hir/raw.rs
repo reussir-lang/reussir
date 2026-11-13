@@ -421,6 +421,7 @@ pub enum Kind {
     Arith(Expr, ArithOp, Expr),
     Cmp(Expr, CmpOp, Expr),
     Cast(Expr, Ty),
+    TypeOffset(Ty),
     If(Expr, Expr, Expr),
     While {
         state: u32,

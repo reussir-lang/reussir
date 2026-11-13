@@ -145,6 +145,7 @@ Name: &'input str = {
     "Ptr" => "Ptr",
     "ConstPtr" => "ConstPtr",
     "GenericAddrSpace" => "GenericAddrSpace",
+    "type_offset" => "type_offset",
 };
 
 /// A path segment or a trait method name. Every IR keyword is unambiguous
@@ -403,6 +404,7 @@ Atom: raw::Kind = {
     "(" <l:Expr> <op:ArithOp> <r:Expr> ")" => raw::Kind::Arith(l, op, r),
     "(" <l:Expr> <op:CmpOp> <r:Expr> ")" => raw::Kind::Cmp(l, op, r),
     "(" <e:Expr> "as" <t:Ty> ")" => raw::Kind::Cast(e, t),
+    "type_offset" "(" <t:Ty> ")" => raw::Kind::TypeOffset(t),
     "region" "{" <e:Expr> "}" => raw::Kind::RegionRun(e),
     "async" "[" <captures:Comma<ClosureParam>> "]" "{" <body:Expr> "}" => raw::Kind::Async { captures, body },
     "proj" "(" <base:Expr> <idxs:("," <"int">)*> ")"
@@ -632,6 +634,7 @@ extern {
         "Ptr" => Token::Ptr,
         "ConstPtr" => Token::ConstPtr,
         "GenericAddrSpace" => Token::GenericAddrSpace,
+        "type_offset" => Token::TypeOffset,
         "placement" => Token::Placement,
         "NonNull" => Token::NonNull,
         "Null" => Token::Null,

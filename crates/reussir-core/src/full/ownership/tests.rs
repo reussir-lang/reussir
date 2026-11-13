@@ -454,6 +454,7 @@ fn kind_name(kind: &ExprKind<'_>) -> &'static str {
         ExprKind::ConstChar(_) => "ConstChar",
         ExprKind::ConstBool(_) => "ConstBool",
         ExprKind::ConstSeq(_) => "ConstSeq",
+        ExprKind::TypeOffset(_) => "TypeOffset",
         ExprKind::Var(_) => "Var",
         ExprKind::Negate(_) => "Negate",
         ExprKind::Not(_) => "Not",
@@ -986,6 +987,7 @@ fn interp<'tcx>(
         | ExprKind::ConstInt(_)
         | ExprKind::ConstFloat(_)
         | ExprKind::ConstBool(_)
+        | ExprKind::TypeOffset(_)
         | ExprKind::Poison => {}
     }
     for &op in ot.after(e.id) {
@@ -1125,7 +1127,7 @@ fn children<'tcx>(e: &Expr<'tcx>) -> Vec<&'tcx Expr<'tcx>> {
     match e.kind {
         ArrayOp { args, .. } | TensorOp { args, .. } => args.iter().collect(),
         GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
-        | Var(_) | Poison => vec![],
+        | TypeOffset(_) | Var(_) | Poison => vec![],
         Negate(x) | Not(x) | Cast(x, _) | RegionRun(x) | Proj(x, _) => vec![x],
         Arith(l, _, r) | Cmp(l, _, r) | Assign(l, _, r) => vec![l, r],
         If(c, t, e) => vec![c, t, e],

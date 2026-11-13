@@ -12,9 +12,9 @@ use melior::ir::attribute::{
     ArrayAttribute, Attribute, DenseI32ArrayAttribute, DenseI64ArrayAttribute,
     FlatSymbolRefAttribute, IntegerAttribute, StringAttribute, TypeAttribute,
 };
-use melior::ir::operation::{OperationBuilder, OperationRef};
+use melior::ir::operation::{OperationBuilder, OperationLike, OperationRef};
 use melior::ir::r#type::IntegerType;
-use melior::ir::{Identifier, Location, Operation, Region, Type, Value};
+use melior::ir::{Identifier, Location, Operation, Region, Type, Value, ValueLike};
 
 use reussir_backend_sys as sys;
 
@@ -849,4 +849,144 @@ pub fn poison<'c>(context: &'c Context, ty: Type<'c>, location: Location<'c>) ->
         .add_results(&[ty])
         .build()
         .expect("valid ub.poison")
+}
+
+/// How a `ptr.load` or `ptr.store` accesses memory. `align` is zero for the
+/// natural alignment of the accessed type.
+#[derive(Clone, Copy, Default)]
+pub struct PtrAccess {
+    pub volatile: bool,
+    pub nontemporal: bool,
+    pub invariant: bool,
+    pub invariant_group: bool,
+    pub align: u64,
+}
+
+fn set_ptr_access(operation: &Operation<'_>, access: PtrAccess) {
+    let set = unsafe {
+        sys::reussirPtrAccessSetFlags(
+            operation.to_raw(),
+            access.volatile,
+            access.nontemporal,
+            access.invariant,
+            access.invariant_group,
+            access.align,
+        )
+    };
+    assert!(set, "access flags apply to a `ptr.load` or `ptr.store`");
+}
+
+/// `ptr.load %ptr : <ptr> -> <result_type>`, with the flags of `access`.
+pub fn ptr_load<'c>(
+    ptr: Value<'c, '_>,
+    result_type: Type<'c>,
+    access: PtrAccess,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.load", location)
+        .add_operands(&[ptr])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid ptr.load");
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.store %value, %ptr : <value>, <ptr>`, with the flags of `access`.
+pub fn ptr_store<'c>(
+    value: Value<'c, '_>,
+    ptr: Value<'c, '_>,
+    access: PtrAccess,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.store", location)
+        .add_operands(&[value, ptr])
+        .build()
+        .expect("valid ptr.store");
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.ptr_add %base, %offset : <ptr>, <offset>`: `base` moved by `offset`
+/// bytes.
+pub fn ptr_add<'c>(
+    base: Value<'c, '_>,
+    offset: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("ptr.ptr_add", location)
+        .add_operands(&[base, offset])
+        .add_results(&[base.r#type()])
+        .build()
+        .expect("valid ptr.ptr_add")
+}
+
+/// `ptr.ptr_diff %lhs, %rhs : <ptr> -> <result_type>`: `lhs - rhs` in bytes.
+pub fn ptr_diff<'c>(
+    lhs: Value<'c, '_>,
+    rhs: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("ptr.ptr_diff", location)
+        .add_operands(&[lhs, rhs])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid ptr.ptr_diff")
+}
+
+/// `ptr.type_offset <element> : <result_type>`.
+pub fn ptr_type_offset<'c>(
+    context: &'c Context,
+    element: Type<'c>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("ptr.type_offset", location)
+        .add_attributes(&[(
+            Identifier::new(context, "elementType"),
+            TypeAttribute::new(element).into(),
+        )])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid ptr.type_offset")
+}
+
+/// `reussir.ptr.addr %ptr : <ptr> -> <result_type>`.
+pub fn ptr_addr<'c>(
+    ptr: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.addr", location)
+        .add_operands(&[ptr])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid reussir.ptr.addr")
+}
+
+/// `reussir.ptr.from_addr %addr : <addr> -> <ptr_type>`.
+pub fn ptr_from_addr<'c>(
+    addr: Value<'c, '_>,
+    ptr_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.from_addr", location)
+        .add_operands(&[addr])
+        .add_results(&[ptr_type])
+        .build()
+        .expect("valid reussir.ptr.from_addr")
+}
+
+/// `reussir.ptr.mask %ptr, %mask : <ptr>, <mask>`.
+pub fn ptr_mask<'c>(
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.mask", location)
+        .add_operands(&[ptr, mask])
+        .add_results(&[ptr.r#type()])
+        .build()
+        .expect("valid reussir.ptr.mask")
 }

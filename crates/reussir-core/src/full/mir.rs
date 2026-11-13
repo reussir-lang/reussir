@@ -371,6 +371,8 @@ pub enum ExprKind<'tcx> {
     Arith(&'tcx Expr<'tcx>, ArithOp, &'tcx Expr<'tcx>),
     Cmp(&'tcx Expr<'tcx>, CmpOp, &'tcx Expr<'tcx>),
     Cast(&'tcx Expr<'tcx>, Ty<'tcx>),
+    /// Mirrors [`crate::semi::hir::ExprKind::TypeOffset`].
+    TypeOffset(Ty<'tcx>),
     If(&'tcx Expr<'tcx>, &'tcx Expr<'tcx>, &'tcx Expr<'tcx>),
     /// A `region-run` body; its result has been frozen to a rigid capability.
     RegionRun(&'tcx Expr<'tcx>),
@@ -543,7 +545,7 @@ pub fn for_each_expr<'e, 'tcx>(expr: &'e Expr<'tcx>, f: &mut impl FnMut(&'e Expr
             for_each_tree_expr(&tree, f);
         }
         GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_) | ConstSeq(_)
-        | Var(_) | NullableCall(None) | Poison => {}
+        | TypeOffset(_) | Var(_) | NullableCall(None) | Poison => {}
     }
 }
 

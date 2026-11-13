@@ -2757,6 +2757,14 @@ mod tests {
                         f.as_str()
                     );
                 }
+                for &f in crate::intrinsic::PtrFn::ALL {
+                    let item = LangItem::Intrinsic(IntrinsicItem::Ptr(f));
+                    assert!(
+                        elab.lang.get(item).is_some(),
+                        "core declares no prototype for `{}`",
+                        f.as_str()
+                    );
+                }
                 let panic_item = LangItem::Intrinsic(IntrinsicItem::Panic);
                 assert!(
                     elab.lang.get(panic_item).is_some(),

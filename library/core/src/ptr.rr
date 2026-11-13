@@ -23,3 +23,69 @@ pub struct Ptr<A> { }
 /// An opaque pointer into the address space `A`, to memory that is only read.
 #[lang("const_ptr")]
 pub struct ConstPtr<A> { }
+
+// Declaration sites of the pointer operations. A pointer parameter `P` is a
+// `Ptr<A>` or a `ConstPtr<A>`; only a `Ptr<A>` is stored through. `T` is an
+// integer, a floating-point number, `bool`, `char` or a pointer. A call
+// writes at most `T`; the pointer types are taken from the arguments. Every
+// access is the caller's to justify: the pointer must be valid for it.
+
+/// The pointer `bytes` bytes after `ptr`.
+#[lang("core::ptr::offset")]
+pub fn offset<P>(ptr: P, bytes: i64) -> P;
+
+/// The distance in bytes between two consecutive values of `T` in memory.
+#[lang("core::ptr::type_offset")]
+pub fn type_offset<T>() -> u64;
+
+/// The pointer `count` values of `T` after `ptr`.
+#[lang("core::ptr::advance")]
+pub fn advance<T, P>(ptr: P, count: i64) -> P;
+
+/// `ptr` with the address bits that are zero in `mask` cleared.
+#[lang("core::ptr::mask")]
+pub fn mask<P>(ptr: P, mask: u64) -> P;
+
+/// The address of `ptr`.
+#[lang("core::ptr::addr")]
+pub fn addr<P>(ptr: P) -> u64;
+
+/// The pointer of type `P` to `addr`.
+#[lang("core::ptr::from_addr")]
+pub fn from_addr<P>(addr: u64) -> P;
+
+/// The distance in bytes from `rhs` to `lhs`.
+#[lang("core::ptr::diff")]
+pub fn diff<P, Q>(lhs: P, rhs: Q) -> i64;
+
+/// Read a `T`.
+#[lang("core::ptr::load")]
+pub fn load<T, P>(ptr: P) -> T;
+
+/// Write a `T`.
+#[lang("core::ptr::store")]
+pub fn store<T, P>(ptr: P, value: T);
+
+/// `load` with the flags of an LLVM `load`, each a constant. `align` is the
+/// alignment of `ptr` in bytes; zero is the alignment of `T`.
+#[lang("core::ptr::load_extended")]
+pub fn load_extended<T, P>(
+    ptr: P,
+    volatile: bool,
+    nontemporal: bool,
+    invariant: bool,
+    invariant_group: bool,
+    align: u64,
+) -> T;
+
+/// `store` with the flags of an LLVM `store`, each a constant. `align` is
+/// the alignment of `ptr` in bytes; zero is the alignment of `T`.
+#[lang("core::ptr::store_extended")]
+pub fn store_extended<T, P>(
+    ptr: P,
+    value: T,
+    volatile: bool,
+    nontemporal: bool,
+    invariant_group: bool,
+    align: u64,
+);

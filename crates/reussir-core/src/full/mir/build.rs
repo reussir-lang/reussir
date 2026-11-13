@@ -582,6 +582,7 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let t = self.ty(t);
                 M::Cast(self.expr_ref(x), t)
             }
+            raw::Kind::TypeOffset(t) => M::TypeOffset(self.ty(t)),
             raw::Kind::If(c, t, f) => M::If(self.expr_ref(c), self.expr_ref(t), self.expr_ref(f)),
             raw::Kind::RegionRun(x) => M::RegionRun(self.expr_ref(x)),
             raw::Kind::Async { captures, body } => {

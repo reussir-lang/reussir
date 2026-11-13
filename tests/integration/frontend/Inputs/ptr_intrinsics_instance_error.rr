@@ -1,0 +1,17 @@
+import core::ptr;
+import core::ptr::Generic;
+fn read<T>(p: Ptr<Generic>) -> T { ptr::load<T>(p) }
+fn write<T>(p: Ptr<Generic>, v: T) { ptr::store<T>(p, v) }
+fn size<T>() -> u64 { ptr::type_offset<T>() }
+fn step<T>(p: Ptr<Generic>) -> Ptr<Generic> { ptr::advance<T>(p, 1) }
+fn read_extended<T>(p: Ptr<Generic>) -> T { ptr::load_extended<T>(p, true, false, false, false, 0) }
+// MONO-DAG: `core::ptr::load` cannot access the type of this instantiation
+// MONO-DAG: `core::ptr::store` cannot access the type of this instantiation
+// MONO-DAG: `core::ptr::type_offset` cannot access the type of this instantiation
+pub fn instance(p: Ptr<Generic>) -> u64 {
+    read<()>(p);
+    write<(i8, i8)>(p, (1, 2));
+    read_extended<()>(p);
+    step<()>(p);
+    size<(i8, i8)>()
+}
