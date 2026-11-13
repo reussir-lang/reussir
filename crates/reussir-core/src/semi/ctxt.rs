@@ -1309,14 +1309,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .collect()
     }
 
-    /// Whether `prefix` spells the canonical `core::intrinsic::<family>`
-    /// module of a prelude builtin. The package name `core` is reserved, so
-    /// the qualified spelling can never collide with user code.
     /// Whether `prefix` is `core::<module>`.
     pub(super) fn is_core_prefix(&self, prefix: &[TokenKey], module: &str) -> bool {
         prefix.len() == 2 && self.sym(prefix[0]) == "core" && self.sym(prefix[1]) == module
     }
 
+    /// Whether `prefix` spells the canonical `core::intrinsic::<family>`
+    /// module of a prelude builtin. The package name `core` is reserved, so
+    /// the qualified spelling can never collide with user code.
     pub(super) fn is_core_intrinsic_prefix(&self, prefix: &[TokenKey], family: &str) -> bool {
         prefix.len() == 3
             && self.sym(prefix[0]) == "core"
