@@ -977,6 +977,58 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .lower_bigint_intrinsic(block, env, e, *func, args)
                     .map(Some),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
+                IntrinsicOp::Ptr { func, access } => {
+                    use reussir_core::intrinsic::PtrFn;
+                    let mut operands = Vec::with_capacity(args.len());
+                    for a in args.iter() {
+                        let v = self.expr(block, env, a)?.ok_or_else(|| {
+                            LoweringError("pointer operand produced no value".into())
+                        })?;
+                        operands.push(v);
+                    }
+                    let access = builders::PtrAccess {
+                        volatile: access.volatile,
+                        nontemporal: access.nontemporal,
+                        invariant: access.invariant,
+                        invariant_group: access.invariant_group,
+                        align: access.align,
+                    };
+                    let built = match func {
+                        PtrFn::Offset => builders::ptr_add(operands[0], operands[1], loc),
+                        PtrFn::Mask => builders::ptr_mask(operands[0], operands[1], loc),
+                        PtrFn::Addr => {
+                            builders::ptr_addr(operands[0], self.tys.mlir_ty(e.ty)?, loc)
+                        }
+                        PtrFn::FromAddr => {
+                            builders::ptr_from_addr(operands[0], self.tys.mlir_ty(e.ty)?, loc)
+                        }
+                        PtrFn::Diff => builders::ptr_diff(
+                            operands[0],
+                            operands[1],
+                            self.tys.mlir_ty(e.ty)?,
+                            loc,
+                        ),
+                        PtrFn::Load => {
+                            builders::ptr_load(operands[0], self.tys.mlir_ty(e.ty)?, access, loc)
+                        }
+                        PtrFn::Store => {
+                            block.append_operation(builders::ptr_store(
+                                operands[1],
+                                operands[0],
+                                access,
+                                loc,
+                            ));
+                            return Ok(None);
+                        }
+                        other => {
+                            return err(format!(
+                                "`core::ptr::{}` reached lowering unelaborated",
+                                other.as_str()
+                            ));
+                        }
+                    };
+                    Ok(Some(self.append(block, built)))
+                }
                 IntrinsicOp::ConstSeq { func } => {
                     use reussir_core::intrinsic::ConstSeqFn;
                     let mut operands = Vec::with_capacity(args.len());
@@ -1052,6 +1104,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             },
             Cmp(l, op, r) => self.cmp(block, env, l, *op, r).map(Some),
             Cast(x, t) => self.cast(block, env, x, *t),
+            TypeOffset(t) => {
+                let element = self.tys.mlir_ty(*t)?;
+                let result = self.tys.mlir_ty(e.ty)?;
+                Ok(Some(self.append(
+                    block,
+                    builders::ptr_type_offset(self.context, element, result, self.loc()),
+                )))
+            }
             If(c, t, f) => {
                 if env.is_kernel {
                     return Err(LoweringError::at_source(

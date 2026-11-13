@@ -41,6 +41,7 @@ pub enum IntrinsicItem {
     ConstSeq(crate::intrinsic::ConstSeqFn),
     Pjrt(crate::intrinsic::PjrtFn),
     BigInt(crate::intrinsic::BigIntFn),
+    Ptr(crate::intrinsic::PtrFn),
 }
 
 impl IntrinsicItem {
@@ -57,6 +58,7 @@ impl IntrinsicItem {
             IntrinsicItem::ConstSeq(_) => "const_seq",
             IntrinsicItem::Pjrt(_) => "pjrt",
             IntrinsicItem::BigInt(_) => "bigint",
+            IntrinsicItem::Ptr(_) => "ptr",
         }
     }
 
@@ -73,6 +75,7 @@ impl IntrinsicItem {
             IntrinsicItem::ConstSeq(f) => f.as_str(),
             IntrinsicItem::Pjrt(f) => f.as_str(),
             IntrinsicItem::BigInt(f) => f.as_str(),
+            IntrinsicItem::Ptr(f) => f.as_str(),
         }
     }
 
@@ -287,6 +290,7 @@ impl LangItem {
             LangItem::Intrinsic(IntrinsicItem::Object(op)) => {
                 format!("core::object::{}", op.as_str())
             }
+            LangItem::Intrinsic(IntrinsicItem::Ptr(op)) => format!("core::ptr::{}", op.as_str()),
             LangItem::Intrinsic(op) => {
                 format!("core::intrinsic::{}::{}", op.family(), op.op_name())
             }
@@ -298,6 +302,11 @@ impl LangItem {
         if let Some(op) = name.strip_prefix("core::object::") {
             return crate::intrinsic::ObjectFn::parse(op)
                 .map(IntrinsicItem::Object)
+                .map(LangItem::Intrinsic);
+        }
+        if let Some(op) = name.strip_prefix("core::ptr::") {
+            return crate::intrinsic::PtrFn::parse(op)
+                .map(IntrinsicItem::Ptr)
                 .map(LangItem::Intrinsic);
         }
         if let Some(rest) = name.strip_prefix("core::intrinsic::") {

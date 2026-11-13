@@ -623,6 +623,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             | ExprKind::ConstFloat(_)
             | ExprKind::ConstBool(_)
             | ExprKind::ConstSeq(_)
+            | ExprKind::TypeOffset(_)
             | ExprKind::Poison => {}
             ExprKind::Negate(x) | ExprKind::Not(x) | ExprKind::Cast(x, _) => {
                 s.union_with(&self.free(x));
@@ -767,6 +768,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             | ExprKind::ConstFloat(_)
             | ExprKind::ConstBool(_)
             | ExprKind::ConstSeq(_)
+            | ExprKind::TypeOffset(_)
             | ExprKind::Poison => {}
             // Narrowing a reference-counted integer to a fixed-width one
             // borrows it, like a comparison.
@@ -843,6 +845,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 | crate::intrinsic::IntrinsicOp::Str { .. }
                 | crate::intrinsic::IntrinsicOp::ConstSeq { .. }
                 | crate::intrinsic::IntrinsicOp::Panic => self.place_args(args, live_after),
+                // Pointers and the values accessed through them own nothing.
+                crate::intrinsic::IntrinsicOp::Ptr { .. } => self.place_args(args, live_after),
             },
             ExprKind::NullableCall(opt) => {
                 if let Some(x) = opt {

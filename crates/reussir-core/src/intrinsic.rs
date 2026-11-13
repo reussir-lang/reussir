@@ -487,6 +487,120 @@ pub enum IntrinsicOp {
     BigInt {
         func: BigIntFn,
     },
+    /// `core::ptr::<func>`; a load or store carries how it accesses memory.
+    Ptr {
+        func: PtrFn,
+        access: PtrAccess,
+    },
+}
+
+/// Operations on opaque pointers. `Ptr<A>` and `ConstPtr<A>` share them,
+/// except that only a `Ptr<A>` is stored through. The types read, written
+/// and measured are the integers, the floating-point numbers, `bool`,
+/// `char` and the pointers themselves.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PtrFn {
+    /// `offset(p, bytes: i64)`: the pointer `bytes` bytes after `p`.
+    Offset,
+    /// `type_offset<T>() -> u64`: the distance in bytes between two
+    /// consecutive values of `T` in memory.
+    TypeOffset,
+    /// `advance<T>(p, count: i64)`: `offset(p, count * type_offset<T>())`.
+    Advance,
+    /// `mask(p, mask: u64)`: `p` with the address bits clear in `mask`
+    /// cleared.
+    Mask,
+    /// `addr(p) -> u64`: the address of `p`.
+    Addr,
+    /// `from_addr<P>(addr: u64) -> P`: the pointer of type `P` to `addr`.
+    FromAddr,
+    /// `diff(p, q) -> i64`: the distance in bytes from `q` to `p`.
+    Diff,
+    /// `load<T>(p) -> T`: read a `T`.
+    Load,
+    /// `store<T>(p, value: T)`: write a `T`.
+    Store,
+    /// `load_extended<T>(p, volatile, nontemporal, invariant,
+    /// invariant_group, align) -> T`: a load with constant access flags.
+    LoadExtended,
+    /// `store_extended<T>(p, value, volatile, nontemporal, invariant_group,
+    /// align)`: a store with constant access flags.
+    StoreExtended,
+}
+
+impl PtrFn {
+    pub const ALL: &'static [PtrFn] = &[
+        PtrFn::Offset,
+        PtrFn::TypeOffset,
+        PtrFn::Advance,
+        PtrFn::Mask,
+        PtrFn::Addr,
+        PtrFn::FromAddr,
+        PtrFn::Diff,
+        PtrFn::Load,
+        PtrFn::Store,
+        PtrFn::LoadExtended,
+        PtrFn::StoreExtended,
+    ];
+
+    pub fn parse(name: &str) -> Option<PtrFn> {
+        PtrFn::ALL.iter().copied().find(|f| f.as_str() == name)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PtrFn::Offset => "offset",
+            PtrFn::TypeOffset => "type_offset",
+            PtrFn::Advance => "advance",
+            PtrFn::Mask => "mask",
+            PtrFn::Addr => "addr",
+            PtrFn::FromAddr => "from_addr",
+            PtrFn::Diff => "diff",
+            PtrFn::Load => "load",
+            PtrFn::Store => "store",
+            PtrFn::LoadExtended => "load_extended",
+            PtrFn::StoreExtended => "store_extended",
+        }
+    }
+}
+
+/// How a load or store accesses memory, as the LLVM instruction flags of
+/// the same names. An alignment of zero is the natural alignment of the
+/// accessed type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct PtrAccess {
+    pub volatile: bool,
+    pub nontemporal: bool,
+    pub invariant: bool,
+    pub invariant_group: bool,
+    pub align: u64,
+}
+
+impl PtrAccess {
+    /// The packed form printed in the textual IR: the four flags in the low
+    /// bits, then one more than the base-two logarithm of the alignment.
+    pub fn bits(self) -> u32 {
+        let align = match self.align {
+            0 => 0,
+            n => n.trailing_zeros() + 1,
+        };
+        u32::from(self.volatile)
+            | u32::from(self.nontemporal) << 1
+            | u32::from(self.invariant) << 2
+            | u32::from(self.invariant_group) << 3
+            | align << 8
+    }
+
+    pub fn from_bits(bits: u32) -> Option<PtrAccess> {
+        let align = bits >> 8;
+        (bits & 0xf0 == 0 && align <= 64).then(|| PtrAccess {
+            volatile: bits & 1 != 0,
+            nontemporal: bits & 2 != 0,
+            invariant: bits & 4 != 0,
+            invariant_group: bits & 8 != 0,
+            align: if align == 0 { 0 } else { 1 << (align - 1) },
+        })
+    }
 }
 
 /// Synchronous host/device operations. Transfers borrow their input and return
@@ -729,6 +843,7 @@ impl IntrinsicOp {
             IntrinsicOp::ConstSeq { .. } => "const_seq",
             IntrinsicOp::Pjrt { .. } => "pjrt",
             IntrinsicOp::BigInt { .. } => "bigint",
+            IntrinsicOp::Ptr { .. } => "ptr",
         }
     }
 
@@ -743,6 +858,7 @@ impl IntrinsicOp {
             IntrinsicOp::ConstSeq { func } => func.as_str(),
             IntrinsicOp::Pjrt { func } => func.as_str(),
             IntrinsicOp::BigInt { func } => func.as_str(),
+            IntrinsicOp::Ptr { func, .. } => func.as_str(),
         }
     }
 
@@ -757,6 +873,7 @@ impl IntrinsicOp {
             IntrinsicOp::ConstSeq { .. } => 0,
             IntrinsicOp::Pjrt { .. } => 0,
             IntrinsicOp::BigInt { .. } => 0,
+            IntrinsicOp::Ptr { access, .. } => access.bits(),
         }
     }
 
@@ -787,6 +904,20 @@ impl IntrinsicOp {
             "bigint" if imm == 0 => Some(IntrinsicOp::BigInt {
                 func: BigIntFn::parse(name)?,
             }),
+            "ptr" => {
+                let func = PtrFn::parse(name)?;
+                let access = PtrAccess::from_bits(imm)?;
+                // The other surface operations elaborate to these.
+                let valid = match func {
+                    PtrFn::Load => true,
+                    PtrFn::Store => !access.invariant,
+                    PtrFn::Offset | PtrFn::Mask | PtrFn::Addr | PtrFn::FromAddr | PtrFn::Diff => {
+                        access == PtrAccess::default()
+                    }
+                    _ => false,
+                };
+                valid.then_some(IntrinsicOp::Ptr { func, access })
+            }
             _ => None,
         }
     }
@@ -912,6 +1043,40 @@ mod tests {
                 Some(op)
             );
         }
+        for func in [
+            PtrFn::Offset,
+            PtrFn::Mask,
+            PtrFn::Addr,
+            PtrFn::FromAddr,
+            PtrFn::Diff,
+            PtrFn::Load,
+            PtrFn::Store,
+        ] {
+            let op = IntrinsicOp::Ptr {
+                func,
+                access: PtrAccess::default(),
+            };
+            assert_eq!(
+                IntrinsicOp::parse(op.family(), op.name(), op.imm()),
+                Some(op)
+            );
+        }
+        let access = PtrAccess {
+            volatile: true,
+            nontemporal: false,
+            invariant: true,
+            invariant_group: true,
+            align: 4096,
+        };
+        assert_eq!(PtrAccess::from_bits(access.bits()), Some(access));
+        let load = IntrinsicOp::Ptr {
+            func: PtrFn::Load,
+            access,
+        };
+        assert_eq!(IntrinsicOp::parse("ptr", "load", load.imm()), Some(load));
+        assert_eq!(IntrinsicOp::parse("ptr", "store", load.imm()), None);
+        assert_eq!(IntrinsicOp::parse("ptr", "offset", 1), None);
+        assert_eq!(IntrinsicOp::parse("ptr", "advance", 0), None);
         assert_eq!(IntrinsicOp::parse("object", "is_unique", 1), None);
         assert_eq!(IntrinsicOp::parse("object", "unknown", 0), None);
         assert_eq!(IntrinsicOp::parse("pjrt", "upload", 1), None);

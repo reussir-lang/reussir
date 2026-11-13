@@ -152,6 +152,8 @@ pub enum Token<'a> {
     ConstPtr,
     #[token("GenericAddrSpace")]
     GenericAddrSpace,
+    #[token("type_offset")]
+    TypeOffset,
     #[token("DevArray")]
     DevArray,
     #[token("Token")]

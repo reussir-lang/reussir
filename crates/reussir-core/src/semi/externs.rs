@@ -764,6 +764,7 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
             ExprKind::Arith(l, op, r) => ExprKind::Arith(self.boxed(l), *op, self.boxed(r)),
             ExprKind::Cmp(l, op, r) => ExprKind::Cmp(self.boxed(l), *op, self.boxed(r)),
             ExprKind::Cast(x, ty) => ExprKind::Cast(self.boxed(x), self.ty(*ty)),
+            ExprKind::TypeOffset(ty) => ExprKind::TypeOffset(self.ty(*ty)),
             ExprKind::If(c, t, f) => ExprKind::If(self.boxed(c), self.boxed(t), self.boxed(f)),
             ExprKind::RegionRun(x) => ExprKind::RegionRun(self.boxed(x)),
             ExprKind::Proj(base, path) => ExprKind::Proj(self.boxed(base), path.clone()),

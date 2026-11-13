@@ -96,7 +96,7 @@ fn intrinsic_wrapper_body<'tcx>(function: &mir::Function<'tcx>) -> Option<&'tcx 
                 *intrinsics == 1 && args.iter().all(|arg| simple(arg, intrinsics))
             }
             Var(_) | GlobalStr(_) | ConstChar(_) | ConstInt(_) | ConstFloat(_) | ConstBool(_)
-            | ConstSeq(_) => true,
+            | ConstSeq(_) | TypeOffset(_) => true,
             Tuple(fields) | Seq(fields) => fields.iter().all(|field| simple(field, intrinsics)),
             Proj(value, _) | Cast(value, _) | Negate(value) | Not(value) => {
                 simple(value, intrinsics)

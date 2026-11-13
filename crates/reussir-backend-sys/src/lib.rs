@@ -554,4 +554,15 @@ unsafe extern "C" {
         op: mlir_sys::MlirOperation,
         location: mlir_sys::MlirLocation,
     );
+
+    /// Set the access flags of a `ptr.load` or `ptr.store`, which are
+    /// operation properties. A zero `alignment` leaves it unset.
+    pub fn reussirPtrAccessSetFlags(
+        op: mlir_sys::MlirOperation,
+        is_volatile: bool,
+        is_non_temporal: bool,
+        is_invariant: bool,
+        is_invariant_group: bool,
+        alignment: u64,
+    );
 }

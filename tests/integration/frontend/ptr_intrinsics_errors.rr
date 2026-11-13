@@ -1,0 +1,40 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %S/Inputs/ptr_intrinsics_instance_error.rr --emit mir -o - 2>&1 | %FileCheck %S/Inputs/ptr_intrinsics_instance_error.rr --check-prefix=MONO
+
+import core::ptr;
+import core::ptr::Generic;
+struct [shared] Box { value: i64 }
+
+// CHECK-DAG: `core::ptr::offset` takes a `Ptr` or a `ConstPtr`, found `i64`
+fn not_ptr(x: i64) -> i64 { ptr::offset(x, 1) }
+// CHECK-DAG: `core::ptr::store` cannot write through a `ConstPtr<core::ptr::Generic>`
+fn const_store(p: ConstPtr<Generic>) { ptr::store(p, 1 as i32) }
+// Pointers access integers, floating-point numbers, `bool`, `char` and
+// pointers.
+// CHECK-DAG: `core::ptr::load` cannot access a `unit` (not an integer, a floating-point number, `bool`, `char` or a pointer)
+fn unit_load(p: Ptr<Generic>) { ptr::load<()>(p) }
+// CHECK-DAG: `core::ptr::load` cannot access a `Box`
+fn object_load(p: Ptr<Generic>) -> Box { ptr::load<Box>(p) }
+// CHECK-DAG: `core::ptr::store` cannot access a `str`
+fn str_store(p: Ptr<Generic>, s: str) { ptr::store(p, s) }
+// CHECK-DAG: `core::ptr::type_offset` cannot access a `(i8, i64)`
+fn tuple_size() -> u64 { ptr::type_offset<(i8, i64)>() }
+// CHECK-DAG: `core::ptr::advance` cannot access a `Box`
+fn object_step(p: Ptr<Generic>) -> Ptr<Generic> { ptr::advance<Box>(p, 1) }
+// CHECK-DAG: `core::ptr::type_offset` requires a type argument
+fn no_type() -> u64 { ptr::type_offset() }
+// CHECK-DAG: `core::ptr::from_addr` makes a `Ptr` or a `ConstPtr`, not `i64`
+fn bad_from(a: u64) -> i64 { ptr::from_addr<i64>(a) }
+// CHECK-DAG: `core::ptr::from_addr` requires the pointer type as its type argument
+fn missing_from(a: u64) -> Ptr<Generic> { ptr::from_addr(a) }
+// The access flags are part of the operation, so they are constants.
+// CHECK-DAG: expected a constant of type `bool`
+fn runtime_flag(p: Ptr<Generic>, v: bool) -> i32 { ptr::load_extended<i32>(p, v, false, false, false, 0) }
+// CHECK-DAG: the alignment of a pointer access must be zero or a power of two
+fn bad_align(p: Ptr<Generic>) -> i32 { ptr::load_extended<i32>(p, false, false, false, false, 3) }
+// CHECK-DAG: `core::ptr::addr` expects 1 argument(s), got 2
+fn arity(p: Ptr<Generic>) -> u64 { ptr::addr(p, p) }
+// CHECK-DAG: unknown ptr intrinsic `core::ptr::nope`
+fn unknown(p: Ptr<Generic>) { ptr::nope(p) }
+// CHECK-DAG: `core::ptr::addr` takes no type arguments
+fn types(p: Ptr<Generic>) -> u64 { ptr::addr<i64>(p) }

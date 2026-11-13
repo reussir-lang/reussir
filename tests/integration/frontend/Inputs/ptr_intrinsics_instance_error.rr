@@ -1,0 +1,5 @@
+import core::ptr;
+import core::ptr::Generic;
+fn generic<T>(p: Ptr<Generic>) -> T { ptr::load<T>(p) }
+// MONO: this instantiation accesses a type through a pointer that cannot be accessed through one
+pub fn instance(p: Ptr<Generic>) { generic<()>(p) }

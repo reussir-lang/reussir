@@ -934,6 +934,7 @@ impl<'tcx> Builder<'_, 'tcx> {
                 let t = self.ty(t);
                 ExprKind::Cast(self.boxed(x), t)
             }
+            raw::Kind::TypeOffset(t) => ExprKind::TypeOffset(self.ty(t)),
             raw::Kind::If(c, t, f) => ExprKind::If(self.boxed(c), self.boxed(t), self.boxed(f)),
             raw::Kind::RegionRun(x) => ExprKind::RegionRun(self.boxed(x)),
             raw::Kind::Async { captures, body } => {

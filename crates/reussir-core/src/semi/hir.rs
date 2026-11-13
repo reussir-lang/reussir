@@ -166,6 +166,9 @@ pub enum ExprKind<'tcx> {
     Arith(Box<Expr<'tcx>>, ArithOp, Box<Expr<'tcx>>),
     Cmp(Box<Expr<'tcx>>, CmpOp, Box<Expr<'tcx>>),
     Cast(Box<Expr<'tcx>>, Ty<'tcx>),
+    /// The distance in bytes between two consecutive values of the type in
+    /// memory, as an integer of the node's own type.
+    TypeOffset(Ty<'tcx>),
     If(Box<Expr<'tcx>>, Box<Expr<'tcx>>, Box<Expr<'tcx>>),
     Var(VarId),
     /// A `region-run` body; the result has been frozen to a rigid capability.

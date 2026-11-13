@@ -914,6 +914,7 @@ impl<'a> Printer<'a> {
             ExprKind::Cast(x, t) => {
                 text("(") + self.value(x) + text(" as ") + self.ty(*t) + text(")")
             }
+            ExprKind::TypeOffset(t) => text("type_offset(") + self.ty(*t) + text(")"),
             ExprKind::RegionRun(x) => text("region { ") + self.value(x) + text(" }"),
             ExprKind::Proj(base, path) => {
                 let mut d = text("proj(") + self.value(base);

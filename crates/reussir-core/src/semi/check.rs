@@ -3748,6 +3748,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if segs.as_slice() == ["core", "object"] {
             return Some(self.infer_object_intrinsic(fc, span));
         }
+        if segs.as_slice() == ["core", "ptr"] {
+            return Some(self.infer_ptr_intrinsic(fc, span));
+        }
         // Intrinsic families use their compiler-defined checkers.
         let ["core", "intrinsic", family] = segs.as_slice() else {
             let shown = self.path_display(&fc.name);
@@ -3785,6 +3788,285 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 );
                 Some(self.poison(span))
             }
+        }
+    }
+
+    /// `core::ptr::<func>` ([`crate::intrinsic::PtrFn`]). A pointer
+    /// operand is a `Ptr<A>` or a `ConstPtr<A>`; an operation returning a
+    /// pointer returns the type of its operand.
+    fn infer_ptr_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, PtrAccess, PtrFn};
+        use crate::semi::ty::{IntTy, PtrKind};
+
+        let name = self.sym(fc.name.basename).to_owned();
+        let Some(func) = PtrFn::parse(&name) else {
+            self.error(span, format!("unknown ptr intrinsic `core::ptr::{name}`"));
+            return self.poison(span);
+        };
+        let shown = format!("`core::ptr::{name}`");
+        let (arity, takes_type) = match func {
+            PtrFn::TypeOffset => (0, true),
+            PtrFn::Addr => (1, false),
+            PtrFn::FromAddr => (1, true),
+            PtrFn::Load => (1, true),
+            PtrFn::Offset | PtrFn::Mask | PtrFn::Diff => (2, false),
+            PtrFn::Advance | PtrFn::Store => (2, true),
+            PtrFn::LoadExtended | PtrFn::StoreExtended => (6, true),
+        };
+        if fc.args.len() != arity {
+            self.error(
+                span,
+                format!("{shown} expects {arity} argument(s), got {}", fc.args.len()),
+            );
+            return self.poison(span);
+        }
+        let ty_arg = match fc.ty_args.as_slice() {
+            [] | [None] => None,
+            [Some(t)] if takes_type => Some(self.eval_type(t)),
+            _ => {
+                let limit = if takes_type {
+                    "at most one type argument"
+                } else {
+                    "no type arguments"
+                };
+                self.error(span, format!("{shown} takes {limit}"));
+                return self.poison(span);
+            }
+        };
+        let i64_ty = self.tcx.mk_int(IntTy::Signed(64));
+        let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
+        let mk = |this: &mut Self, func, access, args, result| {
+            this.mk_expr(
+                ExprKind::Intrinsic {
+                    op: IntrinsicOp::Ptr { func, access },
+                    args,
+                },
+                result,
+                span,
+            )
+        };
+        let plain = PtrAccess::default();
+        match func {
+            PtrFn::TypeOffset => {
+                let Some(ty) = ty_arg else {
+                    self.error(span, format!("{shown} requires a type argument"));
+                    return self.poison(span);
+                };
+                self.report_ptr_pointee(ty, &shown, span);
+                self.mk_expr(ExprKind::TypeOffset(ty), u64_ty, span)
+            }
+            PtrFn::FromAddr => {
+                let Some(ty) = ty_arg else {
+                    self.error(
+                        span,
+                        format!("{shown} requires the pointer type as its type argument"),
+                    );
+                    return self.poison(span);
+                };
+                if !matches!(ty.kind(), TyKind::Ptr { .. } | TyKind::Bottom) {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} makes a `Ptr` or a `ConstPtr`, not `{}`",
+                            self.ty_display(ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let addr = self.check_expr(&fc.args[0], u64_ty);
+                mk(self, func, plain, vec![addr], ty)
+            }
+            PtrFn::Addr => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                mk(self, func, plain, vec![ptr], u64_ty)
+            }
+            PtrFn::Offset | PtrFn::Mask => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let operand_ty = if func == PtrFn::Offset {
+                    i64_ty
+                } else {
+                    u64_ty
+                };
+                let operand = self.check_expr(&fc.args[1], operand_ty);
+                let result = ptr.ty;
+                mk(self, func, plain, vec![ptr, operand], result)
+            }
+            PtrFn::Advance => {
+                let Some(ty) = ty_arg else {
+                    self.error(
+                        span,
+                        format!("{shown} requires the element type as its type argument"),
+                    );
+                    return self.poison(span);
+                };
+                self.report_ptr_pointee(ty, &shown, span);
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let count = self.check_expr(&fc.args[1], i64_ty);
+                let stride = self.mk_expr(ExprKind::TypeOffset(ty), i64_ty, span);
+                let bytes = self.mk_expr(
+                    ExprKind::Arith(Box::new(count), ArithOp::Mul, Box::new(stride)),
+                    i64_ty,
+                    span,
+                );
+                let result = ptr.ty;
+                mk(self, PtrFn::Offset, plain, vec![ptr, bytes], result)
+            }
+            PtrFn::Diff => {
+                let Some((lhs, lhs_space)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let Some((rhs, rhs_space)) = self.infer_ptr_operand(&fc.args[1], &shown) else {
+                    return self.poison(span);
+                };
+                if self.infer.unify(lhs_space, rhs_space).is_err() {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} takes two pointers into one address space, found `{}` and `{}`",
+                            self.ty_display(lhs.ty),
+                            self.ty_display(rhs.ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                mk(self, func, plain, vec![lhs, rhs], i64_ty)
+            }
+            PtrFn::Load | PtrFn::LoadExtended => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let access = if func == PtrFn::LoadExtended {
+                    let [volatile, nontemporal, invariant, invariant_group, align] = &fc.args[1..]
+                    else {
+                        unreachable!("arity checked above");
+                    };
+                    PtrAccess {
+                        volatile: self.ptr_access_flag(volatile),
+                        nontemporal: self.ptr_access_flag(nontemporal),
+                        invariant: self.ptr_access_flag(invariant),
+                        invariant_group: self.ptr_access_flag(invariant_group),
+                        align: self.ptr_access_align(align),
+                    }
+                } else {
+                    plain
+                };
+                let result = ty_arg.unwrap_or_else(|| self.infer.new_hole_ty());
+                self.report_ptr_pointee(result, &shown, span);
+                mk(self, PtrFn::Load, access, vec![ptr], result)
+            }
+            PtrFn::Store | PtrFn::StoreExtended => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                if let TyKind::Ptr {
+                    kind: PtrKind::Const,
+                    ..
+                } = self.infer.resolve(ptr.ty).kind()
+                {
+                    self.error(
+                        ptr.span,
+                        format!(
+                            "{shown} cannot write through a `{}`",
+                            self.ty_display(ptr.ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let value = match ty_arg {
+                    Some(ty) => self.check_expr(&fc.args[1], ty),
+                    None => self.infer_expr(&fc.args[1]),
+                };
+                self.report_ptr_pointee(value.ty, &shown, span);
+                let access = if func == PtrFn::StoreExtended {
+                    let [volatile, nontemporal, invariant_group, align] = &fc.args[2..] else {
+                        unreachable!("arity checked above");
+                    };
+                    PtrAccess {
+                        volatile: self.ptr_access_flag(volatile),
+                        nontemporal: self.ptr_access_flag(nontemporal),
+                        invariant: false,
+                        invariant_group: self.ptr_access_flag(invariant_group),
+                        align: self.ptr_access_align(align),
+                    }
+                } else {
+                    plain
+                };
+                let unit = self.tcx.mk_unit();
+                mk(self, PtrFn::Store, access, vec![ptr, value], unit)
+            }
+        }
+    }
+
+    /// Infer a pointer operand, returning it with its address space.
+    fn infer_ptr_operand(
+        &mut self,
+        arg: &surface::Expr,
+        shown: &str,
+    ) -> Option<(Expr<'tcx>, Ty<'tcx>)> {
+        let ptr = self.infer_expr(arg);
+        let ty = self.infer.resolve(ptr.ty);
+        match *ty.kind() {
+            TyKind::Ptr { space, .. } => Some((ptr, space)),
+            TyKind::Bottom => None,
+            _ => {
+                self.error(
+                    ptr.span,
+                    format!(
+                        "{shown} takes a `Ptr` or a `ConstPtr`, found `{}`",
+                        self.ty_display(ty)
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// A load or store flag: a `bool` constant.
+    fn ptr_access_flag(&mut self, e: &surface::Expr) -> bool {
+        use crate::semi::const_eval::{ConstScalar, ConstValue};
+        let bool_ty = self.tcx.mk_bool();
+        matches!(
+            self.eval_const(e, bool_ty),
+            Some(ConstValue::Scalar(ConstScalar::Bool(true)))
+        )
+    }
+
+    /// A load or store alignment: a `u64` constant, zero or a power of two.
+    fn ptr_access_align(&mut self, e: &surface::Expr) -> u64 {
+        use crate::semi::const_eval::{ConstScalar, ConstValue};
+        let u64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
+        let Some(ConstValue::Scalar(ConstScalar::Int(n))) = self.eval_const(e, u64_ty) else {
+            return 0;
+        };
+        let align = u64::try_from(&n).expect("a `u64` constant fits `u64`");
+        if align != 0 && !align.is_power_of_two() {
+            self.error(
+                Some(e.span()),
+                "the alignment of a pointer access must be zero or a power of two",
+            );
+            return 0;
+        }
+        align
+    }
+
+    /// Report a type that cannot be read or written through a pointer. A
+    /// type still to be instantiated is checked once ground.
+    fn report_ptr_pointee(&mut self, ty: Ty<'tcx>, shown: &str, span: Option<Span>) {
+        let ty = self.infer.resolve(ty);
+        if let Some(reason) = crate::semi::ty_eval::ptr_pointee_rejection(ty) {
+            self.error(
+                span,
+                format!(
+                    "{shown} cannot access a `{}` ({reason})",
+                    self.ty_display(ty)
+                ),
+            );
         }
     }
 
@@ -5784,6 +6066,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let t = self.zonk_ty(t, span);
                 Cast(zb(self, e), t)
             }
+            TypeOffset(t) => TypeOffset(self.zonk_ty(t, span)),
             If(c, t, f) => If(zb(self, c), zb(self, t), zb(self, f)),
             While {
                 state,
@@ -6063,6 +6346,7 @@ fn var_occurrences<'tcx>(e: &Expr<'tcx>, used: &mut Vec<VarId>, bound: &mut Vec<
         | ConstFloat(_)
         | ConstBool(_)
         | ConstSeq(_)
+        | TypeOffset(_)
         | TraitConst { .. }
         | Poison => {}
     }
