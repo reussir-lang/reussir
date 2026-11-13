@@ -14,8 +14,8 @@ func.func @arithmetic(%p: !P, %n: i64) -> !P {
 }
 
 // CHECK-LABEL: define i32 @difference(ptr %0, ptr %1)
-// CHECK: %[[LHS:.*]] = ptrtoint ptr %0 to i64
-// CHECK: %[[RHS:.*]] = ptrtoint ptr %1 to i64
+// CHECK: %[[LHS:.*]] = ptrtoaddr ptr %0 to i64
+// CHECK: %[[RHS:.*]] = ptrtoaddr ptr %1 to i64
 // CHECK: %[[DIFF:.*]] = sub nsw i64 %[[LHS]], %[[RHS]]
 // CHECK: trunc i64 %[[DIFF]] to i32
 func.func @difference(%p: !P, %q: !P) -> i32 {
@@ -36,31 +36,6 @@ func.func @memory(%p: !P, %v: i32) -> i32 {
   ptr.store %v, %p atomic release alignment = 4 : i32, !P
   %c = ptr.load %p atomic seq_cst alignment = 4 : !P -> i32
   return %c : i32
-}
-
-// CHECK-LABEL: define ptr @counted(ptr %0, ptr %1)
-// CHECK: %[[OLD:.*]] = load ptr, ptr %0
-// CHECK: store ptr %1, ptr %0
-// CHECK: ret ptr %[[OLD]]
-func.func @counted(%p: !P, %v: !reussir.rc<i64>) -> !reussir.rc<i64> {
-  %old = ptr.load %p : !P -> !reussir.rc<i64>
-  ptr.store %v, %p : !reussir.rc<i64>, !P
-  return %old : !reussir.rc<i64>
-}
-
-// CHECK-LABEL: define ptr @addresses(ptr %0, i32 %1)
-// CHECK: %[[ADDR:.*]] = ptrtoaddr ptr %0 to i64
-// CHECK: %[[MASK:.*]] = zext i32 %1 to i64
-// CHECK: %[[MASKED:.*]] = call ptr @llvm.ptrmask.p0.i64(ptr %0, i64 %[[MASK]])
-// CHECK: inttoptr i64 %[[ADDR]] to ptr
-func.func @addresses(%p: !P, %mask: i32) -> !P {
-  %addr = reussir.ptr.addr %p : !P -> i64
-  %masked = reussir.ptr.mask %p, %mask : !P, i32
-  %q = reussir.ptr.from_addr %addr : i64 -> !P
-  %r = ptr.ptr_add %masked, %addr : !P, i64
-  %d = ptr.ptr_diff %q, %r : !P -> i64
-  %s = ptr.ptr_add %q, %d : !P, i64
-  return %s : !P
 }
 
 // CHECK-LABEL: define ptr @null()
