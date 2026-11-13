@@ -39,9 +39,7 @@ pub fn instantiate(p: Ptr<Generic>, q: ConstPtr<Generic>) -> ConstPtr<Generic> {
 // CHECK-DAG: func.func @{{.*}}node{{.*}}(%arg0: !ptr.ptr<#ptr.generic_space>) -> !reussir.rc<
 pub fn node(p: Ptr<Generic>) -> Node { Node { at: p, next: Nullable::Null } }
 
-pub fn qualified(
-    p: core::ptr::Ptr<core::ptr::Generic>,
-) -> core::ptr::ConstPtr<Generic> {
+pub fn slot(p: Ptr<Generic>) -> ConstPtr<Generic> {
     match Slot::Empty { Slot::Empty => unwrap(Slot::Empty, constant(p)), Slot::Full(q) => q }
 }
 
