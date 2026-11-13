@@ -87,6 +87,10 @@ MlirType reussirStablehloTokenTypeGet(MlirContext context);
 MlirType reussirStablehloFutureTypeGet(MlirContext context, intptr_t n,
                                        const MlirType *payloads);
 
+// `!rcgmp.mpz`, or `!rcgmp.mpz<atomic>` with `atomic`. Returns a null type
+// if RCGMP is disabled.
+MlirType reussirRcgmpMpzTypeGet(MlirContext context, bool atomic);
+
 MlirType reussirTokenTypeGet(MlirContext context, size_t align, size_t size);
 
 // `!reussir.region`.

@@ -27,6 +27,10 @@
 #ifdef REUSSIR_ENABLE_OPENXLA
 #include "stablehlo/dialect/StablehloOps.h"
 #endif
+#ifdef REUSSIR_ENABLE_RCGMP
+#include "RCGMP/IR/RCGMPDialect.h"
+#include "RCGMP/IR/RCGMPTypes.h"
+#endif
 #include <llvm/ADT/DenseSet.h>
 
 #include "llvm/ADT/SmallVector.h"
@@ -71,6 +75,18 @@ MlirType reussirStablehloTokenTypeGet(MlirContext context) {
   return wrap(mlir::stablehlo::TokenType::get(ctx));
 #else
   (void)context;
+  return {nullptr};
+#endif
+}
+
+MlirType reussirRcgmpMpzTypeGet(MlirContext context, bool atomic) {
+#ifdef REUSSIR_ENABLE_RCGMP
+  auto *ctx = unwrap(context);
+  ctx->getOrLoadDialect<mlir::rcgmp::RCGMPDialect>();
+  return wrap(mlir::rcgmp::MpzType::get(ctx, atomic));
+#else
+  (void)context;
+  (void)atomic;
   return {nullptr};
 #endif
 }
