@@ -1266,6 +1266,47 @@ pub fn vector_reduction<'c>(
     operation
 }
 
+/// A `vector` dialect operation with the given operands, result types and
+/// inherent attributes; the attributes are set after construction, because
+/// the operations keep them in their properties.
+pub fn vector_operation<'c>(
+    name: &str,
+    operands: &[Value<'c, '_>],
+    results: &[Type<'c>],
+    attributes: &[(&str, Attribute<'c>)],
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new(name, location)
+        .add_operands(operands)
+        .add_results(results)
+        .build()
+        .expect("valid vector operation");
+    for &(name, value) in attributes {
+        set_inherent_attribute(&operation, name, value);
+    }
+    operation
+}
+
+/// `array<i64: values...>`, the positions of several `vector` operations.
+pub fn dense_i64_array<'c>(context: &'c Context, values: &[i64]) -> Attribute<'c> {
+    DenseI64ArrayAttribute::new(context, values).into()
+}
+
+/// `[values...]` as an array of `i64` attributes.
+pub fn i64_array<'c>(context: &'c Context, values: &[i64]) -> Attribute<'c> {
+    let i64_ty = IntegerType::new(context, 64).into();
+    let elements: Vec<Attribute<'c>> = values
+        .iter()
+        .map(|&v| IntegerAttribute::new(i64_ty, v).into())
+        .collect();
+    ArrayAttribute::new(context, &elements).into()
+}
+
+/// `value : i64` as an attribute.
+pub fn i64_attribute<'c>(context: &'c Context, value: i64) -> Attribute<'c> {
+    IntegerAttribute::new(IntegerType::new(context, 64).into(), value).into()
+}
+
 /// `vector.create_mask %counts... : <mask_type>`: in each dimension the
 /// leading `count` lanes are set. The counts are `index` values.
 pub fn vector_create_mask<'c>(

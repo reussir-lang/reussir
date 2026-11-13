@@ -1,0 +1,24 @@
+import core::simd;
+
+// CHECK-LABEL: define {{.*}}<vscale x 8 x i32> @{{.*}}zip
+// CHECK: call <vscale x 8 x i32> @llvm.vector.interleave2.nxv8i32
+pub fn zip(a: Simd<[i32; [4]]>, b: Simd<[i32; [4]]>) -> Simd<[i32; [8]]> { simd::interleave(a, b) }
+
+// The first four lanes of a scalable vector are a fixed vector.
+// CHECK-LABEL: define {{.*}}<4 x i32> @{{.*}}head
+// CHECK: call <4 x i32> @llvm.vector.extract.v4i32.nxv4i32(<vscale x 4 x i32> %0, i64 0)
+pub fn head(v: Simd<[i32; [4]]>) -> Simd<[i32; 4]> { simd::scalable_extract<Simd<[i32; 4]>>(v, 0) }
+
+// CHECK-LABEL: define {{.*}}<vscale x 16 x i8> @{{.*}}bytes
+// CHECK: bitcast <vscale x 4 x float> %0 to <vscale x 16 x i8>
+pub fn bytes(v: Simd<[f32; [4]]>) -> Simd<[u8; [16]]> { simd::bitcast<Simd<[u8; [16]]>>(v) }
+
+// CHECK-LABEL: define {{.*}}<vscale x 4 x i32> @{{.*}}evens
+// CHECK: call { <vscale x 4 x i32>, <vscale x 4 x i32> } @llvm.vector.deinterleave2.nxv8i32
+pub fn evens(v: Simd<[i32; [8]]>) -> Simd<[i32; [4]]> { simd::deinterleave_even(v) }
+
+// CHECK-LABEL: define {{.*}}<vscale x 4 x i32> @{{.*}}patched
+// CHECK: call <vscale x 4 x i32> @llvm.vector.insert.nxv4i32.v4i32(<vscale x 4 x i32> %0, <4 x i32> %1, i64 0)
+pub fn patched(v: Simd<[i32; [4]]>, part: Simd<[i32; 4]>) -> Simd<[i32; [4]]> {
+    simd::scalable_insert(v, part, 0)
+}
