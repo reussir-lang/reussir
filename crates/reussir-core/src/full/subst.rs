@@ -80,6 +80,7 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
         TyKind::Cell { elem, kind } => tcx.mk_cell(subst_ty(tcx, elem, subst), kind),
         TyKind::Arc(inner) => tcx.mk_arc(subst_ty(tcx, inner, subst)),
         TyKind::ConstSeq(elem) => tcx.mk_const_seq(subst_ty(tcx, elem, subst)),
+        TyKind::Ptr { space, kind } => tcx.mk_ptr(subst_ty(tcx, space, subst), kind),
         TyKind::Array { elem, dims } => tcx.mk_array(subst_ty(tcx, elem, subst), dims),
         TyKind::DevArray {
             elem,
@@ -103,6 +104,7 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
         TyKind::Token => ty,
         TyKind::Tensor { elem, dims } => tcx.mk_tensor(subst_ty(tcx, elem, subst), dims),
         TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)

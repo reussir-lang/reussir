@@ -1831,7 +1831,14 @@ mod tests {
 
     #[test]
     fn sealed_builtins_cannot_be_implemented() {
-        for tr in ["Num", "Integral", "FloatingPoint", "PtrLike", "Sync"] {
+        for tr in [
+            "Num",
+            "Integral",
+            "FloatingPoint",
+            "PtrLike",
+            "Sync",
+            "AddrSpace",
+        ] {
             let source = format!("pub struct P {{ pub x: i64 }}\nimpl {tr} for P {{ }}");
             elaborate_source(&source, |elab| {
                 assert!(
@@ -2738,6 +2745,10 @@ mod tests {
                     &["intrinsic", "pjrt"],
                     include_str!("../../../library/core/src/intrinsic/pjrt.rr"),
                 ),
+                (
+                    &["intrinsic", "ptr"],
+                    include_str!("../../../library/core/src/intrinsic/ptr.rr"),
+                ),
             ],
             |elab, _| {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
@@ -2796,6 +2807,7 @@ mod tests {
                     elab.lang.floating_point,
                     elab.lang.ptr_like,
                     elab.lang.sync,
+                    elab.lang.addr_space,
                 ]) {
                     let def = elab
                         .lang

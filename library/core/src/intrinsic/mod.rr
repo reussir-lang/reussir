@@ -14,5 +14,6 @@ pub mod math;
 pub mod nullable;
 pub mod panic;
 pub mod pjrt;
+pub mod ptr;
 pub mod str;
 pub mod tensor;

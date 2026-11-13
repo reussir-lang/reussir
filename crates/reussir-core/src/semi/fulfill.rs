@@ -305,6 +305,7 @@ pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
         }
         TyKind::Nullable(inner) => ty_has_hole(*inner),
         TyKind::Cell { elem: inner, .. } => ty_has_hole(*inner),
+        TyKind::Ptr { space, .. } => ty_has_hole(*space),
         TyKind::Arc(inner) | TyKind::ConstSeq(inner) => ty_has_hole(*inner),
         TyKind::DevArray {
             elem, placement, ..
@@ -329,6 +330,7 @@ pub(super) fn collect_holes(ty: crate::semi::ty::Ty<'_>, out: &mut Vec<HoleId>) 
         }
         TyKind::Nullable(inner) => collect_holes(*inner, out),
         TyKind::Cell { elem: inner, .. } => collect_holes(*inner, out),
+        TyKind::Ptr { space, .. } => collect_holes(*space, out),
         TyKind::Arc(inner) | TyKind::ConstSeq(inner) => collect_holes(*inner, out),
         TyKind::DevArray {
             elem, placement, ..

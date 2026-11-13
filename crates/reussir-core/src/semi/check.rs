@@ -1877,6 +1877,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 TyKind::Tensor { .. } => Some(crate::semi::lang::FormerItem::Tensor),
                 TyKind::DevArray { .. } => Some(crate::semi::lang::FormerItem::DevArray),
                 TyKind::ConstSeq(_) => Some(crate::semi::lang::FormerItem::ConstSeq),
+                TyKind::Ptr { kind, .. } => Some(match kind {
+                    crate::semi::ty::PtrKind::Mut => crate::semi::lang::FormerItem::Ptr,
+                    crate::semi::ty::PtrKind::Const => crate::semi::lang::FormerItem::ConstPtr,
+                }),
                 _ => None,
             }
         };

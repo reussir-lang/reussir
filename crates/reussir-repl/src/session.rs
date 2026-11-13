@@ -776,6 +776,12 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                 )
             }
             TyKind::DefaultPlacement => "DefaultPlacement".into(),
+            TyKind::GenericAddrSpace => "Generic".into(),
+            TyKind::Ptr { space, kind } => format!(
+                "{}<{}>",
+                kind.surface_name(),
+                Self::render_ty_with(elab, space)
+            ),
             TyKind::DevArray {
                 elem,
                 dims,

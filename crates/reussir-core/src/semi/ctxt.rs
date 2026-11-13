@@ -262,8 +262,10 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         }
         TyKind::Array { elem, .. } | TyKind::Cell { elem, .. } => contains_kernel_value(elem),
         TyKind::Nullable(inner) | TyKind::Arc(inner) => contains_kernel_value(inner),
+        TyKind::Ptr { space, .. } => contains_kernel_value(space),
         TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -317,9 +319,11 @@ fn collect_private_records<'tcx>(
         TyKind::Nullable(inner) | TyKind::Arc(inner) => {
             collect_private_records(records, inner, out);
         }
+        TyKind::Ptr { space, .. } => collect_private_records(records, space, out),
         TyKind::Token
         | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -562,7 +566,7 @@ pub struct Elaborator<'a, 'tcx> {
     /// `core` declares under its own modules still resolve unqualified;
     /// the fallback registration ([`Elaborator::ensure_cmp_fallback`])
     /// draws its declared names from the same table.
-    pub(super) prelude_names: [(TokenKey, crate::semi::lang::LangItem); 12],
+    pub(super) prelude_names: [(TokenKey, crate::semi::lang::LangItem); 13],
     /// The operator-method names (`eq`, `lt`, `le`, `gt`, `ge`, `cmp`),
     /// interned at construction: operator desugaring and the builtin-impl
     /// rewrites resolve the active trait's method *by name*, so method
@@ -607,7 +611,7 @@ pub struct Checkpoint {
     /// The wired tower fields ([`crate::semi::lang::LangItems::fields`]) —
     /// a batch that binds `#[lang("num")]` repoints them, so rollback must
     /// restore the builtins.
-    pub(super) lang_fields: [TraitId; 5],
+    pub(super) lang_fields: [TraitId; 6],
 }
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
@@ -639,6 +643,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ("FloatingPoint", LangItem::FloatingPoint),
                 ("PtrLike", LangItem::PtrLike),
                 ("Sync", LangItem::Sync),
+                ("AddrSpace", LangItem::AddrSpace),
             ]
             .map(|(name, item)| (interner.intern(name), item))
         };
@@ -880,6 +885,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.push_shape_display(out, elem, dims);
             }
             TyKind::DefaultPlacement => out.push_str("DefaultPlacement"),
+            TyKind::GenericAddrSpace => out.push_str("Generic"),
+            TyKind::Ptr { space, kind } => {
+                out.push_str(kind.surface_name());
+                out.push('<');
+                self.push_ty_display(out, space);
+                out.push('>');
+            }
             TyKind::DevArray {
                 elem,
                 dims,
@@ -2341,6 +2353,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         (Some(LangItem::Former(FormerItem::ConstSeq)), [elem]) => {
                             self.tcx.mk_const_seq(*elem)
                         }
+                        (Some(LangItem::Former(FormerItem::Ptr)), [space]) => {
+                            self.tcx.mk_ptr(*space, crate::semi::ty::PtrKind::Mut)
+                        }
+                        (Some(LangItem::Former(FormerItem::ConstPtr)), [space]) => {
+                            self.tcx.mk_ptr(*space, crate::semi::ty::PtrKind::Const)
+                        }
                         // `Nat` and `Int` methods take the built-in integers.
                         _ => self.record_def_ty(target, &args, flex),
                     })
@@ -2997,6 +3015,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         if !target_args.is_empty() {
             return None;
+        }
+        // The generic address space, by the spellings that name the marker.
+        if self.sym(target.basename) == "Generic"
+            && (target.segments.is_empty() && self.resolve_record_ref(target).is_none()
+                || self.is_core_intrinsic_prefix(&target.segments, "ptr"))
+        {
+            return Some(self.tcx.mk(TyKind::GenericAddrSpace));
         }
         if let Some(def) = self.resolve_record_ref(target) {
             return self.lang.bigint_of(def).map(|b| self.tcx.mk_bigint(b));

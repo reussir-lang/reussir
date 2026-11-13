@@ -1,0 +1,50 @@
+// RUN: %rrc %s -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/ptr_types_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/ptr_types_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+// Pointers cross the C boundary as `void *` and the Rust boundary as
+// `*mut c_void` / `*const c_void`.
+
+pub struct [shared] Holder { at: Ptr<Generic>, tag: i64 }
+pub struct [value] Pair { first: Ptr<Generic>, second: ConstPtr<Generic> }
+
+#[ffi(import)]
+fn write(p: Ptr<Generic>, value: i64) [{ unsafe { p.cast::<i64>().write(value) } }];
+#[ffi(import)]
+fn read(p: ConstPtr<Generic>) -> i64 [{ unsafe { p.cast::<i64>().read() } }];
+#[ffi(import)]
+fn freeze(p: Ptr<Generic>) -> ConstPtr<Generic> [{ p.cast_const() }];
+#[ffi(import)]
+fn null() -> Ptr<Generic> [{ ::std::ptr::null_mut() }];
+#[ffi(import)]
+fn is_null(p: Ptr<Generic>) -> bool [{ p.is_null() }];
+
+fn identity(p: Ptr<Generic>) -> Ptr<Generic> { p }
+extern "C" trampoline "ptr_identity" = identity;
+
+fn pick(first: bool, p: ConstPtr<Generic>, q: ConstPtr<Generic>) -> ConstPtr<Generic> {
+    let pair = Pair { first: null(), second: if first { p } else { q } };
+    pair.second
+}
+extern "C" trampoline "ptr_pick" = pick;
+
+fn hold(p: Ptr<Generic>) -> Ptr<Generic> {
+    let holder = Holder { at: p, tag: 7 };
+    let cell: Cell<Ptr<Generic>> = core::intrinsic::cell::alloc(holder.at);
+    let get = || core::intrinsic::cell::get(cell);
+    get()
+}
+extern "C" trampoline "ptr_hold" = hold;
+
+fn bump(p: Ptr<Generic>) -> i64 {
+    let before = read(freeze(p));
+    write(p, before + 1);
+    read(freeze(hold(p)))
+}
+extern "C" trampoline "ptr_bump" = bump;
+
+fn null_is_null() -> bool { is_null(null()) }
+extern "C" trampoline "ptr_null_is_null" = null_is_null;

@@ -239,6 +239,7 @@ pub fn inline_size_align<'tcx>(
         | TyKind::Cell { .. }
         | TyKind::Array { .. }
         | TyKind::DevArray { .. }
+        | TyKind::Ptr { .. }
         | TyKind::Arc(_) => scalar(WORD),
         // The native JIT's string and constant sequence representation is
         // { pointer, usize }.
@@ -559,6 +560,10 @@ impl<'tcx> Walker<'_, 'tcx> {
                 TyKind::DevArray { .. } => out.push_str("<devarray>"),
                 TyKind::Arc(inner) => self.render(addr, inner, is_field, depth + 1, out)?,
                 TyKind::Closure { .. } => out.push_str("<closure>"),
+                TyKind::Ptr { .. } => {
+                    let ptr = addr.cast::<*const u8>().read_unaligned();
+                    out.push_str(&format!("{ptr:p}"));
+                }
                 TyKind::Cell { kind, .. } => {
                     out.push('<');
                     out.push_str(&kind.surface_name().to_lowercase());

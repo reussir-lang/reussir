@@ -38,6 +38,11 @@ pub fn raw_ptr(element: Type) -> Type {
     unsafe { Type::from_raw(sys::reussirRawPtrTypeGet(element.to_raw())) }
 }
 
+/// Creates the opaque pointer type `!ptr.ptr<#ptr.generic_space>`.
+pub fn generic_ptr(context: &Context) -> Type<'_> {
+    unsafe { Type::from_raw(sys::reussirGenericPtrTypeGet(context.to_raw())) }
+}
+
 /// Creates a `!reussir.token<align: …, size: …>` type.
 pub fn token(context: &Context, align: usize, size: usize) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirTokenTypeGet(context.to_raw(), align, size)) }

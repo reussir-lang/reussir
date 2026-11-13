@@ -333,6 +333,14 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::Arc(_) => Err("an `Arc` coloring cannot cross the FFI boundary yet".into()),
             TyKind::Nullable(_) => Err("`Nullable` cannot cross the FFI boundary yet".into()),
             TyKind::ConstSeq(_) => Err("a `ConstSeq` cannot cross the FFI boundary yet".into()),
+            TyKind::Ptr { kind, .. } => Ok(match kind {
+                crate::semi::ty::PtrKind::Mut => "*mut ::std::ffi::c_void",
+                crate::semi::ty::PtrKind::Const => "*const ::std::ffi::c_void",
+            }
+            .into()),
+            TyKind::GenericAddrSpace => {
+                Err("an address space marker cannot cross the FFI boundary".into())
+            }
             TyKind::BigInt(_) => Ok(RCGMP_OWNED.into()),
             // `str` lowers to `{ptr, len}`; the runtime's `#[repr(C)]`
             // borrowed view is bit-identical. Every surface `str` today is a
@@ -411,11 +419,15 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
     /// Whether the type lowers to an LLVM integer or pointer at the
     /// boundary. Mirrors `isTrivialFFIType` in
     /// `CABISignatureConversion.cpp`: scalars that are integers (`iN`,
-    /// `bool`, `char`) and rc pointers (opaque `#[ffi]` and shared records)
-    /// qualify; floats and aggregates do not.
+    /// `bool`, `char`), rc pointers (opaque `#[ffi]` and shared records)
+    /// and opaque pointers qualify; floats and aggregates do not.
     pub fn integer_like(&self, ty: Ty<'tcx>) -> bool {
         match *ty.kind() {
-            TyKind::Int(_) | TyKind::Bool | TyKind::Char | TyKind::BigInt(_) => true,
+            TyKind::Int(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::BigInt(_)
+            | TyKind::Ptr { .. } => true,
             TyKind::Record { def, .. } => self
                 .records
                 .get(&def)

@@ -124,6 +124,7 @@ fn contains_bigint(ty: Ty<'_>) -> bool {
         | TyKind::ConstSeq(elem)
         | TyKind::Nullable(elem)
         | TyKind::Arc(elem) => contains_bigint(elem),
+        TyKind::Ptr { space, .. } => contains_bigint(space),
         TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
@@ -132,6 +133,7 @@ fn contains_bigint(ty: Ty<'_>) -> bool {
         | TyKind::Unit
         | TyKind::Token
         | TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Generic(_)
         | TyKind::Hole(_)
         | TyKind::Bottom => false,

@@ -71,6 +71,7 @@ mod tests {
             ),
             (ty::region(&context), "!reussir.region"),
             (ty::raw_ptr(i32_ty), "!reussir.raw_ptr<"),
+            (ty::generic_ptr(&context), "!ptr.ptr<#ptr.generic_space>"),
             (ty::cell(i32_ty, false), "!reussir.cell<"),
             (ty::cell(i32_ty, true), "!reussir.cell<i32 exclusive>"),
             (ty::atomic_cell(i32_ty), "!reussir.cell<i32 atomic>"),

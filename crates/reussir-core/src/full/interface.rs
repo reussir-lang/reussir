@@ -291,8 +291,10 @@ fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut 
         TyKind::Nullable(inner) | TyKind::Arc(inner) | TyKind::ConstSeq(inner) => {
             note_records(inner, records, queue);
         }
+        TyKind::Ptr { space, .. } => note_records(space, records, queue),
         TyKind::Token
         | TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)

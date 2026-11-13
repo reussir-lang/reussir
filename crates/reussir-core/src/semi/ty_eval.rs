@@ -443,6 +443,33 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
+        // Opaque pointers, `core::intrinsic::ptr::{Ptr, ConstPtr}`, and the
+        // address space marker `Generic` beside them.
+        let ptr_family = bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "ptr");
+        if ptr_family && self.sym(key) == "Generic" {
+            if !args.is_empty() {
+                self.error(Some(span), "`Generic` takes no type arguments");
+            }
+            return self.tcx.mk(TyKind::GenericAddrSpace);
+        }
+        if ptr_family && let Some(kind) = crate::semi::ty::PtrKind::parse(self.sym(key)) {
+            let name = kind.surface_name();
+            return match args {
+                [space] => {
+                    let space = self.eval_type(space);
+                    self.report_ptr_wf(space, kind, Some(span));
+                    self.tcx.mk_ptr(space, kind)
+                }
+                _ => {
+                    self.error(
+                        Some(span),
+                        format!("`{name}` takes exactly one address space argument"),
+                    );
+                    self.tcx.mk(TyKind::Bottom)
+                }
+            };
+        }
+
         // Nothing else under the reserved `core` package names a type,
         // except a record the loaded `core` interface declares (the
         // `core::pjrt` configuration records, say), which resolves like any
@@ -849,6 +876,9 @@ fn is_concretely_non_pointer(t: Ty<'_>) -> bool {
             | TyKind::Future(_)
             | TyKind::Tensor { .. }
             | TyKind::DefaultPlacement
+            | TyKind::GenericAddrSpace
+            // An opaque pointer may itself be null, leaving no niche.
+            | TyKind::Ptr { .. }
             | TyKind::Int(_)
             | TyKind::Fp(_)
             | TyKind::Bool
@@ -1044,6 +1074,37 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                 }
             }
+        }
+    }
+
+    /// Report a pointer type whose address space is not an `AddrSpace`. An
+    /// address space still being inferred is decided by what it unifies with.
+    pub(crate) fn report_ptr_wf(
+        &mut self,
+        space: Ty<'tcx>,
+        kind: crate::semi::ty::PtrKind,
+        span: Option<surface::Span>,
+    ) {
+        use crate::semi::traits::{Obligation, SelectCtxt, TraitRef};
+        if matches!(space.kind(), TyKind::Hole(_) | TyKind::Bottom) {
+            return;
+        }
+        let goal = Obligation::Trait(TraitRef {
+            trait_id: self.lang.addr_space,
+            args: vec![space],
+        });
+        if SelectCtxt::new(&self.traits, self.tcx, &self.generics)
+            .select(&goal)
+            .is_err()
+        {
+            self.error(
+                span,
+                format!(
+                    "`{}<{}>` is ill-formed: `{1}` does not implement `AddrSpace`",
+                    kind.surface_name(),
+                    self.ty_display(space)
+                ),
+            );
         }
     }
 
@@ -1270,6 +1331,8 @@ pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
         | TyKind::Cell { .. }
         | TyKind::Nullable(_)
         | TyKind::ConstSeq(_)
+        | TyKind::Ptr { .. }
+        | TyKind::GenericAddrSpace
         | TyKind::Arc(_) => Some(
             "kernel values must be tensors, futures, tokens, supported numeric/bool scalars, or unit",
         ),

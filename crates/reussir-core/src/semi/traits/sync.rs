@@ -306,6 +306,9 @@ impl<'tcx> Cx<'_, 'tcx> {
             // Error recovery: don't cascade.
             | TyKind::Bottom => SyncVerdict::Sync,
             TyKind::DefaultPlacement => SyncVerdict::Sync,
+            // An address is plain data; every access through it is the
+            // caller's to justify.
+            TyKind::Ptr { .. } | TyKind::GenericAddrSpace => SyncVerdict::Sync,
             TyKind::Tuple(fields) => {
                 let saved = std::mem::take(&mut self.group);
                 let verdict = self.fold(fields.iter().enumerate().map(|(i, &ty)| (format!("tuple field {i}"), ty)));

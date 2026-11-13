@@ -872,6 +872,11 @@ impl<'tcx> Builder<'_, 'tcx> {
                 self.tcx.mk_array(elem, dims)
             }
             raw::Ty::DefaultPlacement => self.tcx.mk(TyKind::DefaultPlacement),
+            raw::Ty::GenericAddrSpace => self.tcx.mk(TyKind::GenericAddrSpace),
+            raw::Ty::Ptr { space, kind } => {
+                let space = self.ty(space);
+                self.tcx.mk_ptr(space, *kind)
+            }
             raw::Ty::DevArray {
                 elem,
                 dims,
@@ -1751,6 +1756,19 @@ mod tests {
     }
 
     #[test]
+    fn roundtrips_pointer_types() {
+        roundtrip(
+            r#"
+            pub struct [value] Pair { first: Ptr<Generic>, second: ConstPtr<Generic> }
+            pub fn second(pair: Pair) -> ConstPtr<Generic> { pair.second }
+            fn generic<A: AddrSpace>(p: Ptr<A>, q: ConstPtr<A>) -> ConstPtr<A> { q }
+            pub fn call(p: Ptr<Generic>, q: ConstPtr<Generic>) -> ConstPtr<Generic> { generic(p, q) }
+            pub fn marker(x: Generic) -> Generic { x }
+        "#,
+        );
+    }
+
+    #[test]
     fn roundtrips_array_types() {
         // The `[elem; extents…]` type in parameter and return position;
         // rank-1 and rank-2. The array *ops* have their own round-trip test.
@@ -2115,7 +2133,14 @@ mod tests {
                 .with_traits(&traits, &impls)
                 .program(&elab.elaborated, &strings, &elab.records, &elab.trampolines);
             assert!(text.contains("trait #Show"), "{text}");
-            for builtin in ["Num", "Integral", "FloatingPoint", "PtrLike", "Sync"] {
+            for builtin in [
+                "Num",
+                "Integral",
+                "FloatingPoint",
+                "PtrLike",
+                "Sync",
+                "AddrSpace",
+            ] {
                 assert!(
                     !text.contains(&format!("trait #{builtin}")),
                     "sealed `{builtin}` must not serialize:\n{text}"

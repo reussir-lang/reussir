@@ -51,6 +51,7 @@ fn add_ty_features(ty: Ty<'_>, needed: &mut FeatureSet) {
         | TyKind::Nullable(elem)
         | TyKind::ConstSeq(elem)
         | TyKind::Arc(elem) => add_ty_features(elem, needed),
+        TyKind::Ptr { space, .. } => add_ty_features(space, needed),
         TyKind::Int(_)
         | TyKind::Fp(_)
         | TyKind::Bool
@@ -58,6 +59,7 @@ fn add_ty_features(ty: Ty<'_>, needed: &mut FeatureSet) {
         | TyKind::Char
         | TyKind::Unit
         | TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Generic(_)
         | TyKind::Hole(_)
         | TyKind::Bottom => {}

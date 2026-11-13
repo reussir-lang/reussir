@@ -103,7 +103,7 @@ impl IntrinsicItem {
     }
 }
 
-/// A built-in type *former* — `Arc`, `Nullable`, `ConstSeq`, `Tensor`, and the cell family —
+/// A built-in type *former* — `Arc`, `Nullable`, `ConstSeq`, `Tensor`, the pointers, and the cell family —
 /// as a lang item: the marker on the anchor record `core` declares for
 /// it. The former itself stays wired (its canonical
 /// `core::intrinsic::…` spelling and bare prelude name resolve in
@@ -119,6 +119,10 @@ pub enum FormerItem {
     ConstSeq,
     DevArray,
     DefaultPlacement,
+    /// One per [`crate::semi::ty::PtrKind`].
+    Ptr,
+    ConstPtr,
+    GenericAddrSpace,
     /// One per [`crate::semi::ty::CellKind`].
     Cell,
     RefCell,
@@ -129,7 +133,7 @@ pub enum FormerItem {
 }
 
 impl FormerItem {
-    pub const ALL: [FormerItem; 14] = [
+    pub const ALL: [FormerItem; 17] = [
         FormerItem::Tensor,
         FormerItem::TensorFuture,
         FormerItem::TensorToken,
@@ -138,6 +142,9 @@ impl FormerItem {
         FormerItem::ConstSeq,
         FormerItem::DevArray,
         FormerItem::DefaultPlacement,
+        FormerItem::Ptr,
+        FormerItem::ConstPtr,
+        FormerItem::GenericAddrSpace,
         FormerItem::Cell,
         FormerItem::RefCell,
         FormerItem::Atomic,
@@ -151,7 +158,9 @@ impl FormerItem {
     pub fn arity(self) -> usize {
         match self {
             FormerItem::DevArray => 2,
-            FormerItem::DefaultPlacement | FormerItem::TensorToken => 0,
+            FormerItem::DefaultPlacement
+            | FormerItem::TensorToken
+            | FormerItem::GenericAddrSpace => 0,
             _ => 1,
         }
     }
@@ -174,6 +183,9 @@ impl FormerItem {
             FormerItem::ConstSeq => "const_seq",
             FormerItem::DevArray => "dev_array",
             FormerItem::DefaultPlacement => "default_placement",
+            FormerItem::Ptr => "ptr",
+            FormerItem::ConstPtr => "const_ptr",
+            FormerItem::GenericAddrSpace => "generic_addr_space",
             FormerItem::Cell => "cell",
             FormerItem::RefCell => "ref_cell",
             FormerItem::Atomic => "atomic",
@@ -195,6 +207,7 @@ pub enum LangItem {
     FloatingPoint,
     PtrLike,
     Sync,
+    AddrSpace,
     /// The comparison tower — declared by `core` (a later PR in this
     /// series); the slots exist so its source can land without a compiler
     /// release in between.
@@ -228,21 +241,23 @@ pub enum LangItemKind {
 impl LangItem {
     /// The wired numeric/marker tower, in `Builtins` field order — the
     /// items whose [`LangItems`] fields repoint when a declaration binds.
-    pub const TOWER: [LangItem; 5] = [
+    pub const TOWER: [LangItem; 6] = [
         LangItem::Num,
         LangItem::Integral,
         LangItem::FloatingPoint,
         LangItem::PtrLike,
         LangItem::Sync,
+        LangItem::AddrSpace,
     ];
 
     /// The fixed (non-intrinsic) items, for enumeration.
-    pub const FIXED: [LangItem; 12] = [
+    pub const FIXED: [LangItem; 13] = [
         LangItem::Num,
         LangItem::Integral,
         LangItem::FloatingPoint,
         LangItem::PtrLike,
         LangItem::Sync,
+        LangItem::AddrSpace,
         LangItem::PartialEq,
         LangItem::Eq,
         LangItem::PartialOrd,
@@ -261,6 +276,7 @@ impl LangItem {
             LangItem::FloatingPoint => "floating_point".into(),
             LangItem::PtrLike => "ptr_like".into(),
             LangItem::Sync => "sync".into(),
+            LangItem::AddrSpace => "addr_space".into(),
             LangItem::PartialEq => "partial_eq".into(),
             LangItem::Eq => "eq".into(),
             LangItem::PartialOrd => "partial_ord".into(),
@@ -331,10 +347,13 @@ pub struct LangItems {
     /// Marker (auto) trait: a value may be reached from any thread,
     /// concurrently; answered structurally, never by impl search.
     pub sync: TraitId,
+    /// The address spaces of opaque pointers; its impls decide which types
+    /// may be the `A` of `Ptr<A>`.
+    pub addr_space: TraitId,
     /// The construction-time builtin ids, in [`LangItem::TOWER`] order —
     /// retained after the wired fields repoint, so bare-name resolution
     /// can recognize (and substitute) a builtin hit.
-    builtin: [TraitId; 5],
+    builtin: [TraitId; 6],
     declared: Vec<(LangItem, DefId)>,
 }
 
@@ -347,12 +366,14 @@ impl LangItems {
             floating_point: fallback.floating_point,
             ptr_like: fallback.ptr_like,
             sync: fallback.sync,
+            addr_space: fallback.addr_space,
             builtin: [
                 fallback.num,
                 fallback.integral,
                 fallback.floating_point,
                 fallback.ptr_like,
                 fallback.sync,
+                fallback.addr_space,
             ],
             declared: Vec::new(),
         }
@@ -370,6 +391,7 @@ impl LangItems {
             LangItem::FloatingPoint => self.floating_point = id,
             LangItem::PtrLike => self.ptr_like = id,
             LangItem::Sync => self.sync = id,
+            LangItem::AddrSpace => self.addr_space = id,
             _ => {}
         }
     }
@@ -377,23 +399,25 @@ impl LangItems {
     /// The wired fields, in [`LangItem::TOWER`] order — the REPL
     /// checkpoint's snapshot (a rejected batch that repointed them must
     /// restore the builtins).
-    pub(crate) fn fields(&self) -> [TraitId; 5] {
+    pub(crate) fn fields(&self) -> [TraitId; 6] {
         [
             self.num,
             self.integral,
             self.floating_point,
             self.ptr_like,
             self.sync,
+            self.addr_space,
         ]
     }
 
-    pub(crate) fn restore_fields(&mut self, fields: [TraitId; 5]) {
+    pub(crate) fn restore_fields(&mut self, fields: [TraitId; 6]) {
         [
             self.num,
             self.integral,
             self.floating_point,
             self.ptr_like,
             self.sync,
+            self.addr_space,
         ] = fields;
     }
 
