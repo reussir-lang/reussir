@@ -12,7 +12,7 @@ fn not_ptr(x: i64) -> i64 { ptr::offset(x, 1, ptr::PtrArithFlag::None) }
 fn const_store(p: ConstPtr<Generic>) { ptr::store(p, 1 as i32) }
 // Pointers access integers, floating-point numbers, `bool`, `char` and
 // pointers.
-// CHECK-DAG: `core::ptr::load` cannot access a `unit` (not an integer, a floating-point number, `bool`, `char` or a pointer)
+// CHECK-DAG: `core::ptr::load` cannot access a `unit` (not an integer, a floating-point number, `bool`, `char`, a pointer or a vector)
 fn unit_load(p: Ptr<Generic>) { ptr::load<()>(p) }
 // CHECK-DAG: `core::ptr::load` cannot access a `ptrs::Box`
 fn object_load(p: Ptr<Generic>) -> Box { ptr::load<Box>(p) }

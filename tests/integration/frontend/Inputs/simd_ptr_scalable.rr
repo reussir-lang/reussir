@@ -1,0 +1,19 @@
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import core::simd;
+
+// A scalable vector is loaded and its size is a run-time value.
+// CHECK-LABEL: define {{.*}}<vscale x 16 x i8> @{{.*}}chunk
+// CHECK: load <vscale x 16 x i8>, ptr %{{.*}}, align 1
+pub fn chunk(p: ConstPtr<Generic>, i: i64) -> Simd<[u8; [16]]> {
+    ptr::load<Simd<[u8; [16]]>>(ptr::advance<Simd<[u8; [16]]>>(p, i, PtrArithFlag::None))
+}
+
+// CHECK-LABEL: define {{.*}}void @{{.*}}scale
+// CHECK: load <vscale x 4 x float>, ptr %0, align 4
+// CHECK: store <vscale x 4 x float> %{{.*}}, ptr %0, align 4
+pub fn scale(p: Ptr<Generic>, by: f32) {
+    let v = ptr::load<Simd<[f32; [4]]>>(p);
+    ptr::store(p, v * simd::splat<Simd<[f32; [4]]>>(by))
+}
