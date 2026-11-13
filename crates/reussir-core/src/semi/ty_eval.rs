@@ -939,7 +939,8 @@ pub fn object_operand_rejection(
 
 /// Why a value of `ty` cannot be read or written through a pointer, or
 /// `None` when it can: the accessed types are the integers, the
-/// floating-point numbers, `bool`, `char` and the pointers themselves.
+/// floating-point numbers, `bool`, `char`, the pointers themselves, and
+/// vectors of those lanes.
 /// Generic types defer to monomorphization.
 pub fn ptr_pointee_rejection(ty: Ty<'_>) -> Option<&'static str> {
     match ty.kind() {
@@ -948,10 +949,11 @@ pub fn ptr_pointee_rejection(ty: Ty<'_>) -> Option<&'static str> {
         | TyKind::Bool
         | TyKind::Char
         | TyKind::Ptr { .. }
+        | TyKind::Simd { .. }
         | TyKind::Generic(_)
         | TyKind::Hole(_)
         | TyKind::Bottom => None,
-        _ => Some("not an integer, a floating-point number, `bool`, `char` or a pointer"),
+        _ => Some("not an integer, a floating-point number, `bool`, `char`, a pointer or a vector"),
     }
 }
 
