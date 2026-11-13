@@ -361,6 +361,24 @@ def ReussirConvertToLLVMPass
 }
 
 //===----------------------------------------------------------------------===//
+// FixVectorScale
+//===----------------------------------------------------------------------===//
+def ReussirFixVectorScalePass
+    : Pass<"reussir-fix-vector-scale", "::mlir::ModuleOp"> {
+  let summary = "give scalable vectors a scale of one";
+  let description = [{
+    `reussir-fix-vector-scale` is run for a target that has no scalable
+    vectors. The scale of a scalable vector is any positive constant of the
+    machine, so such a target takes one: every scalable vector type becomes
+    the fixed type of the same extents, `vector.vscale` becomes the constant
+    1, and `vector.scalable.extract` and `vector.scalable.insert` become the
+    strided-slice operations on fixed vectors.
+  }];
+  let dependentDialects = ["::mlir::arith::ArithDialect",
+                           "::mlir::vector::VectorDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // AttachNativeTarget
 //===----------------------------------------------------------------------===//
 def ReussirAttachNativeTargetPass

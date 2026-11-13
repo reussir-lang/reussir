@@ -209,6 +209,9 @@ pub struct LoweringOptions {
     /// Lower vectors with the Arm SVE legalizations. Set for an AArch64
     /// target that has SVE.
     pub arm_sve: bool,
+    /// The target has scalable vectors. Without them a scalable vector is
+    /// lowered with a scale of one, as a fixed vector.
+    pub scalable_vectors: bool,
     /// Lay out compound record members in packed physical order (descending
     /// storage alignment) rather than declaration order. On by default — the
     /// layout contract external consumers compile against; `rrc` exposes the
@@ -254,6 +257,7 @@ impl Default for LoweringOptions {
             // (`enableInvariantAnalysis = false`).
             enable_invariant_analysis: false,
             arm_sve: false,
+            scalable_vectors: false,
             // On by default: packed layout is the shipped default and the
             // layout contract; only an explicit driver flag turns it off.
             pack_record_members: true,
@@ -577,6 +581,9 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateCanonicalizerPass();
         module: sys::reussirCreateControlFlowSinkPass();
         module: sys::reussirCreateSCFToControlFlowPass();
+        if !options.scalable_vectors => {
+            module: sys::reussirCreateFixVectorScalePass();
+        }
         module: sys::reussirCreateBasicOpsLoweringPass(options.closure_wpd);
         if options.arm_sve => {
             func: sys::reussirCreateArmSVELegalizeVectorStoragePass();

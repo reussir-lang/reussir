@@ -260,6 +260,9 @@ MlirPass reussirCreateConvertVectorToLLVMPass(bool armSVE) {
   options.armSVE = armSVE;
   return wrapOwned(mlir::createConvertVectorToLLVMPass(options));
 }
+MlirPass reussirCreateFixVectorScalePass(void) {
+  return wrapOwned(reussir::createReussirFixVectorScalePass());
+}
 MlirPass reussirCreateArmSVELegalizeVectorStoragePass(void) {
   return wrapOwned(mlir::arm_sve::createLegalizeVectorStoragePass());
 }
