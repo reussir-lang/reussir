@@ -112,6 +112,58 @@ struct PtrStoreConversion : ConvertOpToLLVMPattern<ptr::StoreOp> {
   }
 };
 
+/// The alignment of a masked access as the LLVM intrinsic takes it. An
+/// unstated alignment is one byte: the intrinsic has no default.
+std::optional<uint32_t>
+convertMaskedAlignment(std::optional<int64_t> alignment) {
+  if (!alignment)
+    return 1;
+  if (!llvm::isUInt<32>(*alignment) || *alignment == 0)
+    return std::nullopt;
+  return static_cast<uint32_t>(*alignment);
+}
+
+struct PtrMaskedLoadConversion : ConvertOpToLLVMPattern<ptr::MaskedLoadOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::MaskedLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getResult().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the loaded type");
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    std::optional<uint32_t> alignment =
+        convertMaskedAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "unsupported alignment");
+    rewriter.replaceOpWithNewOp<LLVM::MaskedLoadOp>(
+        op, type, adaptor.getPtr(), adaptor.getMask(), adaptor.getPassthrough(),
+        *alignment);
+    return success();
+  }
+};
+
+struct PtrMaskedStoreConversion : ConvertOpToLLVMPattern<ptr::MaskedStoreOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::MaskedStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    std::optional<uint32_t> alignment =
+        convertMaskedAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "unsupported alignment");
+    rewriter.replaceOpWithNewOp<LLVM::MaskedStoreOp>(
+        op, adaptor.getValue(), adaptor.getPtr(), adaptor.getMask(),
+        *alignment);
+    return success();
+  }
+};
+
 struct PtrDiffConversion : ConvertOpToLLVMPattern<ptr::PtrDiffOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
@@ -231,12 +283,13 @@ struct PtrMaskConversion : ConvertOpToLLVMPattern<ReussirPtrMaskOp> {
 
 void populatePtrLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                  mlir::RewritePatternSet &patterns) {
-  patterns.add<PtrLoadConversion, PtrStoreConversion, PtrDiffConversion,
-               PtrAddrConversion, PtrExposeAddrConversion,
-               PtrFromAddrConversion, PtrMaskConversion,
-               PtrIntrinsicConversion<ReussirPtrLaunderInvariantGroupOp,
-                                      LLVM::LaunderInvariantGroupOp>,
-               PtrIntrinsicConversion<ReussirPtrStripInvariantGroupOp,
-                                      LLVM::StripInvariantGroupOp>>(converter);
+  patterns
+      .add<PtrLoadConversion, PtrStoreConversion, PtrMaskedLoadConversion,
+           PtrMaskedStoreConversion, PtrDiffConversion, PtrAddrConversion,
+           PtrExposeAddrConversion, PtrFromAddrConversion, PtrMaskConversion,
+           PtrIntrinsicConversion<ReussirPtrLaunderInvariantGroupOp,
+                                  LLVM::LaunderInvariantGroupOp>,
+           PtrIntrinsicConversion<ReussirPtrStripInvariantGroupOp,
+                                  LLVM::StripInvariantGroupOp>>(converter);
 }
 } // namespace reussir

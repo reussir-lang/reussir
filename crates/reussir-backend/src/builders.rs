@@ -922,6 +922,49 @@ pub fn ptr_store<'c>(
 
 pub use sys::ReussirPtrAddFlags as PtrAddFlags;
 
+/// `ptr.masked_load %ptr, %mask, %passthrough : <ptr> -> <vector>`: the
+/// lanes whose mask bit is set are read; the others take `passthrough`.
+pub fn ptr_masked_load<'c>(
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    passthrough: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.masked_load", location)
+        .add_operands(&[ptr, mask, passthrough])
+        .add_results(&[passthrough.r#type()])
+        .build()
+        .expect("valid ptr.masked_load");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.masked_store %value, %ptr, %mask : <vector>, <ptr>`: the lanes
+/// whose mask bit is set are written.
+pub fn ptr_masked_store<'c>(
+    value: Value<'c, '_>,
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.masked_store", location)
+        .add_operands(&[value, ptr, mask])
+        .build()
+        .expect("valid ptr.masked_store");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
 /// `ptr.ptr_add <flags> %base, %offset : <ptr>, <offset>`: `base` moved by
 /// `offset` bytes.
 pub fn ptr_add<'c>(

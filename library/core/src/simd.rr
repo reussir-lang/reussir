@@ -338,3 +338,15 @@ pub fn reduce_add_reassoc_masked<V, M, T>(v: V, mask: M) -> T;
 /// `reduce_mul_reassoc` over the lanes where the mask is set.
 #[lang("core::simd::reduce_mul_reassoc_masked")]
 pub fn reduce_mul_reassoc_masked<V, M, T>(v: V, mask: M) -> T;
+
+// Memory. A masked lane is neither read nor written, so a mask may cover
+// only part of a vector that reaches past the end of a buffer.
+
+/// Reads the lanes of the one-dimensional vector `V` at `ptr` whose mask bit
+/// is set. The other lanes are those of `passthrough`.
+#[lang("core::simd::load")]
+pub fn load<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
+
+/// Writes the lanes of `v` whose mask bit is set to `ptr`, which is a `Ptr`.
+#[lang("core::simd::store")]
+pub fn store<V, P, M>(ptr: P, v: V, mask: M);
