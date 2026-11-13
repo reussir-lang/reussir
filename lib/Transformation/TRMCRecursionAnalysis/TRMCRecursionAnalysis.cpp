@@ -39,6 +39,7 @@
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
+#include "Reussir/Support/Generator.h"
 #include "Reussir/Transformation/Passes.h"
 
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -49,8 +50,6 @@
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Pass/Pass.h>
-
-#include <generator>
 
 namespace reussir {
 
@@ -221,7 +220,7 @@ static bool isSameCreateSite(mlir::Operation *lhs, mlir::Operation *rhs,
 
 // The ops that run before `op` in its function, nearest first: its
 // predecessors in the block, then those of each enclosing op.
-static std::generator<mlir::Operation *> precedingOps(mlir::Operation *op) {
+static Generator<mlir::Operation *> precedingOps(mlir::Operation *op) {
   for (; op && !llvm::isa<mlir::func::FuncOp>(op); op = op->getParentOp())
     for (mlir::Operation *prev = op->getPrevNode(); prev;
          prev = prev->getPrevNode())
