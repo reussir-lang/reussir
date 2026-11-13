@@ -10,7 +10,7 @@ fn bits(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { simd::and(a, a) }
 fn fused(a: Simd<[i32; 4]>) -> Simd<[i32; 4]> { simd::fma(a, a, a) }
 // ERR-DAG: `core::simd::lt` works on integer or floating-point lanes, found `Simd<[bool; 4]>`
 fn ordered(a: Simd<[bool; 4]>) -> Simd<[bool; 4]> { simd::lt(a, a) }
-// ERR-DAG: `core::simd::add` expects 2 argument(s), got 1
+// ERR-DAG: `core::simd::add` expects 2 argument(s) and an optional mask, got 1
 fn alone(a: Simd<[i32; 4]>) -> Simd<[i32; 4]> { simd::add(a) }
 // ERR-DAG: `core::simd::add` takes a vector, found `i32`
 fn scalars(a: i32) -> i32 { simd::add(a, a) }

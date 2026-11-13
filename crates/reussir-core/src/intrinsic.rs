@@ -507,6 +507,11 @@ pub enum IntrinsicOp {
 }
 
 /// Operations on vectors (`Simd<...>`). `V` is a vector type.
+///
+/// A lanewise operation may take one more operand than its table entry
+/// says: a mask of the shape of its vectors. A lane whose mask bit is clear
+/// keeps the lane of the first operand, or is false in a comparison, and
+/// never traps.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SimdFn {
     /// `splat<V>(x)`: every lane is `x`.
@@ -560,6 +565,17 @@ pub enum SimdFn {
     Ge,
     /// `select(m, a, b)`: `a` where the mask is set, else `b`.
     Select,
+    /// `mask_first<M>(n...)`: the mask whose leading `n` lanes are set, with
+    /// one count per dimension.
+    MaskFirst,
+    /// `any(m)`, `all(m)`: whether some or every lane of a mask is set.
+    Any,
+    All,
+    /// `count(m) -> u64`: the number of set lanes.
+    Count,
+    /// `first_set(m) -> u64`: the index of the first set lane of a
+    /// one-dimensional mask, or its number of lanes when none is set.
+    FirstSet,
 }
 
 /// The lanes a lanewise vector operation works on.
@@ -621,6 +637,11 @@ impl SimdFn {
         SimdFn::Gt,
         SimdFn::Ge,
         SimdFn::Select,
+        SimdFn::MaskFirst,
+        SimdFn::Any,
+        SimdFn::All,
+        SimdFn::Count,
+        SimdFn::FirstSet,
     ];
 
     pub fn parse(name: &str) -> Option<SimdFn> {
@@ -659,6 +680,11 @@ impl SimdFn {
             SimdFn::Gt => "gt",
             SimdFn::Ge => "ge",
             SimdFn::Select => "select",
+            SimdFn::MaskFirst => "mask_first",
+            SimdFn::Any => "any",
+            SimdFn::All => "all",
+            SimdFn::Count => "count",
+            SimdFn::FirstSet => "first_set",
         }
     }
 

@@ -4007,10 +4007,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, format!("{shown} takes no type arguments"));
             return self.poison(span);
         }
-        if fc.args.len() != arity {
+        // One operand more than the operation needs is its mask.
+        if fc.args.len() != arity && fc.args.len() != arity + 1 {
             self.error(
                 span,
-                format!("{shown} expects {arity} argument(s), got {}", fc.args.len()),
+                format!(
+                    "{shown} expects {arity} argument(s) and an optional mask, got {}",
+                    fc.args.len()
+                ),
             );
             return self.poison(span);
         }
@@ -4039,14 +4043,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.poison(span);
         }
+        let mask_ty = self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable);
         let mut args = vec![first];
-        for arg in &fc.args[1..] {
+        for arg in &fc.args[1..arity] {
             args.push(self.check_expr(arg, ty));
         }
-        let result = match compares {
-            true => self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable),
-            false => ty,
-        };
+        if let Some(mask) = fc.args.get(arity) {
+            args.push(self.check_expr(mask, mask_ty));
+        }
+        let result = if compares { mask_ty } else { ty };
         self.mk_expr(
             ExprKind::Intrinsic {
                 op: IntrinsicOp::Simd { func },
@@ -4080,7 +4085,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         let takes_type = matches!(
             func,
-            SimdFn::Splat | SimdFn::Step | SimdFn::Lanes | SimdFn::FromElements
+            SimdFn::Splat | SimdFn::Step | SimdFn::Lanes | SimdFn::FromElements | SimdFn::MaskFirst
         );
         if let Some((arity, lanes, compares)) = func.lanewise() {
             return self.infer_simd_lanewise(fc, func, arity, lanes, compares, &shown, span);
@@ -4093,6 +4098,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             SimdFn::Splat => Some(1),
             SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale => Some(0),
             SimdFn::Select => Some(3),
+            SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => Some(1),
             _ => None,
         };
         if arity.is_some_and(|n| n != fc.args.len()) {
@@ -4165,6 +4171,50 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 let values = fc.args.iter().map(|a| self.check_expr(a, elem)).collect();
                 mk(self, func, values, ty)
+            }
+            SimdFn::MaskFirst => {
+                let Some((ty, elem, dims, _)) = self.simd_type_arg(fc, &shown, span) else {
+                    return self.poison(span);
+                };
+                if !matches!(elem.kind(), TyKind::Bool) || fc.args.len() != dims.len() {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} makes a mask from one count per dimension, not a `{}` from {} count(s)",
+                            self.ty_display(ty),
+                            fc.args.len()
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let counts = fc.args.iter().map(|a| self.check_expr(a, u64_ty)).collect();
+                mk(self, func, counts, ty)
+            }
+            SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => {
+                let Some((mask, lane, dims, _)) = self.infer_simd_operand(&fc.args[0], &shown)
+                else {
+                    return self.poison(span);
+                };
+                let shaped = func != SimdFn::FirstSet || dims.len() == 1;
+                if !matches!(lane.kind(), TyKind::Bool) || !shaped {
+                    let wanted = match func {
+                        SimdFn::FirstSet => "a one-dimensional mask",
+                        _ => "a mask",
+                    };
+                    self.error(
+                        mask.span,
+                        format!(
+                            "{shown} takes {wanted}, found `{}`",
+                            self.ty_display(mask.ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let result = match func {
+                    SimdFn::Any | SimdFn::All => self.tcx.mk_bool(),
+                    _ => u64_ty,
+                };
+                mk(self, func, vec![mask], result)
             }
             SimdFn::Select => {
                 let Some((mask, lane, dims, scalable)) =
