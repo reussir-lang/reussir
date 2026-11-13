@@ -266,6 +266,7 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -324,6 +325,7 @@ fn collect_private_records<'tcx>(
         | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -919,6 +921,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     self.push_ty_display(out, p);
                 }
                 out.push('>');
+            }
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                out.push_str("Simd<[");
+                self.push_ty_display(out, elem);
+                let _ = write!(
+                    out,
+                    "; {}]>",
+                    crate::semi::ty::simd_extents_text(dims, scalable)
+                );
             }
             TyKind::Tensor { elem, dims } => {
                 out.push_str("Tensor<");

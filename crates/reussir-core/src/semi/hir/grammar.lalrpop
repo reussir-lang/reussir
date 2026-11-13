@@ -376,6 +376,7 @@ Name: &'input str = {
     "Ptr" => "Ptr",
     "ConstPtr" => "ConstPtr",
     "GenericAddrSpace" => "GenericAddrSpace",
+    "Simd" => "Simd",
     "type_offset" => "type_offset",
     "intrinsic" => "intrinsic",
     "array" => "array",
@@ -495,6 +496,20 @@ Ty: raw::Ty = {
         => raw::Ty::Array { elem: Box::new(elem), dims },
     "DefaultPlacement" => raw::Ty::DefaultPlacement,
     "GenericAddrSpace" => raw::Ty::GenericAddrSpace,
+    <l:@L> "Simd" "<" "[" <elem:Ty> ";" <dims:CommaPlus<SimdExtent>> "]" ">" <r:@R> =>? {
+        // Only the last extent may be scalable.
+        let last = dims.len() - 1;
+        if dims.iter().enumerate().any(|(i, &(d, scalable))| {
+            d == 0 || d == crate::semi::ty::DYNAMIC_EXTENT || (scalable && i != last)
+        }) {
+            return Err(lalrpop_util::ParseError::User { error: LexError { span: l..r } });
+        }
+        Ok(raw::Ty::Simd {
+            elem: Box::new(elem),
+            scalable: dims[last].1,
+            dims: dims.into_iter().map(|(d, _)| d).collect(),
+        })
+    },
     "Ptr" "<" <t:Ty> ">" => raw::Ty::Ptr { space: Box::new(t), kind: PtrKind::Mut },
     "ConstPtr" "<" <t:Ty> ">" => raw::Ty::Ptr { space: Box::new(t), kind: PtrKind::Const },
     "DevArray" "<" <inner:Ty> <p:("," <Ty>)?> ">" => {
@@ -530,6 +545,12 @@ ParenTypes: (Vec<raw::Ty>, bool) = {
 
 /// One shape dimension: a static extent, or `?` for a dynamic one
 /// (the DYNAMIC_EXTENT sentinel, matching MLIR's spelling).
+/// One extent of a vector type; in brackets when it is scalable.
+SimdExtent: (u64, bool) = {
+    <d:Extent> => (d, false),
+    "[" <d:Extent> "]" => (d, true),
+};
+
 Extent: u64 = {
     <l:@L> <i:"int"> <r:@R> =>? u64::try_from(&i)
         .ok().filter(|&d| d <= i64::MAX as u64)
@@ -808,6 +829,7 @@ extern {
         "Ptr" => Token::Ptr,
         "ConstPtr" => Token::ConstPtr,
         "GenericAddrSpace" => Token::GenericAddrSpace,
+        "Simd" => Token::Simd,
         "type_offset" => Token::TypeOffset,
         "placement" => Token::Placement,
         "NonNull" => Token::NonNull,
