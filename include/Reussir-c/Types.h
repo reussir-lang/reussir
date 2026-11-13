@@ -84,6 +84,11 @@ MlirType reussirRawPtrTypeGet(MlirType elementType);
 // space of the `ptr` dialect.
 MlirType reussirGenericPtrTypeGet(MlirContext context);
 
+// `vector<d0 x ... x dn x element>`, with `rank` extents. With `scalable`, the
+// last extent is a multiple of the target's `vscale`: `vector<d0 x [dn] x e>`.
+MlirType reussirVectorTypeGet(MlirType element, intptr_t rank,
+                              const int64_t *extents, bool scalable);
+
 // `memref`, a memref type, moved to the generic memory space of the `ptr`
 // dialect, which `ptr.to_ptr` requires of its operand.
 MlirType reussirMemRefTypeInGenericSpace(MlirType memref);
