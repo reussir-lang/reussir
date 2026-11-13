@@ -43,6 +43,7 @@
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
+#include <mlir/Dialect/Ptr/IR/PtrDialect.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Attributes.h>
@@ -4280,6 +4281,7 @@ struct ReussirConvertToLLVMPatternInterface
     context->getOrLoadDialect<mlir::func::FuncDialect>();
     context->getOrLoadDialect<mlir::math::MathDialect>();
     context->getOrLoadDialect<mlir::memref::MemRefDialect>();
+    context->getOrLoadDialect<mlir::ptr::PtrDialect>();
     context->getOrLoadDialect<mlir::ub::UBDialect>();
   }
 
@@ -4306,6 +4308,8 @@ struct ReussirConvertToLLVMPatternInterface
     populateLLVMInterfaceForDialect<mlir::math::MathDialect>(
         patterns.getContext(), target, typeConverter, patterns);
     populateLLVMInterfaceForDialect<mlir::memref::MemRefDialect>(
+        patterns.getContext(), target, typeConverter, patterns);
+    populateLLVMInterfaceForDialect<mlir::ptr::PtrDialect>(
         patterns.getContext(), target, typeConverter, patterns);
     populateLLVMInterfaceForDialect<mlir::ub::UBDialect>(
         patterns.getContext(), target, typeConverter, patterns);
@@ -4345,7 +4349,8 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
         ReussirStrUnsafeMemcmpOp, ReussirConstSeqGlobalOp,
         ReussirConstSeqLiteralOp, ReussirConstSeqLenOp,
-        ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp>();
+        ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp,
+        ReussirPtrAddrOp, ReussirPtrFromAddrOp, ReussirPtrMaskOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
@@ -4518,6 +4523,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       converter, patterns.getContext(), symbolTables);
   populateTargetArrayLoweringPatterns(converter, patterns);
   populatePjrtLoweringPatterns(converter, patterns);
+  populatePtrLoweringPatterns(converter, patterns);
   populateDropStackLoweringPatterns(converter, patterns);
   patterns.add<
       ReussirExpectConversionPattern, ReussirCctxEmptyConversionPattern,

@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Conversion/AttachNativeTarget.h"
+#include "Reussir/Conversion/TypeConverter.h"
 
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
@@ -24,6 +25,7 @@
 #include <llvm/TargetParser/Triple.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/Ptr/IR/PtrDialect.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Pass/Pass.h>
@@ -81,7 +83,7 @@ struct ReussirAttachNativeTargetPass
                     mlir::StringAttr::get(context, triple));
 
     mlir::DataLayoutSpecInterface dlSpec =
-        mlir::translateDataLayout(dl, context);
+        reussir::translateDataLayout(dl, context);
     module->setAttr(mlir::DLTIDialect::kDataLayoutAttrName, dlSpec);
   }
 };

@@ -30,6 +30,7 @@
 #include <llvm/Support/TypeSize.h>
 #include <mlir/AsmParser/AsmParser.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
+#include <mlir/Dialect/Ptr/IR/PtrTypes.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
@@ -222,7 +223,8 @@ bool isTriviallyCopyable(mlir::Type type) {
       // Built-in types that are trivially copyable
       .Case<mlir::IntegerType, mlir::FloatType, mlir::IndexType>(
           [](auto) { return true; })
-      .Case<RawPtrType, HoleType>([](auto) { return true; })
+      .Case<RawPtrType, HoleType, mlir::ptr::PtrType>(
+          [](auto) { return true; })
       // Reference counted and reference types are NOT trivially copyable
       // as they require special handling for reference counting/lifetime
       .Case<RcType, RefType, ClosureType>([](auto) { return false; })

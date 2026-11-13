@@ -39,6 +39,8 @@ void populateTargetArrayLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                          mlir::RewritePatternSet &patterns);
 void populatePjrtLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                   mlir::RewritePatternSet &patterns);
+void populatePtrLoweringPatterns(mlir::LLVMTypeConverter &converter,
+                                 mlir::RewritePatternSet &patterns);
 
 void populateDropStackLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                        mlir::RewritePatternSet &patterns);

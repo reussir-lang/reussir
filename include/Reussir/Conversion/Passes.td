@@ -373,7 +373,8 @@ def ReussirAttachNativeTargetPass
     - `llvm.target_triple`: The target triple string of the native target.
     - `dlti.dl_spec`: The data layout spec of the native target.
   }];
-  let dependentDialects = ["::mlir::LLVM::LLVMDialect", "::mlir::DLTIDialect"];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect", "::mlir::DLTIDialect",
+                           "::mlir::ptr::PtrDialect"];
 }
 
 def ReussirPreparePjrtPass
