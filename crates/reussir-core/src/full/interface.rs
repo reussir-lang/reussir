@@ -295,6 +295,7 @@ fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut 
         TyKind::Token
         | TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)

@@ -1,0 +1,3 @@
+// FFI: a vector cannot cross the FFI boundary
+extern "C" trampoline "simd_out" = out;
+fn out(v: Simd<[u8; 16]>) -> Simd<[u8; 16]> { v }

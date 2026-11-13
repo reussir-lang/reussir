@@ -413,6 +413,14 @@ impl<'tcx> Builder<'_, 'tcx> {
             }
             raw::Ty::DefaultPlacement => self.tcx.mk(TyKind::DefaultPlacement),
             raw::Ty::GenericAddrSpace => self.tcx.mk(TyKind::GenericAddrSpace),
+            raw::Ty::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                let elem = self.ty(elem);
+                self.tcx.mk_simd(elem, dims, *scalable)
+            }
             raw::Ty::Ptr { space, kind } => {
                 let space = self.ty(space);
                 self.tcx.mk_ptr(space, *kind)

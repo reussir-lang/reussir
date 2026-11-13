@@ -472,6 +472,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
+        // Vectors, `core::simd::Simd`, whose bare name is in the prelude. The
+        // argument is spelled as an array type and never builds an array.
+        if (bare_unshadowed || self.is_core_prefix(&path.segments, "simd"))
+            && self.sym(key) == "Simd"
+        {
+            return self.eval_simd_type(args, span);
+        }
+
         // Nothing else under the reserved `core` package names a type,
         // except a record the loaded `core` interface declares (the
         // `core::pjrt` configuration records, say), which resolves like any
@@ -575,6 +583,64 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Evaluate one array or tensor extent expression as a `u64` constant
     /// ([`Self::eval_const`]). An invalid extent is reported and recovers as
     /// extent 1 (a *dynamic* dimension is spelled `?`, not an expression).
+    fn eval_simd_type(&mut self, args: &[surface::Type], span: surface::Span) -> Ty<'tcx> {
+        let [inner] = args else {
+            self.error(
+                Some(span),
+                "`Simd` takes one argument, the element type and the extents: `Simd<[f32; 4]>`",
+            );
+            return self.tcx.mk(TyKind::Bottom);
+        };
+        let TypeKind::TypeArray(elem, extents) = inner.kind() else {
+            self.error(
+                Some(span),
+                "`Simd` takes the element type and the extents: `Simd<[f32; 4]>`",
+            );
+            return self.tcx.mk(TyKind::Bottom);
+        };
+        let elem = self.eval_type(&elem);
+        if let Some(reason) = crate::semi::ty::simd_elem_rejection(elem) {
+            self.error(
+                Some(span),
+                format!(
+                    "`{}` cannot be a vector lane ({reason})",
+                    self.ty_display(elem)
+                ),
+            );
+            return self.tcx.mk(TyKind::Bottom);
+        }
+        let mut dims = Vec::with_capacity(extents.len());
+        for extent in extents.iter() {
+            let surface::ArrayExtent::Expr(expr) = extent else {
+                self.error(Some(span), "a vector extent is a positive constant");
+                return self.tcx.mk(TyKind::Bottom);
+            };
+            let dim = self.eval_extent(expr);
+            if dim == 0 || dim > crate::semi::ty::MAX_SIMD_LANES {
+                self.error(
+                    Some(expr.span()),
+                    format!(
+                        "a vector extent is between 1 and {}",
+                        crate::semi::ty::MAX_SIMD_LANES
+                    ),
+                );
+                return self.tcx.mk(TyKind::Bottom);
+            }
+            dims.push(dim);
+        }
+        if dims.iter().product::<u64>() > crate::semi::ty::MAX_SIMD_LANES {
+            self.error(
+                Some(span),
+                format!(
+                    "a vector has at most {} lanes",
+                    crate::semi::ty::MAX_SIMD_LANES
+                ),
+            );
+            return self.tcx.mk(TyKind::Bottom);
+        }
+        self.tcx.mk_simd(elem, &dims, false)
+    }
+
     fn eval_extent(&mut self, e: &surface::Expr) -> u64 {
         let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
         match self.eval_const(e, u64_ty) {
@@ -1358,6 +1424,7 @@ pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
         | TyKind::ConstSeq(_)
         | TyKind::Ptr { .. }
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Arc(_) => Some(
             "kernel values must be tensors, futures, tokens, supported numeric/bool scalars, or unit",
         ),

@@ -341,6 +341,7 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::GenericAddrSpace => {
                 Err("an address space marker cannot cross the FFI boundary".into())
             }
+            TyKind::Simd { .. } => Err("a vector cannot cross the FFI boundary".into()),
             TyKind::BigInt(_) => Ok(RCGMP_OWNED.into()),
             // `str` lowers to `{ptr, len}`; the runtime's `#[repr(C)]`
             // borrowed view is bit-identical. Every surface `str` today is a

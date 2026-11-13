@@ -377,6 +377,18 @@ impl Render<'_> {
             TyKind::Array { elem, dims } => self.shape(elem, dims),
             TyKind::DefaultPlacement => text("DefaultPlacement"),
             TyKind::GenericAddrSpace => text("GenericAddrSpace"),
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                text("Simd<[")
+                    + self.ty(elem)
+                    + text(format!(
+                        "; {}]>",
+                        crate::semi::ty::simd_extents_text(dims, scalable)
+                    ))
+            }
             TyKind::Ptr { space, kind } => {
                 text(kind.surface_name()) + text("<") + self.ty(space) + text(">")
             }
