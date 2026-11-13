@@ -285,6 +285,19 @@ pub fn str_len<'c>(
         .expect("valid reussir.str.len")
 }
 
+/// `reussir.str.data_ptr (<str>) : <ptr>`: the pointer to the first byte.
+pub fn str_data_ptr<'c>(
+    context: &'c Context,
+    value: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.str.data_ptr", location)
+        .add_operands(&[value])
+        .add_results(&[crate::dialect::ty::generic_ptr(context)])
+        .build()
+        .expect("valid reussir.str.data_ptr")
+}
+
 /// `reussir.str.byte_at (<str>) [<index>] : i8` — bounds-checked, `0` when
 /// out of bounds.
 pub fn str_byte_at<'c>(
@@ -956,6 +969,33 @@ pub fn ptr_type_offset<'c>(
         .add_results(&[result_type])
         .build()
         .expect("valid ptr.type_offset")
+}
+
+/// `memref.memory_space_cast %view : <memref> to <result_type>`.
+pub fn memref_memory_space_cast<'c>(
+    view: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("memref.memory_space_cast", location)
+        .add_operands(&[view])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid memref.memory_space_cast")
+}
+
+/// `ptr.to_ptr %value : <ptr-like> -> <ptr_type>`: the pointer of a
+/// pointer-like value in the same memory space.
+pub fn ptr_to_ptr<'c>(
+    value: Value<'c, '_>,
+    ptr_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("ptr.to_ptr", location)
+        .add_operands(&[value])
+        .add_results(&[ptr_type])
+        .build()
+        .expect("valid ptr.to_ptr")
 }
 
 /// `reussir.ptr.addr %ptr : <ptr> -> <result_type>`.

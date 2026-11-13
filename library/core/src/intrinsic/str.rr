@@ -20,3 +20,7 @@ pub fn byte_at(s: str, index: u64) -> u8;
 /// passes the end.
 #[lang("core::intrinsic::str::slice")]
 pub fn slice(s: str, offset: u64) -> str;
+
+/// The pointer to the first byte of the string.
+#[lang("core::intrinsic::str::unsafe_data_ptr")]
+pub fn unsafe_data_ptr(s: str) -> ConstPtr<core::ptr::Generic>;

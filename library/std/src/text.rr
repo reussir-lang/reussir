@@ -51,6 +51,15 @@ impl Text {
         self.len() == 0
     }
 
+    /// Returns the pointer to the first byte. The pointer does not keep the
+    /// text alive.
+    pub fn unsafe_data_ptr(self: Self) -> ConstPtr<core::ptr::Generic> {
+        match self {
+            Literal(s) => core::intrinsic::str::unsafe_data_ptr(s),
+            Owned(s) => s.unsafe_data_ptr()
+        }
+    }
+
     /// Reads a UTF-8 byte. Panics when `index` is out of bounds.
     pub fn byte_at(self: Self, index: u64) -> u8 {
         match self {
@@ -144,6 +153,16 @@ impl TextView {
 
     /// Returns whether the view has no remaining bytes. O(1).
     pub fn is_empty(self: Self) -> bool { self.len() == 0 }
+
+    /// Returns the pointer to the first byte of the view. The pointer does
+    /// not keep the underlying text alive.
+    pub fn unsafe_data_ptr(self: Self) -> ConstPtr<core::ptr::Generic> {
+        core::ptr::offset(
+            self.base.unsafe_data_ptr(),
+            self.offset as i64,
+            core::ptr::PtrArithFlag::None
+        )
+    }
 
     /// Selects a relative byte range `start..end`, or returns `None` out of bounds.
     pub fn slice_byte(self: Self, start: u64, end: u64) -> Option<Self> {

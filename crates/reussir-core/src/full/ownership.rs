@@ -986,7 +986,10 @@ impl<'tcx> Analyzer<'_, 'tcx> {
         live_after: &VarSet,
     ) {
         use crate::intrinsic::ArrayFn;
-        let borrows_base = matches!(op, ArrayFn::Get | ArrayFn::Fold | ArrayFn::Dim);
+        let borrows_base = matches!(
+            op,
+            ArrayFn::Get | ArrayFn::Fold | ArrayFn::Dim | ArrayFn::UnsafeDataPtr
+        );
 
         let mut borrowed = VarSet::default();
         let mut base_is_borrowed_var = false;

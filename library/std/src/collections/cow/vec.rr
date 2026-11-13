@@ -23,6 +23,11 @@ fn raw_new<T>() -> RawVec<T> [{ RVec::new() }];
 fn raw_len<T>(v : RawVec<T>) -> u64 [{ v.len() as u64 }];
 
 #[ffi(import)]
+fn raw_data_ptr<T>(v : RawVec<T>) -> ConstPtr<core::ptr::Generic> [{
+    v.as_ptr() as *const ::std::ffi::c_void
+}];
+
+#[ffi(import)]
 fn raw_clear<T>(v : RawVec<T>) -> RawVec<T> [{ v.clear() }];
 
 #[ffi(import)]
@@ -87,6 +92,12 @@ impl<T> Vec<T> {
     /// Returns whether the vector has no elements. O(1).
     pub fn is_empty(self : Self) -> bool {
         raw_len(self.raw) == 0
+    }
+
+    /// Returns the pointer to the first element. The pointer does not keep
+    /// the vector alive, and an update of the vector may move its elements.
+    pub fn unsafe_data_ptr(self : Self) -> ConstPtr<core::ptr::Generic> {
+        raw_data_ptr(self.raw)
     }
 
     /// Removes every element. O(n).

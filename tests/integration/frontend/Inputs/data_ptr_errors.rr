@@ -1,0 +1,10 @@
+import core::intrinsic::array;
+import core::intrinsic::str;
+import core::ptr::Generic;
+
+// ERR-DAG: `unsafe_data_ptr` expects only the array
+fn extra(a: [f64; 4]) -> ConstPtr<Generic> { array::unsafe_data_ptr(a, 1) }
+// ERR-DAG: `core::intrinsic::array::unsafe_data_ptr` expects an array as its first argument, found `str`
+fn not_array(s: str) -> ConstPtr<Generic> { array::unsafe_data_ptr(s) }
+// ERR-DAG: `core::intrinsic::str::unsafe_data_ptr` expects 1 argument(s), got 2
+fn two(s: str) -> ConstPtr<Generic> { str::unsafe_data_ptr(s, s) }

@@ -1144,6 +1144,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                                 builders::str_byte_at(self.context, operands[0], index, loc),
                             )))
                         }
+                        StrFn::UnsafeDataPtr => Ok(Some(self.append(
+                            block,
+                            builders::str_data_ptr(self.context, operands[0], loc),
+                        ))),
                         StrFn::Slice => {
                             let offset =
                                 self.append(block, arith::index_castui(operands[1], index_ty, loc));
@@ -4192,6 +4196,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             ArrayFn::Tabulate => self.array_tabulate(block, env, e, args).map(Some),
             ArrayFn::Fold => self.array_fold(block, env, e, args).map(Some),
             ArrayFn::Dim => self.array_dim(block, env, args).map(Some),
+            ArrayFn::UnsafeDataPtr => self.array_data_ptr(block, env, args).map(Some),
         }
     }
 
@@ -4260,6 +4265,29 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .build()
                 .expect("valid device extent"),
         )
+    }
+
+    /// The pointer to the first element of an array: its memref view, moved
+    /// to the memory space of the pointer and cast to it.
+    fn array_data_ptr<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        let [base] = args else {
+            return err("array data pointer expects an array");
+        };
+        let array = self
+            .expr(block, env, base)?
+            .ok_or_else(|| LoweringError("array is unit".into()))?;
+        self.remember_temp(env, base, array);
+        let loc = self.loc();
+        let view = self.array_view_of(block, array, base.ty)?;
+        let spaced = reussir_backend::dialect::ty::memref_in_generic_space(view.r#type());
+        let view = self.append(block, builders::memref_memory_space_cast(view, spaced, loc));
+        let ptr_ty = reussir_backend::dialect::ty::generic_ptr(self.context);
+        Ok(self.append(block, builders::ptr_to_ptr(view, ptr_ty, loc)))
     }
 
     fn array_dim<'b>(
