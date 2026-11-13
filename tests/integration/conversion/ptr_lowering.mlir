@@ -122,6 +122,17 @@ func.func @view_data(%m: memref<4xf64>) -> !P {
   return %p : !P
 }
 
+// A masked access without an alignment is byte-aligned.
+// CHECK-LABEL: define <4 x float> @masked(
+// CHECK-SAME: ptr %[[P:.*]], <4 x i1> %[[M:.*]], <4 x float> %[[V:.*]])
+// CHECK: %[[L:.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr align 4 %[[P]], <4 x i1> %[[M]], <4 x float> %[[V]])
+// CHECK: call void @llvm.masked.store.v4f32.p0(<4 x float> %[[L]], ptr align 1 %[[P]], <4 x i1> %[[M]])
+func.func @masked(%p: !P, %m: vector<4xi1>, %v: vector<4xf32>) -> vector<4xf32> {
+  %l = ptr.masked_load %p, %m, %v alignment = 4 : !P -> vector<4xf32>
+  ptr.masked_store %l, %p, %m : vector<4xf32>, !P
+  return %l : vector<4xf32>
+}
+
 // CHECK-LABEL: define ptr @null()
 // CHECK: ret ptr null
 func.func @null() -> !P {
