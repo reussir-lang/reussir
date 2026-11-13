@@ -29,11 +29,15 @@ pub fn put(p: Ptr<Generic>, v: i32) { ptr::store(p, v) }
 
 // CHECK-LABEL: func.func @{{.*}}tag
 // CHECK: reussir.ptr.mask %arg0, %{{.*}} : !ptr.ptr<#ptr.generic_space>, i64
-// CHECK: reussir.ptr.addr %{{.*}} : !ptr.ptr<#ptr.generic_space> -> i64
-// LLVM-LABEL: define {{.*}}i64 @{{.*}}tag
+// LLVM-LABEL: define {{.*}}ptr @{{.*}}tag
 // LLVM: call ptr @llvm.ptrmask.p0.i64(ptr %0, i64 7)
-// LLVM: ptrtoaddr ptr
-pub fn tag(p: ConstPtr<Generic>) -> u64 { ptr::addr(ptr::mask(p, 7)) }
+pub fn tag(p: ConstPtr<Generic>) -> ConstPtr<Generic> { ptr::mask(p, 7) }
+
+// CHECK-LABEL: func.func @{{.*}}bits
+// CHECK: reussir.ptr.addr %arg0 : !ptr.ptr<#ptr.generic_space> -> i64
+// LLVM-LABEL: define {{.*}}i64 @{{.*}}bits
+// LLVM: ptrtoaddr ptr %0 to i64
+pub fn bits(p: Ptr<Generic>) -> u64 { ptr::addr(p) }
 
 // HIR-DAG: intrinsic#ptr#load#769(v0 : Ptr<GenericAddrSpace>) : u32
 // MIR-DAG: intrinsic#ptr#load#769(v0 : Ptr<GenericAddrSpace>) : u32
