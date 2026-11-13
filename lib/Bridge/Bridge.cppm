@@ -249,7 +249,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
 #endif
   pm.addPass(createReussirBasicOpsLoweringPass());
   if (armSVE)
-    pm.addPass(mlir::arm_sve::createLegalizeVectorStoragePass());
+    pm.addNestedPass<mlir::func::FuncOp>(
+        mlir::arm_sve::createLegalizeVectorStoragePass());
   mlir::ConvertVectorToLLVMPassOptions vectorOptions;
   vectorOptions.armSVE = armSVE;
   pm.addPass(mlir::createConvertVectorToLLVMPass(vectorOptions));
