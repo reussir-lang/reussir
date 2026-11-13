@@ -1759,11 +1759,11 @@ mod tests {
     fn roundtrips_pointer_types() {
         roundtrip(
             r#"
-            pub struct [value] Pair { first: Ptr<Generic>, second: ConstPtr<Generic> }
-            pub fn second(pair: Pair) -> ConstPtr<Generic> { pair.second }
+            pub struct [value] Pair { first: Ptr<core::ptr::Generic>, second: ConstPtr<core::ptr::Generic> }
+            pub fn second(pair: Pair) -> ConstPtr<core::ptr::Generic> { pair.second }
             fn generic<A: AddrSpace>(p: Ptr<A>, q: ConstPtr<A>) -> ConstPtr<A> { q }
-            pub fn call(p: Ptr<Generic>, q: ConstPtr<Generic>) -> ConstPtr<Generic> { generic(p, q) }
-            pub fn marker(x: Generic) -> Generic { x }
+            pub fn call(p: Ptr<core::ptr::Generic>, q: ConstPtr<core::ptr::Generic>) -> ConstPtr<core::ptr::Generic> { generic(p, q) }
+            pub fn marker(x: core::ptr::Generic) -> core::ptr::Generic { x }
         "#,
         );
     }

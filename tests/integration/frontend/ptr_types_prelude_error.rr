@@ -1,0 +1,5 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// `Ptr` and `ConstPtr` are prelude names; the address space is not.
+// CHECK: unknown type `Generic`
+fn bare(p: Ptr<Generic>) {}

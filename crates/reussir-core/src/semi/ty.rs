@@ -361,7 +361,7 @@ pub enum TyKind<'tcx> {
         kind: CellKind,
     },
     Nullable(Ty<'tcx>),
-    /// The address space every target has (`core::intrinsic::ptr::Generic`):
+    /// The address space every target has (`core::ptr::Generic`):
     /// a zero-field marker, used as the `A` of a pointer type.
     GenericAddrSpace,
     /// An opaque pointer into the address space `space` (`Ptr<A>`,

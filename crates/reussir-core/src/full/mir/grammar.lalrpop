@@ -144,7 +144,7 @@ Name: &'input str = {
     "DefaultPlacement" => "DefaultPlacement",
     "Ptr" => "Ptr",
     "ConstPtr" => "ConstPtr",
-    "Generic" => "Generic",
+    "GenericAddrSpace" => "GenericAddrSpace",
 };
 
 /// A path segment or a trait method name. Every IR keyword is unambiguous
@@ -279,7 +279,7 @@ Ty: raw::Ty = {
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
         => raw::Ty::Array { elem: Box::new(elem), dims },
     "DefaultPlacement" => raw::Ty::DefaultPlacement,
-    "Generic" => raw::Ty::GenericAddrSpace,
+    "GenericAddrSpace" => raw::Ty::GenericAddrSpace,
     "Ptr" "<" <t:Ty> ">" => raw::Ty::Ptr { space: Box::new(t), kind: PtrKind::Mut },
     "ConstPtr" "<" <t:Ty> ">" => raw::Ty::Ptr { space: Box::new(t), kind: PtrKind::Const },
     "DevArray" "<" <inner:Ty> <p:("," <Ty>)?> ">" => {
@@ -631,7 +631,7 @@ extern {
         "DefaultPlacement" => Token::DefaultPlacement,
         "Ptr" => Token::Ptr,
         "ConstPtr" => Token::ConstPtr,
-        "Generic" => Token::GenericAddrSpace,
+        "GenericAddrSpace" => Token::GenericAddrSpace,
         "placement" => Token::Placement,
         "NonNull" => Token::NonNull,
         "Null" => Token::Null,

@@ -776,7 +776,7 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                 )
             }
             TyKind::DefaultPlacement => "DefaultPlacement".into(),
-            TyKind::GenericAddrSpace => "Generic".into(),
+            TyKind::GenericAddrSpace => "core::ptr::Generic".into(),
             TyKind::Ptr { space, kind } => format!(
                 "{}<{}>",
                 kind.surface_name(),

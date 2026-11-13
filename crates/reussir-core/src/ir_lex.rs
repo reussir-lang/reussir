@@ -150,7 +150,7 @@ pub enum Token<'a> {
     Ptr,
     #[token("ConstPtr")]
     ConstPtr,
-    #[token("Generic")]
+    #[token("GenericAddrSpace")]
     GenericAddrSpace,
     #[token("DevArray")]
     DevArray,

@@ -707,7 +707,7 @@ impl<'a> Printer<'a> {
             TyKind::Arc(inner) => text("Arc<") + self.ty(inner) + text(">"),
             TyKind::Array { elem, dims } => self.shape(elem, dims),
             TyKind::DefaultPlacement => text("DefaultPlacement"),
-            TyKind::GenericAddrSpace => text("Generic"),
+            TyKind::GenericAddrSpace => text("GenericAddrSpace"),
             TyKind::Ptr { space, kind } => {
                 text(kind.surface_name()) + text("<") + self.ty(space) + text(">")
             }

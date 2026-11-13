@@ -14,7 +14,7 @@ pub trait AddrSpace {}
 #[lang("generic_addr_space")]
 pub struct [value] Generic {}
 
-impl AddrSpace for core::intrinsic::ptr::Generic {}
+impl AddrSpace for core::ptr::Generic {}
 
 /// An opaque pointer into the address space `A`.
 #[lang("ptr")]

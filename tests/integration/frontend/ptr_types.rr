@@ -11,11 +11,13 @@
 // RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
 // RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
 
+import core::ptr::Generic;
+
 // `Ptr<A>` and `ConstPtr<A>` are one opaque MLIR pointer; the address space
 // selects the memory space, and constness stays in the frontend.
 
-// HIR: pub [value] struct #Pair { "first": Ptr<Generic>, "second": ConstPtr<Generic> };
-// MIR: value struct Pair { "first": Ptr<Generic>, "second": ConstPtr<Generic> };
+// HIR: pub [value] struct #Pair { "first": Ptr<GenericAddrSpace>, "second": ConstPtr<GenericAddrSpace> };
+// MIR: value struct Pair { "first": Ptr<GenericAddrSpace>, "second": ConstPtr<GenericAddrSpace> };
 pub struct [value] Pair { first: Ptr<Generic>, second: ConstPtr<Generic> }
 pub struct [shared] Node { at: Ptr<Generic>, next: Nullable<Node> }
 enum Slot { Empty, Full(ConstPtr<Generic>) }
@@ -30,16 +32,16 @@ pub fn second(pair: Pair) -> ConstPtr<Generic> { pair.second }
 // HIR: fn #generic<$0 (A): AddrSpace>(v0 (p): Ptr<$0>, v1 (q): ConstPtr<$0>) -> ConstPtr<$0>
 fn generic<A: AddrSpace>(p: Ptr<A>, q: ConstPtr<A>) -> ConstPtr<A> { q }
 
-// HIR: #generic::<Generic>(
-// CHECK-DAG: call @{{.*}}generic{{.*}}3ptr7Generic
+// HIR: #generic::<GenericAddrSpace>(
+// CHECK-DAG: call @{{.*}}generic{{.*}}4core3ptr7Generic
 pub fn instantiate(p: Ptr<Generic>, q: ConstPtr<Generic>) -> ConstPtr<Generic> { generic(p, q) }
 
 // CHECK-DAG: func.func @{{.*}}node{{.*}}(%arg0: !ptr.ptr<#ptr.generic_space>) -> !reussir.rc<
 pub fn node(p: Ptr<Generic>) -> Node { Node { at: p, next: Nullable::Null } }
 
 pub fn qualified(
-    p: core::intrinsic::ptr::Ptr<core::intrinsic::ptr::Generic>,
-) -> core::intrinsic::ptr::ConstPtr<Generic> {
+    p: core::ptr::Ptr<core::ptr::Generic>,
+) -> core::ptr::ConstPtr<Generic> {
     match Slot::Empty { Slot::Empty => unwrap(Slot::Empty, constant(p)), Slot::Full(q) => q }
 }
 

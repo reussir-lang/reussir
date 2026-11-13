@@ -443,10 +443,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
         }
 
-        // Opaque pointers, `core::intrinsic::ptr::{Ptr, ConstPtr}`, and the
-        // address space marker `Generic` beside them.
-        let ptr_family = bare_unshadowed || self.is_core_intrinsic_prefix(&path.segments, "ptr");
-        if ptr_family && self.sym(key) == "Generic" {
+        // Opaque pointers, `core::ptr::{Ptr, ConstPtr}`, whose bare names are
+        // in the prelude, and the address space `core::ptr::Generic`, which
+        // is named by its path or through an import.
+        let core_ptr = self.is_core_prefix(&path.segments, "ptr");
+        let ptr_family = bare_unshadowed || core_ptr;
+        if core_ptr && self.sym(key) == "Generic" {
             if !args.is_empty() {
                 self.error(Some(span), "`Generic` takes no type arguments");
             }

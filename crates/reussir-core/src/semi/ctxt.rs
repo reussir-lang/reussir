@@ -885,7 +885,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.push_shape_display(out, elem, dims);
             }
             TyKind::DefaultPlacement => out.push_str("DefaultPlacement"),
-            TyKind::GenericAddrSpace => out.push_str("Generic"),
+            TyKind::GenericAddrSpace => out.push_str("core::ptr::Generic"),
             TyKind::Ptr { space, kind } => {
                 out.push_str(kind.surface_name());
                 out.push('<');
@@ -1312,6 +1312,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Whether `prefix` spells the canonical `core::intrinsic::<family>`
     /// module of a prelude builtin. The package name `core` is reserved, so
     /// the qualified spelling can never collide with user code.
+    /// Whether `prefix` is `core::<module>`.
+    pub(super) fn is_core_prefix(&self, prefix: &[TokenKey], module: &str) -> bool {
+        prefix.len() == 2 && self.sym(prefix[0]) == "core" && self.sym(prefix[1]) == module
+    }
+
     pub(super) fn is_core_intrinsic_prefix(&self, prefix: &[TokenKey], family: &str) -> bool {
         prefix.len() == 3
             && self.sym(prefix[0]) == "core"
@@ -3016,11 +3021,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if !target_args.is_empty() {
             return None;
         }
-        // The generic address space, by the spellings that name the marker.
-        if self.sym(target.basename) == "Generic"
-            && (target.segments.is_empty() && self.resolve_record_ref(target).is_none()
-                || self.is_core_intrinsic_prefix(&target.segments, "ptr"))
-        {
+        if self.sym(target.basename) == "Generic" && self.is_core_prefix(&target.segments, "ptr") {
             return Some(self.tcx.mk(TyKind::GenericAddrSpace));
         }
         if let Some(def) = self.resolve_record_ref(target) {

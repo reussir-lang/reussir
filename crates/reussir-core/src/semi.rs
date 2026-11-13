@@ -2745,10 +2745,7 @@ mod tests {
                     &["intrinsic", "pjrt"],
                     include_str!("../../../library/core/src/intrinsic/pjrt.rr"),
                 ),
-                (
-                    &["intrinsic", "ptr"],
-                    include_str!("../../../library/core/src/intrinsic/ptr.rr"),
-                ),
+                (&["ptr"], include_str!("../../../library/core/src/ptr.rr")),
             ],
             |elab, _| {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);

@@ -8,6 +8,8 @@
 // Pointers cross the C boundary as `void *` and the Rust boundary as
 // `*mut c_void` / `*const c_void`.
 
+import core::ptr::Generic;
+
 pub struct [shared] Holder { at: Ptr<Generic>, tag: i64 }
 pub struct [value] Pair { first: Ptr<Generic>, second: ConstPtr<Generic> }
 
