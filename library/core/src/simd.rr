@@ -221,3 +221,26 @@ pub fn load<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
 /// Writes the lanes of `v` whose mask bit is set to `ptr`, which is a `Ptr`.
 #[lang("core::simd::store")]
 pub fn store<V, P, M>(ptr: P, v: V, mask: M);
+
+/// Reads lane `i` of the one-dimensional vector `V` from the element
+/// `index[i]` after `base`, for the lanes whose mask bit is set; `index` is a
+/// vector of integers of the same shape. The other lanes are those of
+/// `passthrough`.
+#[lang("core::simd::gather")]
+pub fn gather<V, P, I, M>(base: P, index: I, mask: M, passthrough: V) -> V;
+
+/// Writes lane `i` of `v` to the element `index[i]` after `base`, for the
+/// lanes whose mask bit is set. Two lanes with one index write in lane order.
+#[lang("core::simd::scatter")]
+pub fn scatter<V, P, I, M>(base: P, index: I, v: V, mask: M);
+
+/// Reads as many consecutive elements at `ptr` as the mask has set lanes and
+/// places them, in order, in those lanes. The other lanes are those of
+/// `passthrough`.
+#[lang("core::simd::load_expand")]
+pub fn load_expand<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
+
+/// Writes the lanes of `v` whose mask bit is set to consecutive elements at
+/// `ptr`, in order: the lanes a filter keeps, packed.
+#[lang("core::simd::store_compress")]
+pub fn store_compress<V, P, M>(ptr: P, v: V, mask: M);

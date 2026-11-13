@@ -4374,13 +4374,72 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .ok_or_else(|| LoweringError("vector operand produced no value".into()))?,
             );
         }
-        // A masked store has no result; its lanes are aligned as one lane is.
-        if func == SimdFn::Store {
-            let (_, align, _) = self.simd_memory(args[1].ty)?;
-            block.append_operation(builders::ptr_masked_store(
-                values[1], values[0], values[2], align, loc,
-            ));
-            return Ok(None);
+        // The pointers of the lanes of a gather or a scatter: `base` moved by
+        // each index, counted in elements of the vector `ty`.
+        let lane_pointers = |ty: Ty<'tcx>, index: &Expr<'tcx>, indices: Value<'c, 'b>| {
+            let (TyKind::Simd { dims, scalable, .. }, (_, size, _)) =
+                (*ty.kind(), self.simd_memory(ty)?)
+            else {
+                return err("a gather or scatter takes a vector");
+            };
+            let extents: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+            let i64_ty: Type = IntegerType::new(self.context, 64).into();
+            let wide = reussir_backend::dialect::ty::vector(i64_ty, &extents, scalable);
+            // Indices are widened by their own signedness.
+            let indices = match *index.ty.kind() {
+                TyKind::Simd { elem, .. } => match *elem.kind() {
+                    TyKind::Int(IntTy::Signed(w)) if w < 64 => {
+                        self.append(block, arith::extsi(indices, wide, loc))
+                    }
+                    TyKind::Int(IntTy::Unsigned(w)) if w < 64 => {
+                        self.append(block, arith::extui(indices, wide, loc))
+                    }
+                    _ => indices,
+                },
+                _ => return err("a gather or scatter index is a vector"),
+            };
+            let size = self.append(
+                block,
+                arith::constant(
+                    self.context,
+                    IntegerAttribute::new(i64_ty, size as i64).into(),
+                    loc,
+                ),
+            );
+            let sizes = self.append(block, builders::vector_broadcast(size, wide, loc));
+            let offsets = self.append(block, arith::muli(indices, sizes, loc));
+            let pointer = reussir_backend::dialect::ty::generic_ptr(self.context);
+            let pointers = reussir_backend::dialect::ty::vector(pointer, &extents, scalable);
+            let bases = self.append(block, builders::vector_broadcast(values[0], pointers, loc));
+            Ok(self.append(
+                block,
+                builders::ptr_add(bases, offsets, builders::PtrAddFlags::None, loc),
+            ))
+        };
+        // The writes have no result; lanes are aligned as one lane is.
+        match func {
+            SimdFn::Store => {
+                let (_, align, _) = self.simd_memory(args[1].ty)?;
+                block.append_operation(builders::ptr_masked_store(
+                    values[1], values[0], values[2], align, loc,
+                ));
+                return Ok(None);
+            }
+            SimdFn::StoreCompress => {
+                block.append_operation(builders::ptr_compress_store(
+                    values[1], values[0], values[2], loc,
+                ));
+                return Ok(None);
+            }
+            SimdFn::Scatter => {
+                let (_, align, _) = self.simd_memory(args[2].ty)?;
+                let pointers = lane_pointers(args[2].ty, &args[1], values[1])?;
+                block.append_operation(builders::ptr_scatter(
+                    values[2], pointers, values[3], align, loc,
+                ));
+                return Ok(None);
+            }
+            _ => {}
         }
         let result = self.tys.mlir_ty(e.ty)?;
         // The indices of `extract` and `insert`, from operand `first` on: a
@@ -4421,7 +4480,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 let (_, align, _) = self.simd_memory(e.ty)?;
                 builders::ptr_masked_load(values[0], values[1], values[2], align, loc)
             }
-            SimdFn::Store => unreachable!("lowered above"),
+            SimdFn::LoadExpand => builders::ptr_expand_load(values[0], values[1], values[2], loc),
+            SimdFn::Gather => {
+                let (_, align, _) = self.simd_memory(e.ty)?;
+                let pointers = lane_pointers(e.ty, &args[1], values[1])?;
+                builders::ptr_gather(pointers, values[2], values[3], align, loc)
+            }
+            SimdFn::Store | SimdFn::StoreCompress | SimdFn::Scatter => {
+                unreachable!("lowered above")
+            }
             SimdFn::MaskFirst => {
                 let index_ty = Type::index(self.context);
                 let counts: Vec<_> = values

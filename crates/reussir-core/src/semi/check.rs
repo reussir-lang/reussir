@@ -3885,6 +3885,30 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
+    /// The index vector of `gather` and `scatter`: integer lanes, in the
+    /// shape of the vector that is read or written.
+    fn infer_simd_index(
+        &mut self,
+        arg: &surface::Expr,
+        dims: &[u64],
+        scalable: bool,
+        shown: &str,
+    ) -> Option<Expr<'tcx>> {
+        let (index, lane, index_dims, index_scalable) = self.infer_simd_operand(arg, shown)?;
+        let integer = matches!(lane.kind(), TyKind::Int(_));
+        if !integer || index_dims != dims || index_scalable != scalable {
+            self.error(
+                index.span,
+                format!(
+                    "{shown} takes a vector of integers of the same shape as its index, found `{}`",
+                    self.ty_display(index.ty)
+                ),
+            );
+            return None;
+        }
+        Some(index)
+    }
+
     /// The indices of `extract` and `insert`: at most one per dimension. An
     /// index into the last dimension may be a run-time value; the others are
     /// literals, and a literal is checked against a fixed extent.
@@ -4160,6 +4184,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 | SimdFn::FromElements
                 | SimdFn::MaskFirst
                 | SimdFn::Load
+                | SimdFn::Gather
+                | SimdFn::LoadExpand
         );
         if let Some((arity, lanes, compares)) = func.lanewise() {
             return self.infer_simd_lanewise(fc, func, arity, lanes, compares, &shown, span);
@@ -4174,7 +4200,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let arity = match func {
             SimdFn::Splat => Some(1),
             SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale => Some(0),
-            SimdFn::Select | SimdFn::Load | SimdFn::Store => Some(3),
+            SimdFn::Select
+            | SimdFn::Load
+            | SimdFn::Store
+            | SimdFn::LoadExpand
+            | SimdFn::StoreCompress => Some(3),
+            SimdFn::Gather | SimdFn::Scatter => Some(4),
             SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => Some(1),
             _ => None,
         };
@@ -4249,7 +4280,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let values = fc.args.iter().map(|a| self.check_expr(a, elem)).collect();
                 mk(self, func, values, ty)
             }
-            SimdFn::Load => {
+            SimdFn::Load | SimdFn::LoadExpand | SimdFn::Gather => {
                 let Some((ty, elem, dims, scalable)) = self.simd_type_arg(fc, &shown, span) else {
                     return self.poison(span);
                 };
@@ -4266,12 +4297,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
                     return self.poison(span);
                 };
+                let mut args = vec![ptr];
+                let mut next = 1;
+                if func == SimdFn::Gather {
+                    let Some(index) = self.infer_simd_index(&fc.args[next], dims, scalable, &shown)
+                    else {
+                        return self.poison(span);
+                    };
+                    args.push(index);
+                    next += 1;
+                }
                 let mask_ty = self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable);
-                let mask = self.check_expr(&fc.args[1], mask_ty);
-                let passthrough = self.check_expr(&fc.args[2], ty);
-                mk(self, func, vec![ptr, mask, passthrough], ty)
+                args.push(self.check_expr(&fc.args[next], mask_ty));
+                args.push(self.check_expr(&fc.args[next + 1], ty));
+                mk(self, func, args, ty)
             }
-            SimdFn::Store => {
+            SimdFn::Store | SimdFn::StoreCompress | SimdFn::Scatter => {
                 let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
                     return self.poison(span);
                 };
@@ -4289,8 +4330,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                     return self.poison(span);
                 }
+                // `scatter` has the index vector before the value.
+                let at = if func == SimdFn::Scatter { 2 } else { 1 };
                 let Some((value, elem, dims, scalable)) =
-                    self.infer_simd_operand(&fc.args[1], &shown)
+                    self.infer_simd_operand(&fc.args[at], &shown)
                 else {
                     return self.poison(span);
                 };
@@ -4304,10 +4347,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                     return self.poison(span);
                 }
+                let mut args = vec![ptr];
+                if func == SimdFn::Scatter {
+                    let Some(index) = self.infer_simd_index(&fc.args[1], dims, scalable, &shown)
+                    else {
+                        return self.poison(span);
+                    };
+                    args.push(index);
+                }
+                args.push(value);
                 let mask_ty = self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable);
-                let mask = self.check_expr(&fc.args[2], mask_ty);
+                args.push(self.check_expr(&fc.args[at + 1], mask_ty));
                 let unit = self.tcx.mk_unit();
-                mk(self, func, vec![ptr, value, mask], unit)
+                mk(self, func, args, unit)
             }
             SimdFn::MaskFirst => {
                 let Some((ty, elem, dims, _)) = self.simd_type_arg(fc, &shown, span) else {

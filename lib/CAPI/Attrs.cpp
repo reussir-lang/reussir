@@ -141,6 +141,10 @@ bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
     return align(load);
   if (auto store = llvm::dyn_cast<mlir::ptr::MaskedStoreOp>(unwrap(op)))
     return align(store);
+  if (auto gather = llvm::dyn_cast<mlir::ptr::GatherOp>(unwrap(op)))
+    return align(gather);
+  if (auto scatter = llvm::dyn_cast<mlir::ptr::ScatterOp>(unwrap(op)))
+    return align(scatter);
   return false;
 }
 
