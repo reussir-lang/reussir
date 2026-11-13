@@ -487,10 +487,12 @@ pub enum IntrinsicOp {
     BigInt {
         func: BigIntFn,
     },
-    /// `core::ptr::<func>`; a load or store carries how it accesses memory.
+    /// `core::ptr::<func>`. A load or store carries how it accesses memory,
+    /// and an offset what it assumes of the arithmetic.
     Ptr {
         func: PtrFn,
         access: PtrAccess,
+        arith: PtrArithFlag,
     },
 }
 
@@ -500,20 +502,38 @@ pub enum IntrinsicOp {
 /// `char` and the pointers themselves.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PtrFn {
-    /// `offset(p, bytes: i64)`: the pointer `bytes` bytes after `p`.
+    /// `offset(p, bytes: i64, flag)`: the pointer `bytes` bytes after `p`,
+    /// under the constant [`PtrArithFlag`] `flag`.
     Offset,
     /// `type_offset<T>() -> u64`: the distance in bytes between two
     /// consecutive values of `T` in memory.
     TypeOffset,
-    /// `advance<T>(p, count: i64)`: `offset(p, count * type_offset<T>())`.
+    /// `advance<T>(p, count: i64, flag)`:
+    /// `offset(p, count * type_offset<T>(), flag)`.
     Advance,
     /// `mask(p, mask: u64)`: `p` with the address bits clear in `mask`
     /// cleared.
     Mask,
-    /// `addr(p) -> u64`: the address of `p`.
+    /// `addr(p) -> u64`: the address of `p`. The provenance of `p` is not
+    /// exposed.
     Addr,
-    /// `from_addr<P>(addr: u64) -> P`: the pointer of type `P` to `addr`.
+    /// `expose_addr(p) -> u64`: the address of `p`, exposing its provenance
+    /// to a later `from_addr`.
+    ExposeAddr,
+    /// `from_addr<P>(addr: u64) -> P`: the pointer of type `P` to `addr`,
+    /// with the provenance exposed for that address.
     FromAddr,
+    /// `with_provenance(p, addr: u64)`: the pointer to `addr` with the
+    /// provenance of `p`.
+    WithProvenance,
+    /// `as_const(p)`: `p` as a `ConstPtr`.
+    AsConst,
+    /// `as_mut(p)`: `p` as a `Ptr`.
+    AsMut,
+    /// `launder_invariant_group(p)`: `p` in a new invariant group.
+    LaunderInvariantGroup,
+    /// `strip_invariant_group(p)`: `p` in no invariant group.
+    StripInvariantGroup,
     /// `diff(p, q) -> i64`: the distance in bytes from `q` to `p`.
     Diff,
     /// `load<T>(p) -> T`: read a `T`.
@@ -535,7 +555,13 @@ impl PtrFn {
         PtrFn::Advance,
         PtrFn::Mask,
         PtrFn::Addr,
+        PtrFn::ExposeAddr,
         PtrFn::FromAddr,
+        PtrFn::WithProvenance,
+        PtrFn::AsConst,
+        PtrFn::AsMut,
+        PtrFn::LaunderInvariantGroup,
+        PtrFn::StripInvariantGroup,
         PtrFn::Diff,
         PtrFn::Load,
         PtrFn::Store,
@@ -554,13 +580,52 @@ impl PtrFn {
             PtrFn::Advance => "advance",
             PtrFn::Mask => "mask",
             PtrFn::Addr => "addr",
+            PtrFn::ExposeAddr => "expose_addr",
             PtrFn::FromAddr => "from_addr",
+            PtrFn::WithProvenance => "with_provenance",
+            PtrFn::AsConst => "as_const",
+            PtrFn::AsMut => "as_mut",
+            PtrFn::LaunderInvariantGroup => "launder_invariant_group",
+            PtrFn::StripInvariantGroup => "strip_invariant_group",
             PtrFn::Diff => "diff",
             PtrFn::Load => "load",
             PtrFn::Store => "store",
             PtrFn::LoadExtended => "load_extended",
             PtrFn::StoreExtended => "store_extended",
         }
+    }
+}
+
+/// What a pointer offset assumes, as the flags of `ptr.ptr_add` and an LLVM
+/// `getelementptr`. The variants are those of `core::ptr::PtrArithFlag`, in
+/// its declaration order.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum PtrArithFlag {
+    /// The offset wraps.
+    #[default]
+    None,
+    /// The offset does not wrap when added to the address as a signed value.
+    Nusw,
+    /// The offset does not wrap when added as an unsigned value.
+    Nuw,
+    /// `Nusw`, and the pointer stays within the bounds of its object.
+    Inbounds,
+}
+
+impl PtrArithFlag {
+    pub const ALL: [PtrArithFlag; 4] = [
+        PtrArithFlag::None,
+        PtrArithFlag::Nusw,
+        PtrArithFlag::Nuw,
+        PtrArithFlag::Inbounds,
+    ];
+
+    pub fn bits(self) -> u32 {
+        self as u32
+    }
+
+    pub fn from_bits(bits: u32) -> Option<PtrArithFlag> {
+        PtrArithFlag::ALL.get(usize::try_from(bits).ok()?).copied()
     }
 }
 
@@ -877,6 +942,11 @@ impl IntrinsicOp {
             IntrinsicOp::ConstSeq { .. } => 0,
             IntrinsicOp::Pjrt { .. } => 0,
             IntrinsicOp::BigInt { .. } => 0,
+            IntrinsicOp::Ptr {
+                func: PtrFn::Offset,
+                arith,
+                ..
+            } => arith.bits(),
             IntrinsicOp::Ptr { access, .. } => access.bits(),
         }
     }
@@ -910,17 +980,35 @@ impl IntrinsicOp {
             }),
             "ptr" => {
                 let func = PtrFn::parse(name)?;
-                let access = PtrAccess::from_bits(imm)?;
-                // The other surface operations elaborate to these.
-                let valid = match func {
-                    PtrFn::Load => true,
-                    PtrFn::Store => !access.invariant,
-                    PtrFn::Offset | PtrFn::Mask | PtrFn::Addr | PtrFn::FromAddr | PtrFn::Diff => {
-                        access == PtrAccess::default()
+                let plain = PtrAccess::default();
+                let (access, arith) = match func {
+                    PtrFn::Load => (PtrAccess::from_bits(imm)?, PtrArithFlag::None),
+                    PtrFn::Store => {
+                        let access = PtrAccess::from_bits(imm)?;
+                        (!access.invariant).then_some((access, PtrArithFlag::None))?
                     }
-                    _ => false,
+                    PtrFn::Offset => (plain, PtrArithFlag::from_bits(imm)?),
+                    PtrFn::Mask
+                    | PtrFn::Addr
+                    | PtrFn::ExposeAddr
+                    | PtrFn::FromAddr
+                    | PtrFn::WithProvenance
+                    | PtrFn::AsConst
+                    | PtrFn::AsMut
+                    | PtrFn::LaunderInvariantGroup
+                    | PtrFn::StripInvariantGroup
+                    | PtrFn::Diff => (imm == 0).then_some((plain, PtrArithFlag::None))?,
+                    // The other surface operations elaborate to these.
+                    PtrFn::TypeOffset
+                    | PtrFn::Advance
+                    | PtrFn::LoadExtended
+                    | PtrFn::StoreExtended => return None,
                 };
-                valid.then_some(IntrinsicOp::Ptr { func, access })
+                Some(IntrinsicOp::Ptr {
+                    func,
+                    access,
+                    arith,
+                })
             }
             _ => None,
         }
@@ -1051,7 +1139,13 @@ mod tests {
             PtrFn::Offset,
             PtrFn::Mask,
             PtrFn::Addr,
+            PtrFn::ExposeAddr,
             PtrFn::FromAddr,
+            PtrFn::WithProvenance,
+            PtrFn::AsConst,
+            PtrFn::AsMut,
+            PtrFn::LaunderInvariantGroup,
+            PtrFn::StripInvariantGroup,
             PtrFn::Diff,
             PtrFn::Load,
             PtrFn::Store,
@@ -1059,6 +1153,7 @@ mod tests {
             let op = IntrinsicOp::Ptr {
                 func,
                 access: PtrAccess::default(),
+                arith: PtrArithFlag::None,
             };
             assert_eq!(
                 IntrinsicOp::parse(op.family(), op.name(), op.imm()),
@@ -1084,10 +1179,23 @@ mod tests {
         let load = IntrinsicOp::Ptr {
             func: PtrFn::Load,
             access,
+            arith: PtrArithFlag::None,
         };
+        for arith in PtrArithFlag::ALL {
+            let offset = IntrinsicOp::Ptr {
+                func: PtrFn::Offset,
+                access: PtrAccess::default(),
+                arith,
+            };
+            assert_eq!(
+                IntrinsicOp::parse("ptr", "offset", offset.imm()),
+                Some(offset)
+            );
+        }
+        assert_eq!(IntrinsicOp::parse("ptr", "offset", 4), None);
+        assert_eq!(IntrinsicOp::parse("ptr", "as_const", 1), None);
         assert_eq!(IntrinsicOp::parse("ptr", "load", load.imm()), Some(load));
         assert_eq!(IntrinsicOp::parse("ptr", "store", load.imm()), None);
-        assert_eq!(IntrinsicOp::parse("ptr", "offset", 1), None);
         assert_eq!(IntrinsicOp::parse("ptr", "advance", 0), None);
         assert_eq!(IntrinsicOp::parse("object", "is_unique", 1), None);
         assert_eq!(IntrinsicOp::parse("object", "unknown", 0), None);

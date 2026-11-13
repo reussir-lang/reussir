@@ -8,12 +8,13 @@
 
 import core::ptr;
 import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
 
 // Sum `count` 32-bit values, walking the buffer one element at a time.
 fn sum(base: ConstPtr<Generic>, count: i64) -> i64 {
     let state = while [s = (base, 0 as i64, 0 as i64)] (s.1 < count) {
         let value: i32 = ptr::load(s.0);
-        (ptr::advance<i32>(s.0, 1), s.1 + 1, s.2 + (value as i64))
+        (ptr::advance<i32>(s.0, 1, PtrArithFlag::Inbounds), s.1 + 1, s.2 + (value as i64))
     };
     state.2
 }
@@ -23,7 +24,7 @@ extern "C" trampoline "ptr_sum" = sum;
 fn fill(base: Ptr<Generic>, count: i64, value: i32) -> i64 {
     let end = while [s = (base, 0 as i64)] (s.1 < count) {
         ptr::store(s.0, value);
-        (ptr::advance<i32>(s.0, 1), s.1 + 1)
+        (ptr::advance<i32>(s.0, 1, PtrArithFlag::Inbounds), s.1 + 1)
     };
     ptr::diff(end.0, base)
 }
@@ -38,10 +39,34 @@ fn untag(p: Ptr<Generic>) -> u64 {
 }
 extern "C" trampoline "ptr_untag" = untag;
 
-fn rebuild(p: Ptr<Generic>) -> Ptr<Generic> {
-    ptr::offset(ptr::offset(ptr::from_addr<Ptr<Generic> >(ptr::addr(p)), 8), -8)
+// A pointer made from an exposed address may access the object.
+fn rebuild(p: Ptr<Generic>) -> i32 {
+    let q = ptr::from_addr<Ptr<Generic> >(ptr::expose_addr(p));
+    ptr::load(ptr::offset(ptr::offset(q, 8, PtrArithFlag::None), -8, PtrArithFlag::None))
 }
 extern "C" trampoline "ptr_rebuild" = rebuild;
+
+// Move to the next element by address, keeping the provenance of `p`.
+fn retag(p: ConstPtr<Generic>) -> i32 {
+    ptr::load(ptr::with_provenance(p, ptr::addr(p) + ptr::type_offset<i32>()))
+}
+extern "C" trampoline "ptr_retag" = retag;
+
+// Write through a pointer that was read-only for a while.
+fn rewrite(p: Ptr<Generic>, value: i32) -> i32 {
+    let frozen = ptr::as_const(p);
+    ptr::store(ptr::as_mut(frozen), value);
+    ptr::load(frozen)
+}
+extern "C" trampoline "ptr_rewrite" = rewrite;
+
+// A laundered pointer reads the value stored after the invariant-group load.
+fn relaunder(p: Ptr<Generic>, value: i32) -> i32 {
+    let before = ptr::load_extended<i32>(p, false, false, false, true, 0);
+    ptr::store(ptr::strip_invariant_group(p), before + value);
+    ptr::load_extended<i32>(ptr::launder_invariant_group(p), false, false, false, true, 0)
+}
+extern "C" trampoline "ptr_relaunder" = relaunder;
 
 fn flagged(p: Ptr<Generic>, value: u64) -> u64 {
     ptr::store_extended(p, value, true, false, false, 1);

@@ -1,0 +1,54 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+
+import core::ptr;
+import core::ptr::Generic;
+
+// The address moves and the provenance stays that of the pointer.
+// HIR-DAG: intrinsic#ptr#with_provenance#0(v0 : ConstPtr<GenericAddrSpace>, v1 : u64) : ConstPtr<GenericAddrSpace>
+// CHECK-LABEL: func.func @{{.*}}aim
+// CHECK: %[[FROM:.*]] = reussir.ptr.addr %arg0 : !ptr.ptr<#ptr.generic_space> -> i64
+// CHECK: %[[DELTA:.*]] = arith.subi %arg1, %[[FROM]]
+// CHECK: ptr.ptr_add %arg0, %[[DELTA]] : !ptr.ptr<#ptr.generic_space>, i64
+// LLVM-LABEL: define {{.*}}ptr @{{.*}}aim
+// LLVM: ptrtoaddr ptr %0 to i64
+// LLVM: getelementptr i8, ptr %0, i64
+// LLVM-NOT: inttoptr
+pub fn aim(p: ConstPtr<Generic>, a: u64) -> ConstPtr<Generic> { ptr::with_provenance(p, a) }
+
+// The pointer types are one MLIR type, so the casts are free.
+// HIR-DAG: intrinsic#ptr#as_mut#0(v0 : ConstPtr<GenericAddrSpace>) : Ptr<GenericAddrSpace>
+// CHECK-LABEL: func.func @{{.*}}thaw
+// CHECK-NEXT: return %arg0
+pub fn thaw(p: ConstPtr<Generic>) -> Ptr<Generic> { ptr::as_mut(p) }
+
+// CHECK-LABEL: func.func @{{.*}}fresh
+// CHECK: reussir.ptr.launder_invariant_group %arg0 : !ptr.ptr<#ptr.generic_space>
+// LLVM-LABEL: define {{.*}}ptr @{{.*}}fresh
+// LLVM: call ptr @llvm.launder.invariant.group.p0(ptr %0)
+pub fn fresh(p: Ptr<Generic>) -> Ptr<Generic> { ptr::launder_invariant_group(p) }
+
+// CHECK-LABEL: func.func @{{.*}}plain
+// CHECK: reussir.ptr.strip_invariant_group %arg0 : !ptr.ptr<#ptr.generic_space>
+// LLVM-LABEL: define {{.*}}ptr @{{.*}}plain
+// LLVM: call ptr @llvm.strip.invariant.group.p0(ptr %0)
+pub fn plain(p: Ptr<Generic>) -> Ptr<Generic> { ptr::strip_invariant_group(p) }
+
+// HIR-DAG: intrinsic#ptr#expose_addr#0(v0 : Ptr<GenericAddrSpace>) : u64
+// CHECK-LABEL: func.func @{{.*}}expose
+// CHECK: reussir.ptr.expose_addr %arg0 : !ptr.ptr<#ptr.generic_space> -> i64
+// LLVM-LABEL: define {{.*}}i64 @{{.*}}expose
+// LLVM: ptrtoint ptr %0 to i64
+pub fn expose(p: Ptr<Generic>) -> u64 { ptr::expose_addr(p) }
+
+// HIR-DAG: intrinsic#ptr#as_const#0(v0 : Ptr<GenericAddrSpace>) : ConstPtr<GenericAddrSpace>
+// CHECK-LABEL: func.func @{{.*}}freeze
+// CHECK-NEXT: return %arg0
+pub fn freeze(p: Ptr<Generic>) -> ConstPtr<Generic> { ptr::as_const(p) }
