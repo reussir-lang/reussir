@@ -133,6 +133,31 @@ func.func @masked(%p: !P, %m: vector<4xi1>, %v: vector<4xf32>) -> vector<4xf32> 
   return %l : vector<4xf32>
 }
 
+// A gather reads each lane through its own pointer: the base moved by a
+// vector of byte offsets.
+// CHECK-LABEL: define <4 x float> @gathered(
+// CHECK-SAME: ptr %[[P:.*]], <4 x i64> %[[I:.*]], <4 x i1> %[[M:.*]], <4 x float> %[[V:.*]])
+// CHECK: %[[PTRS:.*]] = getelementptr i8, <4 x ptr> %{{.*}}, <4 x i64> %[[I]]
+// CHECK: %[[L:.*]] = call <4 x float> @llvm.masked.gather.v4f32.v4p0(<4 x ptr> align 4 %[[PTRS]], <4 x i1> %[[M]], <4 x float> %[[V]])
+// CHECK: call void @llvm.masked.scatter.v4f32.v4p0(<4 x float> %[[L]], <4 x ptr> align 4 %[[PTRS]], <4 x i1> %[[M]])
+func.func @gathered(%p: !P, %i: vector<4xi64>, %m: vector<4xi1>, %v: vector<4xf32>) -> vector<4xf32> {
+  %b = vector.broadcast %p : !P to vector<4x!P>
+  %q = ptr.ptr_add %b, %i : vector<4x!P>, vector<4xi64>
+  %l = ptr.gather %q, %m, %v alignment = 4 : vector<4x!P> -> vector<4xf32>
+  ptr.scatter %l, %q, %m alignment = 4 : vector<4xf32>, vector<4x!P>
+  return %l : vector<4xf32>
+}
+
+// CHECK-LABEL: define <8 x i32> @packed(
+// CHECK-SAME: ptr %[[P:.*]], <8 x i1> %[[M:.*]], <8 x i32> %[[V:.*]])
+// CHECK: %[[L:.*]] = call <8 x i32> @llvm.masked.expandload.v8i32.p0(ptr {{.*}}%[[P]], <8 x i1> %[[M]], <8 x i32> %[[V]])
+// CHECK: call void @llvm.masked.compressstore.v8i32.p0(<8 x i32> %[[L]], ptr {{.*}}%[[P]], <8 x i1> %[[M]])
+func.func @packed(%p: !P, %m: vector<8xi1>, %v: vector<8xi32>) -> vector<8xi32> {
+  %l = reussir.ptr.expand_load %p, %m, %v : !P, vector<8xi1>, vector<8xi32>
+  reussir.ptr.compress_store %l, %p, %m : vector<8xi32>, !P, vector<8xi1>
+  return %l : vector<8xi32>
+}
+
 // CHECK-LABEL: define ptr @null()
 // CHECK: ret ptr null
 func.func @null() -> !P {

@@ -591,6 +591,16 @@ pub enum SimdFn {
     Load,
     /// `store(p, v, m)`: the lanes whose mask bit is set are written.
     Store,
+    /// `gather<V>(base, index, m, passthrough)`: lane `i` reads the element
+    /// `index[i]` after `base`; masked lanes take `passthrough`.
+    Gather,
+    /// `scatter(base, index, v, m)`: lane `i` writes there.
+    Scatter,
+    /// `load_expand<V>(p, m, passthrough)`: consecutive elements at `p` go
+    /// to the set lanes, in order.
+    LoadExpand,
+    /// `store_compress(p, v, m)`: the set lanes are written consecutively.
+    StoreCompress,
     /// `reduce_add_reassoc`, `reduce_mul_reassoc`: the floating-point sum
     /// and product in any order, which lets the target reduce in parallel.
     /// `reduce_add` and `reduce_mul` combine in lane order.
@@ -664,6 +674,10 @@ impl SimdFn {
         SimdFn::FirstSet,
         SimdFn::Load,
         SimdFn::Store,
+        SimdFn::Gather,
+        SimdFn::Scatter,
+        SimdFn::LoadExpand,
+        SimdFn::StoreCompress,
         SimdFn::ReduceAdd,
         SimdFn::ReduceMul,
         SimdFn::ReduceMin,
@@ -718,6 +732,10 @@ impl SimdFn {
             SimdFn::FirstSet => "first_set",
             SimdFn::Load => "load",
             SimdFn::Store => "store",
+            SimdFn::Gather => "gather",
+            SimdFn::Scatter => "scatter",
+            SimdFn::LoadExpand => "load_expand",
+            SimdFn::StoreCompress => "store_compress",
             SimdFn::ReduceAdd => "reduce_add",
             SimdFn::ReduceMul => "reduce_mul",
             SimdFn::ReduceMin => "reduce_min",

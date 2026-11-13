@@ -965,6 +965,76 @@ pub fn ptr_masked_store<'c>(
     operation
 }
 
+/// `ptr.gather %ptrs, %mask, %passthrough : <ptrs> -> <vector>`: each set
+/// lane is read through its own pointer.
+pub fn ptr_gather<'c>(
+    ptrs: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    passthrough: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.gather", location)
+        .add_operands(&[ptrs, mask, passthrough])
+        .add_results(&[passthrough.r#type()])
+        .build()
+        .expect("valid ptr.gather");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.scatter %value, %ptrs, %mask : <vector>, <ptrs>`: each set lane is
+/// written through its own pointer.
+pub fn ptr_scatter<'c>(
+    value: Value<'c, '_>,
+    ptrs: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.scatter", location)
+        .add_operands(&[value, ptrs, mask])
+        .build()
+        .expect("valid ptr.scatter");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `reussir.ptr.expand_load %ptr, %mask, %passthrough`.
+pub fn ptr_expand_load<'c>(
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    passthrough: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.expand_load", location)
+        .add_operands(&[ptr, mask, passthrough])
+        .add_results(&[passthrough.r#type()])
+        .build()
+        .expect("valid reussir.ptr.expand_load")
+}
+
+/// `reussir.ptr.compress_store %value, %ptr, %mask`.
+pub fn ptr_compress_store<'c>(
+    value: Value<'c, '_>,
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.compress_store", location)
+        .add_operands(&[value, ptr, mask])
+        .build()
+        .expect("valid reussir.ptr.compress_store")
+}
+
 /// `ptr.ptr_add <flags> %base, %offset : <ptr>, <offset>`: `base` moved by
 /// `offset` bytes.
 pub fn ptr_add<'c>(
