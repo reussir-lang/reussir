@@ -32,11 +32,25 @@ LLVM::AtomicOrdering convertOrdering(ptr::AtomicOrdering ordering) {
   llvm_unreachable("unknown atomic ordering");
 }
 
-/// The integer type as wide as an address of the converted pointer.
+/// The integer type as wide as an address of the converted pointer, or null
+/// if `pointer` did not convert to an LLVM pointer.
 IntegerType addressType(const LLVMTypeConverter &converter, Value pointer) {
-  auto type = llvm::cast<LLVM::LLVMPointerType>(pointer.getType());
-  return IntegerType::get(pointer.getContext(),
-                          converter.getPointerBitwidth(type.getAddressSpace()));
+  auto type = llvm::dyn_cast<LLVM::LLVMPointerType>(pointer.getType());
+  if (!type)
+    return {};
+  return IntegerType::get(
+      pointer.getContext(),
+      converter.getDataLayout().getIndexSizeInBits(type.getAddressSpace()));
+}
+
+/// The alignment of a memory access as the LLVM dialect takes it, where zero
+/// is the default. Empty if the alignment is too large for the LLVM dialect.
+std::optional<unsigned> convertAlignment(std::optional<int64_t> alignment) {
+  if (!alignment)
+    return 0;
+  if (!llvm::isUInt<32>(*alignment))
+    return std::nullopt;
+  return static_cast<unsigned>(*alignment);
 }
 
 /// Extend or truncate `value` to `type`.
@@ -64,10 +78,15 @@ struct PtrLoadConversion : ConvertOpToLLVMPattern<ptr::LoadOp> {
     Type type = getTypeConverter()->convertType(op.getValue().getType());
     if (!type)
       return rewriter.notifyMatchFailure(op, "cannot convert the loaded type");
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    std::optional<unsigned> alignment = convertAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "alignment is too large");
     rewriter.replaceOpWithNewOp<LLVM::LoadOp>(
-        op, type, adaptor.getPtr(), op.getAlignment().value_or(0),
-        op.getVolatile_(), op.getNontemporal(), op.getInvariant(),
-        op.getInvariantGroup(), convertOrdering(op.getOrdering()),
+        op, type, adaptor.getPtr(), *alignment, op.getVolatile_(),
+        op.getNontemporal(), op.getInvariant(), op.getInvariantGroup(),
+        convertOrdering(op.getOrdering()),
         op.getSyncscope().value_or(StringRef()));
     return success();
   }
@@ -79,9 +98,14 @@ struct PtrStoreConversion : ConvertOpToLLVMPattern<ptr::StoreOp> {
   LogicalResult
   matchAndRewrite(ptr::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    std::optional<unsigned> alignment = convertAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "alignment is too large");
     rewriter.replaceOpWithNewOp<LLVM::StoreOp>(
-        op, adaptor.getValue(), adaptor.getPtr(), op.getAlignment().value_or(0),
-        op.getVolatile_(), op.getNontemporal(), op.getInvariantGroup(),
+        op, adaptor.getValue(), adaptor.getPtr(), *alignment, op.getVolatile_(),
+        op.getNontemporal(), op.getInvariantGroup(),
         convertOrdering(op.getOrdering()),
         op.getSyncscope().value_or(StringRef()));
     return success();
@@ -99,8 +123,10 @@ struct PtrDiffConversion : ConvertOpToLLVMPattern<ptr::PtrDiffOp> {
     Type type = getTypeConverter()->convertType(op.getResult().getType());
     if (!type)
       return rewriter.notifyMatchFailure(op, "cannot convert the result type");
-    Location loc = op.getLoc();
     IntegerType address = addressType(*getTypeConverter(), adaptor.getLhs());
+    if (!address)
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    Location loc = op.getLoc();
     Value lhs =
         LLVM::PtrToAddrOp::create(rewriter, loc, address, adaptor.getLhs());
     Value rhs =
@@ -123,7 +149,11 @@ struct PtrAddrConversion : ConvertOpToLLVMPattern<ReussirPtrAddrOp> {
   matchAndRewrite(ReussirPtrAddrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type type = getTypeConverter()->convertType(op.getAddr().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the result type");
     IntegerType address = addressType(*getTypeConverter(), adaptor.getPtr());
+    if (!address)
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
     Value addr = LLVM::PtrToAddrOp::create(rewriter, op.getLoc(), address,
                                            adaptor.getPtr());
     rewriter.replaceOp(op, resize(rewriter, op.getLoc(), addr, type, false));
@@ -153,6 +183,8 @@ struct PtrMaskConversion : ConvertOpToLLVMPattern<ReussirPtrMaskOp> {
   matchAndRewrite(ReussirPtrMaskOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     IntegerType address = addressType(*getTypeConverter(), adaptor.getPtr());
+    if (!address)
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
     Value mask =
         resize(rewriter, op.getLoc(), adaptor.getMask(), address, false);
     rewriter.replaceOpWithNewOp<LLVM::PtrMaskOp>(op, adaptor.getPtr().getType(),

@@ -9,6 +9,8 @@
 !P = !ptr.ptr<#ptr.generic_space>
 !R = !reussir.record<compound "Holder" [value] { i8, !P, i8 }>
 
+// The verifier checks token layouts on parsing, before the native target is
+// attached, so the input carries a pointer spec of its own.
 module attributes {dlti.dl_spec = #dlti.dl_spec<!P = #ptr.spec<size = 64, abi = 64, preferred = 64>>} {
   // CHECK: %Holder = type { ptr, i8, i8, [6 x i8] }
 

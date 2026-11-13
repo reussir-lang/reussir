@@ -22,6 +22,7 @@ include "mlir/IR/RegionKindInterface.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "mlir/Dialect/LLVMIR/LLVMEnums.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Dialect/Ptr/IR/PtrDialect.td"
 include "Reussir/IR/ReussirDialect.td"
 include "Reussir/IR/ReussirAttrs.td"
 include "Reussir/IR/ReussirTypes.td"
@@ -2963,15 +2964,13 @@ def ReussirTrampolineOp
     $direction $abi_name $sym_name `=` $target attr-dict
   }];
 }
+
 //===----------------------------------------------------------------------===//
 // Reussir Opaque Pointer Operations
 //===----------------------------------------------------------------------===//
 // Opaque pointers are `!ptr.ptr` values and use the upstream `ptr` dialect for
 // arithmetic and memory access. The operations here cover the address
 // manipulations that dialect does not provide.
-
-def ReussirOpaquePtrType : Type<CPred<"::llvm::isa<::mlir::ptr::PtrType>($_self)">,
-                             "opaque pointer", "::mlir::ptr::PtrType">;
 
 class ReussirPtrOp<string mnemonic, list<Trait> traits>
     : ReussirOp<"ptr."#mnemonic, traits>;
@@ -2983,11 +2982,13 @@ def ReussirPtrAddrOp : ReussirPtrOp<"addr", [Pure]> {
     has the index width of the pointer's memory space and is zero-extended or
     truncated to the result type. The pointer's provenance is not exposed.
 
+    Example:
+
     ```mlir
     %addr = reussir.ptr.addr %p : !ptr.ptr<#ptr.generic_space> -> i64
     ```
   }];
-  let arguments = (ins Arg<ReussirOpaquePtrType, "pointer">:$ptr);
+  let arguments = (ins Arg<Ptr_PtrType, "pointer">:$ptr);
   let results = (outs Res<AnySignlessIntegerOrIndex, "address">:$addr);
   let assemblyFormat = [{
     $ptr `:` qualified(type($ptr)) `->` type($addr) attr-dict
@@ -3001,12 +3002,14 @@ def ReussirPtrFromAddrOp : ReussirPtrOp<"from_addr", [Pure]> {
     address is zero-extended or truncated to the index width of the pointer's
     memory space.
 
+    Example:
+
     ```mlir
     %p = reussir.ptr.from_addr %addr : i64 -> !ptr.ptr<#ptr.generic_space>
     ```
   }];
   let arguments = (ins Arg<AnySignlessIntegerOrIndex, "address">:$addr);
-  let results = (outs Res<ReussirOpaquePtrType, "pointer">:$ptr);
+  let results = (outs Res<Ptr_PtrType, "pointer">:$ptr);
   let assemblyFormat = [{
     $addr `:` type($addr) `->` qualified(type($ptr)) attr-dict
   }];
@@ -3021,13 +3024,15 @@ def ReussirPtrMaskOp
     mask is zero-extended or truncated to the index width of the pointer's
     memory space.
 
+    Example:
+
     ```mlir
     %q = reussir.ptr.mask %p, %mask : !ptr.ptr<#ptr.generic_space>, i64
     ```
   }];
-  let arguments = (ins Arg<ReussirOpaquePtrType, "pointer">:$ptr,
+  let arguments = (ins Arg<Ptr_PtrType, "pointer">:$ptr,
       Arg<AnySignlessIntegerOrIndex, "mask">:$mask);
-  let results = (outs Res<ReussirOpaquePtrType, "masked pointer">:$result);
+  let results = (outs Res<Ptr_PtrType, "masked pointer">:$result);
   let assemblyFormat = [{
     $ptr `,` $mask `:` qualified(type($ptr)) `,` type($mask) attr-dict
   }];
