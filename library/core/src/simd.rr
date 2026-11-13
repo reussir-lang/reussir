@@ -168,3 +168,44 @@ pub fn count<M>(mask: M) -> u64;
 /// of lanes when none is set.
 #[lang("core::simd::first_set")]
 pub fn first_set<M>(mask: M) -> u64;
+
+// Reductions combine every lane of a vector `V` into one value of its lane
+// type `T`. With a mask as a second argument only the set lanes take part,
+// and no set lane gives the identity of the combination.
+
+/// The sum of the lanes. Floating-point lanes are added in lane order.
+#[lang("core::simd::reduce_add")]
+pub fn reduce_add<V, T>(v: V) -> T;
+
+/// The product of the lanes, in lane order for floating-point lanes.
+#[lang("core::simd::reduce_mul")]
+pub fn reduce_mul<V, T>(v: V) -> T;
+
+/// The smallest lane. A NaN lane is ignored.
+#[lang("core::simd::reduce_min")]
+pub fn reduce_min<V, T>(v: V) -> T;
+
+/// The largest lane. A NaN lane is ignored.
+#[lang("core::simd::reduce_max")]
+pub fn reduce_max<V, T>(v: V) -> T;
+
+/// The bitwise and of the lanes, of an integer vector or a mask.
+#[lang("core::simd::reduce_and")]
+pub fn reduce_and<V, T>(v: V) -> T;
+
+/// The bitwise or of the lanes.
+#[lang("core::simd::reduce_or")]
+pub fn reduce_or<V, T>(v: V) -> T;
+
+/// The bitwise exclusive or of the lanes.
+#[lang("core::simd::reduce_xor")]
+pub fn reduce_xor<V, T>(v: V) -> T;
+
+/// The floating-point sum of the lanes in any order. The result may differ
+/// from `reduce_add` in the last bits; the target may add in parallel.
+#[lang("core::simd::reduce_add_reassoc")]
+pub fn reduce_add_reassoc<V, T>(v: V) -> T;
+
+/// The floating-point product of the lanes in any order.
+#[lang("core::simd::reduce_mul_reassoc")]
+pub fn reduce_mul_reassoc<V, T>(v: V) -> T;

@@ -576,6 +576,20 @@ pub enum SimdFn {
     /// `first_set(m) -> u64`: the index of the first set lane of a
     /// one-dimensional mask, or its number of lanes when none is set.
     FirstSet,
+    /// `reduce_<kind>(v)`: all lanes combined into one value. With a mask
+    /// as a second operand, only the set lanes take part.
+    ReduceAdd,
+    ReduceMul,
+    ReduceMin,
+    ReduceMax,
+    ReduceAnd,
+    ReduceOr,
+    ReduceXor,
+    /// `reduce_add_reassoc`, `reduce_mul_reassoc`: the floating-point sum
+    /// and product in any order, which lets the target reduce in parallel.
+    /// `reduce_add` and `reduce_mul` combine in lane order.
+    ReduceAddReassoc,
+    ReduceMulReassoc,
 }
 
 /// The lanes a lanewise vector operation works on.
@@ -642,6 +656,15 @@ impl SimdFn {
         SimdFn::All,
         SimdFn::Count,
         SimdFn::FirstSet,
+        SimdFn::ReduceAdd,
+        SimdFn::ReduceMul,
+        SimdFn::ReduceMin,
+        SimdFn::ReduceMax,
+        SimdFn::ReduceAnd,
+        SimdFn::ReduceOr,
+        SimdFn::ReduceXor,
+        SimdFn::ReduceAddReassoc,
+        SimdFn::ReduceMulReassoc,
     ];
 
     pub fn parse(name: &str) -> Option<SimdFn> {
@@ -685,7 +708,27 @@ impl SimdFn {
             SimdFn::All => "all",
             SimdFn::Count => "count",
             SimdFn::FirstSet => "first_set",
+            SimdFn::ReduceAdd => "reduce_add",
+            SimdFn::ReduceMul => "reduce_mul",
+            SimdFn::ReduceMin => "reduce_min",
+            SimdFn::ReduceMax => "reduce_max",
+            SimdFn::ReduceAnd => "reduce_and",
+            SimdFn::ReduceOr => "reduce_or",
+            SimdFn::ReduceXor => "reduce_xor",
+            SimdFn::ReduceAddReassoc => "reduce_add_reassoc",
+            SimdFn::ReduceMulReassoc => "reduce_mul_reassoc",
         }
+    }
+
+    /// For a reduction: the lanes it accepts.
+    pub fn reduction(self) -> Option<SimdLanes> {
+        use SimdFn::*;
+        Some(match self {
+            ReduceAdd | ReduceMul | ReduceMin | ReduceMax => SimdLanes::Numeric,
+            ReduceAnd | ReduceOr | ReduceXor => SimdLanes::Bits,
+            ReduceAddReassoc | ReduceMulReassoc => SimdLanes::Float,
+            _ => return None,
+        })
     }
 
     /// For an operation applied lane by lane to vectors of one type: the
