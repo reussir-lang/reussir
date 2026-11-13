@@ -353,6 +353,8 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
             | TyKind::Tensor { .. } => false,
             // A constant sequence views immutable static data, like `str`.
             TyKind::ConstSeq(_) => false,
+            // An opaque pointer owns nothing.
+            TyKind::Ptr { .. } | TyKind::GenericAddrSpace => false,
             // A cell is always one shared rc-managed box, independent of its
             // element type (which the cell's drop recursively releases).
             TyKind::Cell { .. } => true,

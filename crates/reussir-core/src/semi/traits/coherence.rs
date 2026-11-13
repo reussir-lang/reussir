@@ -22,7 +22,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::semi::ty::{BigIntTy, CellKind, DefId, FpTy, GenericId, IntTy, Ty, TyKind};
+use crate::semi::ty::{BigIntTy, CellKind, DefId, FpTy, GenericId, IntTy, PtrKind, Ty, TyKind};
 
 /// The head constructor an impl's self type is keyed under —
 /// `(TraitId, HeadKey)` buckets make candidate lookup and overlap checking
@@ -51,6 +51,8 @@ pub enum HeadKey {
     Nullable,
     Arc,
     ConstSeq,
+    Ptr(PtrKind),
+    GenericAddrSpace,
 }
 
 /// The head key of a self type, `None` for headless types
@@ -77,6 +79,8 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
         TyKind::Nullable(_) => HeadKey::Nullable,
         TyKind::Arc(_) => HeadKey::Arc,
         TyKind::ConstSeq(_) => HeadKey::ConstSeq,
+        TyKind::Ptr { kind, .. } => HeadKey::Ptr(kind),
+        TyKind::GenericAddrSpace => HeadKey::GenericAddrSpace,
         TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => return None,
     })
 }
@@ -160,6 +164,7 @@ fn occurs(g: GenericId, ty: Ty<'_>, subst: &FxHashMap<GenericId, Ty<'_>>) -> boo
         TyKind::Cell { elem, .. } | TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => {
             occurs(g, elem, subst)
         }
+        TyKind::Ptr { space, .. } => occurs(g, space, subst),
         TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().any(|&p| occurs(g, p, subst)),
         TyKind::Record { args, .. } => args.iter().any(|&a| occurs(g, a, subst)),
         TyKind::Closure { params, ret } => {
@@ -199,6 +204,9 @@ fn unify_ty<'tcx>(
         | (TyKind::Arc(x), TyKind::Arc(y))
         | (TyKind::ConstSeq(x), TyKind::ConstSeq(y)) => unify_ty(*x, *y, vars, subst),
         (TyKind::Cell { elem: x, kind: kx }, TyKind::Cell { elem: y, kind: ky }) => {
+            kx == ky && unify_ty(*x, *y, vars, subst)
+        }
+        (TyKind::Ptr { space: x, kind: kx }, TyKind::Ptr { space: y, kind: ky }) => {
             kx == ky && unify_ty(*x, *y, vars, subst)
         }
         (

@@ -13,12 +13,12 @@
 // RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_const_record_extern_dep \
 // RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
 
-// MIR: pub fn @_RINvC3dep7axis_ofNvC3app5LocalE(v0 (x): app::Local) -> u64 {
-// MIR-NEXT: match proj(@_RNvC3dep9Placement{ConstSeq[] : ConstSeq<i32>, @_RNvC3dep8Sharding::#1(@_RNvC3dep6Tiling{ConstSeq[6, 7] : ConstSeq<u64>, 1 : u64} : dep::Tiling) : dep::Sharding} : dep::Placement, 1) : dep::Sharding {
+// MIR: pub fn @_RINvC3dep7axis_ofNvC3app5LocalE(v0 (x): #app::Local) -> u64 {
+// MIR-NEXT: match proj(@_RNvC3dep9Placement{ConstSeq[] : ConstSeq<i32>, @_RNvC3dep8Sharding::#1(@_RNvC3dep6Tiling{ConstSeq[6, 7] : ConstSeq<u64>, 1 : u64} : #dep::Tiling) : #dep::Sharding} : #dep::Placement, 1) : #dep::Sharding {
 // MIR: pub fn @_RNvC3app10base_first() -> i32 {
-// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RNvC3dep9Placement{ConstSeq[5] : ConstSeq<i32>, @_RNvC3dep8Sharding::#1(@_RNvC3dep6Tiling{ConstSeq[8] : ConstSeq<u64>, 2 : u64} : dep::Tiling) : dep::Sharding} : dep::Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
+// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RNvC3dep9Placement{ConstSeq[5] : ConstSeq<i32>, @_RNvC3dep8Sharding::#1(@_RNvC3dep6Tiling{ConstSeq[8] : ConstSeq<u64>, 2 : u64} : #dep::Tiling) : #dep::Sharding} : #dep::Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
 // MIR: pub fn @_RNvC3app14default_device() -> i32 {
-// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RNvC3dep9Placement{ConstSeq[0] : ConstSeq<i32>, @_RNvC3dep8Sharding::#0() : dep::Sharding} : dep::Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
+// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RNvC3dep9Placement{ConstSeq[0] : ConstSeq<i32>, @_RNvC3dep8Sharding::#0() : #dep::Sharding} : #dep::Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
 
 pub struct Local {
     pub a: i64,

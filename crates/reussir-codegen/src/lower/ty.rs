@@ -904,6 +904,23 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
             ReussirCapability::Value,
             false,
         )),
+        // Constness is a frontend distinction; both kinds are one MLIR type.
+        TyKind::Ptr { space, .. } => match space.kind() {
+            TyKind::GenericAddrSpace => Ok(reussir_backend::dialect::ty::generic_ptr(context)),
+            _ => err("pointer type reached lowering without a ground address space"),
+        },
+        TyKind::GenericAddrSpace => Ok(reussir_backend::dialect::ty::record_complete(
+            context,
+            &[],
+            &[],
+            Some(StringAttribute::new(
+                context,
+                "__reussir_generic_addr_space",
+            )),
+            ReussirRecordKind::Compound,
+            ReussirCapability::Value,
+            false,
+        )),
         TyKind::Unit => err("unit has no MLIR value type"),
         TyKind::Str => Ok(str_type(context, ReussirLifeScope::Global)),
         TyKind::ConstSeq(elem) => Ok(const_seq_type(scalar_ty(context, elem)?)),

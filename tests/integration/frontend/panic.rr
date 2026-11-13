@@ -38,8 +38,8 @@ import core::intrinsic::panic;
 // MIR-LABEL: pub fn @_RC7integer() -> i64 {
 // MIR-NEXT: intrinsic#panic#panic#0() : i64
 // MIR-NEXT: }
-// MIR-LABEL: pub fn @_RC9aggregate() -> Pair {
-// MIR-NEXT: intrinsic#panic#panic#0() : Pair
+// MIR-LABEL: pub fn @_RC9aggregate() -> #Pair {
+// MIR-NEXT: intrinsic#panic#panic#0() : #Pair
 // MIR-NEXT: }
 
 // MLIR-LABEL: func.func @_RC4unit()

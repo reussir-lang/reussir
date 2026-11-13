@@ -80,6 +80,10 @@ typedef enum ReussirLifeScope {
 // `!reussir.raw_ptr<eleTy>`. The context is taken from `elementType`.
 MlirType reussirRawPtrTypeGet(MlirType elementType);
 
+// `!ptr.ptr<#ptr.generic_space>`: an opaque pointer in the generic memory
+// space of the `ptr` dialect.
+MlirType reussirGenericPtrTypeGet(MlirContext context);
+
 // `!reussir.token<align: N, size: N>`.
 // StableHLO kernel SSA types, distinct from Reussir allocation tokens.
 // Return a null type if OpenXLA is disabled or a future payload is invalid.

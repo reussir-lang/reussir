@@ -1,0 +1,25 @@
+//! Opaque pointers and their address spaces.
+//!
+//! `Ptr<A>` and `ConstPtr<A>` are addresses in the address space `A`. A
+//! pointer names no pointee type and owns nothing: it may be null, dangling,
+//! or unaligned, and each access through it says what it reads or writes.
+//! `ConstPtr<A>` points to memory that is only read.
+
+/// The address spaces a pointer may point into.
+#[lang("addr_space")]
+#[sealed]
+pub trait AddrSpace {}
+
+/// The address space every target has.
+#[lang("generic_addr_space")]
+pub struct [value] Generic {}
+
+impl AddrSpace for core::ptr::Generic {}
+
+/// An opaque pointer into the address space `A`.
+#[lang("ptr")]
+pub struct Ptr<A> { }
+
+/// An opaque pointer into the address space `A`, to memory that is only read.
+#[lang("const_ptr")]
+pub struct ConstPtr<A> { }

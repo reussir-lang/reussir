@@ -376,6 +376,10 @@ impl Render<'_> {
             TyKind::Arc(inner) => text("Arc<") + self.ty(inner) + text(">"),
             TyKind::Array { elem, dims } => self.shape(elem, dims),
             TyKind::DefaultPlacement => text("DefaultPlacement"),
+            TyKind::GenericAddrSpace => text("GenericAddrSpace"),
+            TyKind::Ptr { space, kind } => {
+                text(kind.surface_name()) + text("<") + self.ty(space) + text(">")
+            }
             TyKind::DevArray {
                 elem,
                 dims,
@@ -416,7 +420,7 @@ impl Render<'_> {
                     }
                     Flexivity::Irrelevant => Doc::Null,
                 };
-                d = d + text(self.defs.path(def).display(self.resolver));
+                d = d + text(format!("#{}", self.defs.path(def).display(self.resolver)));
                 if !args.is_empty() {
                     // Turbofish so record type args don't clash with cmp `<`.
                     let parts: Vec<Doc<'static>> = args.iter().map(|&a| self.ty(a)).collect();

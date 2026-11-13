@@ -289,7 +289,14 @@ mod tests {
             let mut defs = crate::semi::resolve::DefTable::new();
             let mut interner = lasso::Rodeo::<reussir_syntax::kind::TokenKey>::new();
             let b = Builtins::register(&mut db, &mut defs, &mut interner, tcx);
-            for id in [b.num, b.integral, b.floating_point, b.ptr_like, b.sync] {
+            for id in [
+                b.num,
+                b.integral,
+                b.floating_point,
+                b.ptr_like,
+                b.sync,
+                b.addr_space,
+            ] {
                 assert_eq!(db.trait_by_def(db.trait_def(id).def), Some(id));
             }
         });

@@ -13,7 +13,7 @@
 // RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_const_default_extern_dep \
 // RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
 
-// MIR: pub fn @_RINvC3dep8level_ofNvC3app5LocalE(v0 (x): app::Local) -> i64 {
+// MIR: pub fn @_RINvC3dep8level_ofNvC3app5LocalE(v0 (x): #app::Local) -> i64 {
 // MIR-NEXT: 7 : i64
 // MIR: pub fn @_RNvC3app10base_steps() -> ConstSeq<u8> {
 // MIR-NEXT: ConstSeq[1, 2] : ConstSeq<u8>

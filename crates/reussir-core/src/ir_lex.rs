@@ -146,6 +146,12 @@ pub enum Token<'a> {
     Placement,
     #[token("DefaultPlacement")]
     DefaultPlacement,
+    #[token("Ptr")]
+    Ptr,
+    #[token("ConstPtr")]
+    ConstPtr,
+    #[token("GenericAddrSpace")]
+    GenericAddrSpace,
     #[token("DevArray")]
     DevArray,
     #[token("Token")]

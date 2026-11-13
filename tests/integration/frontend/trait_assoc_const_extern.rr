@@ -18,9 +18,9 @@
 // RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_const_extern_dep \
 // RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
 
-// MIR: pub fn @_RINvC3dep10offsets_ofNvC3app6TripleE(v0 (x): app::Triple) -> ConstSeq<i32> {
+// MIR: pub fn @_RINvC3dep10offsets_ofNvC3app6TripleE(v0 (x): #app::Triple) -> ConstSeq<i32> {
 // MIR-NEXT: ConstSeq[-1, 0, 1] : ConstSeq<i32>
-// MIR: pub fn @_RINvC3dep8arity_ofNvC3app6TripleE(v0 (x): app::Triple) -> i64 {
+// MIR: pub fn @_RINvC3dep8arity_ofNvC3app6TripleE(v0 (x): #app::Triple) -> i64 {
 // MIR-NEXT: 3 : i64
 // MIR: pub fn @_RNvC3app12pair_offsets() -> ConstSeq<i32> {
 // MIR-NEXT: ConstSeq[-2147483648, 2147483647] : ConstSeq<i32>

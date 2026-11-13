@@ -1041,6 +1041,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         TyKind::Nullable(inner) => 1 + ty_depth(inner),
         TyKind::Cell { elem: inner, .. } => 1 + ty_depth(inner),
         TyKind::Arc(inner) | TyKind::ConstSeq(inner) => 1 + ty_depth(inner),
+        TyKind::Ptr { space, .. } => 1 + ty_depth(space),
         TyKind::DevArray {
             elem, placement, ..
         } => 1 + ty_depth(elem).max(ty_depth(placement)),
@@ -1060,6 +1061,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         }
         TyKind::Token
         | TyKind::DefaultPlacement
+        | TyKind::GenericAddrSpace
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -4546,6 +4548,7 @@ mod tests {
             TyKind::Nullable(inner) => is_ground(inner),
             TyKind::Cell { elem: inner, .. } => is_ground(inner),
             TyKind::Arc(inner) | TyKind::ConstSeq(inner) => is_ground(inner),
+            TyKind::Ptr { space, .. } => is_ground(space),
             TyKind::DevArray {
                 elem, placement, ..
             } => is_ground(elem) && is_ground(placement),

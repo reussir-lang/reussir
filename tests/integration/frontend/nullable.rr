@@ -30,20 +30,20 @@ fn baz(reg : RegBox) -> Nullable<Data> {
     reg.value
 }
 
-// CHECK-DAG: record @_RC4Data : regional struct Data { "value": u64 };
-// CHECK-DAG: record @_RC6RegBox : regional struct RegBox { "value": field Nullable<[regional] Data> };
-// CHECK-DAG: record @_RIC5RcBoxlE : shared struct RcBox::<i32> { "value": i32 };
+// CHECK-DAG: record @_RC4Data : regional struct #Data { "value": u64 };
+// CHECK-DAG: record @_RC6RegBox : regional struct #RegBox { "value": field Nullable<[regional] #Data> };
+// CHECK-DAG: record @_RIC5RcBoxlE : shared struct #RcBox::<i32> { "value": i32 };
 
-// CHECK: fn @_RC3bar() -> Nullable<RcBox::<f64>> {
-// CHECK-NEXT: Null : Nullable<RcBox::<f64>>
+// CHECK: fn @_RC3bar() -> Nullable<#RcBox::<f64>> {
+// CHECK-NEXT: Null : Nullable<#RcBox::<f64>>
 // CHECK-NEXT: }
 
 // An unannotated regional parameter is pinned rigid; the `[field]` link
 // projects at the base's (frozen) view.
-// CHECK: fn @_RC3baz(v0 (reg): [rigid] RegBox) -> Nullable<[rigid] Data> {
-// CHECK-NEXT: proj(v0 : [rigid] RegBox, 0) : Nullable<[rigid] Data>
+// CHECK: fn @_RC3baz(v0 (reg): [rigid] #RegBox) -> Nullable<[rigid] #Data> {
+// CHECK-NEXT: proj(v0 : [rigid] #RegBox, 0) : Nullable<[rigid] #Data>
 // CHECK-NEXT: }
 
-// CHECK: fn @_RC3foo() -> Nullable<RcBox::<i32>> {
-// CHECK-NEXT: NonNull(@_RIC5RcBoxlE{1 : i32} : RcBox::<i32>) : Nullable<RcBox::<i32>>
+// CHECK: fn @_RC3foo() -> Nullable<#RcBox::<i32>> {
+// CHECK-NEXT: NonNull(@_RIC5RcBoxlE{1 : i32} : #RcBox::<i32>) : Nullable<#RcBox::<i32>>
 // CHECK-NEXT: }

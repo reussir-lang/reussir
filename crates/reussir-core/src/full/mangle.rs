@@ -213,6 +213,12 @@ impl<'a> Mangler<'a> {
                 &["core", "intrinsic", "const_seq", "ConstSeq"],
                 &[elem],
             ),
+            TyKind::GenericAddrSpace => {
+                self.path_with_args_segs(out, &["core", "ptr", "Generic"], &[])
+            }
+            TyKind::Ptr { space, kind } => {
+                self.path_with_args_segs(out, &["core", "ptr", kind.surface_name()], &[space])
+            }
             TyKind::Future(ps) => {
                 self.path_with_args_segs(out, &["core", "intrinsic", "tensor", "Future"], ps)
             }

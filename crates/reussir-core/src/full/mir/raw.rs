@@ -295,6 +295,11 @@ pub enum Ty {
         dims: Vec<u64>,
     },
     DefaultPlacement,
+    GenericAddrSpace,
+    Ptr {
+        space: Box<Ty>,
+        kind: crate::semi::ty::PtrKind,
+    },
     DevArray {
         elem: Box<Ty>,
         dims: Vec<u64>,

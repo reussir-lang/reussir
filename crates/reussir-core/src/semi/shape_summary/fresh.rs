@@ -68,6 +68,7 @@ impl<'tcx> FreshSubstitution<'_, '_, '_, 'tcx> {
             TyKind::Arc(inner) => tcx.mk_arc(self.ty(inner)),
             TyKind::ConstSeq(elem) => tcx.mk_const_seq(self.ty(elem)),
             TyKind::Cell { elem, kind } => tcx.mk_cell(self.ty(elem), kind),
+            TyKind::Ptr { space, kind } => tcx.mk_ptr(self.ty(space), kind),
             TyKind::Array { elem, dims } => tcx.mk_array(self.ty(elem), dims),
             TyKind::Tensor { elem, dims } => tcx.mk_tensor(self.ty(elem), dims),
             TyKind::DevArray {
@@ -85,6 +86,7 @@ impl<'tcx> FreshSubstitution<'_, '_, '_, 'tcx> {
             }
             TyKind::Token
             | TyKind::DefaultPlacement
+            | TyKind::GenericAddrSpace
             | TyKind::Int(_)
             | TyKind::BigInt(_)
             | TyKind::Fp(_)

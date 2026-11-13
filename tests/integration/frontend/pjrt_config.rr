@@ -103,15 +103,15 @@ fn devices_sum(ds: ConstSeq<i32>) -> i64 {
 }
 
 // Generic code reads the selected impl's values, or the defaults.
-// MIR: fn @{{.*}}placement_code{{.*}}Mesh{{.*}}(v0 (p): app::Mesh) -> i64 {
+// MIR: fn @{{.*}}placement_code{{.*}}Mesh{{.*}}(v0 (p): #app::Mesh) -> i64 {
 // MIR: ConstSeq[3, 1] : ConstSeq<i32>
-// MIR: @{{.*}}Sharding::#2(@{{.*}}ShardingParam{ConstSeq[2, 1] : ConstSeq<i64>, ConstSeq[0] : ConstSeq<i64>, ConstSeq[2] : ConstSeq<i64>} : core::pjrt::ShardingParam) : core::pjrt::Sharding
-// MIR: @{{.*}}MemoryKind::#0() : core::pjrt::MemoryKind
-// MIR: @{{.*}}Layout::#3(@{{.*}}TiledLayout{ConstSeq[1, 0] : ConstSeq<i64>, ConstSeq[ConstSeq[8, 128] : ConstSeq<i64>, ConstSeq[2, 1] : ConstSeq<i64>] : ConstSeq<ConstSeq<i64>>} : core::pjrt::TiledLayout) : core::pjrt::Layout
-// MIR: fn @{{.*}}placement_code{{.*}}Plain{{.*}}(v0 (p): app::Plain) -> i64 {
+// MIR: @{{.*}}Sharding::#2(@{{.*}}ShardingParam{ConstSeq[2, 1] : ConstSeq<i64>, ConstSeq[0] : ConstSeq<i64>, ConstSeq[2] : ConstSeq<i64>} : #core::pjrt::ShardingParam) : #core::pjrt::Sharding
+// MIR: @{{.*}}MemoryKind::#0() : #core::pjrt::MemoryKind
+// MIR: @{{.*}}Layout::#3(@{{.*}}TiledLayout{ConstSeq[1, 0] : ConstSeq<i64>, ConstSeq[ConstSeq[8, 128] : ConstSeq<i64>, ConstSeq[2, 1] : ConstSeq<i64>] : ConstSeq<ConstSeq<i64>>} : #core::pjrt::TiledLayout) : #core::pjrt::Layout
+// MIR: fn @{{.*}}placement_code{{.*}}Plain{{.*}}(v0 (p): #app::Plain) -> i64 {
 // MIR: ConstSeq[0] : ConstSeq<i32>
-// MIR: @{{.*}}Sharding::#0() : core::pjrt::Sharding
-// MIR: @{{.*}}Layout::#0() : core::pjrt::Layout
+// MIR: @{{.*}}Sharding::#0() : #core::pjrt::Sharding
+// MIR: @{{.*}}Layout::#0() : #core::pjrt::Layout
 fn placement_code<P: pjrt::Placement>(p: P) -> i64 {
     devices_sum(P::DEVICES) * 10000000
         + sharding_code(P::SHARDING) * 10000

@@ -12,7 +12,7 @@ use crate::literal::{FloatLit, Integer};
 use crate::semi::hir::raw as raw;
 use crate::semi::const_eval::ConstScalar;
 use crate::semi::hir::{Bound, BoundPath};
-use crate::semi::ty::{BigIntTy, CellKind};
+use crate::semi::ty::{BigIntTy, CellKind, PtrKind};
 
 grammar<'input>;
 
@@ -373,6 +373,9 @@ Name: &'input str = {
     "Future" => "Future",
     "DevArray" => "DevArray",
     "DefaultPlacement" => "DefaultPlacement",
+    "Ptr" => "Ptr",
+    "ConstPtr" => "ConstPtr",
+    "GenericAddrSpace" => "GenericAddrSpace",
     "intrinsic" => "intrinsic",
     "array" => "array",
     "tensor" => "tensor",
@@ -490,6 +493,9 @@ Ty: raw::Ty = {
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
         => raw::Ty::Array { elem: Box::new(elem), dims },
     "DefaultPlacement" => raw::Ty::DefaultPlacement,
+    "GenericAddrSpace" => raw::Ty::GenericAddrSpace,
+    "Ptr" "<" <t:Ty> ">" => raw::Ty::Ptr { space: Box::new(t), kind: PtrKind::Mut },
+    "ConstPtr" "<" <t:Ty> ">" => raw::Ty::Ptr { space: Box::new(t), kind: PtrKind::Const },
     "DevArray" "<" <inner:Ty> <p:("," <Ty>)?> ">" => {
         let (elem, dims) = match inner {
             raw::Ty::Array { elem, dims } => (elem, dims),
@@ -797,6 +803,9 @@ extern {
         "Tensor" => Token::Tensor,
         "DevArray" => Token::DevArray,
         "DefaultPlacement" => Token::DefaultPlacement,
+        "Ptr" => Token::Ptr,
+        "ConstPtr" => Token::ConstPtr,
+        "GenericAddrSpace" => Token::GenericAddrSpace,
         "placement" => Token::Placement,
         "NonNull" => Token::NonNull,
         "Null" => Token::Null,

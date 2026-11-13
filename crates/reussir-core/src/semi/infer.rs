@@ -235,6 +235,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_const_seq(elem)
             }
+            TyKind::Ptr { space, kind } => {
+                let space = self.resolve(*space);
+                self.tcx.mk_ptr(space, *kind)
+            }
             TyKind::Array { elem, dims } => {
                 let elem = self.resolve(*elem);
                 self.tcx.mk_array(elem, dims)
@@ -379,6 +383,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             (TyKind::Nullable(x), TyKind::Nullable(y)) => self.unify(*x, *y),
             (TyKind::Arc(x), TyKind::Arc(y)) => self.unify(*x, *y),
             (TyKind::ConstSeq(x), TyKind::ConstSeq(y)) => self.unify(*x, *y),
+            (TyKind::Ptr { space: x, kind: k1 }, TyKind::Ptr { space: y, kind: k2 })
+                if k1 == k2 =>
+            {
+                self.unify(*x, *y)
+            }
+            (TyKind::GenericAddrSpace, TyKind::GenericAddrSpace) => Ok(()),
             (TyKind::Cell { elem: x, kind: e1 }, TyKind::Cell { elem: y, kind: e2 })
                 if e1 == e2 =>
             {
@@ -456,6 +466,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::Nullable(inner) => self.occurs(h, *inner),
             TyKind::Arc(inner) | TyKind::ConstSeq(inner) => self.occurs(h, *inner),
             TyKind::Cell { elem: inner, .. } => self.occurs(h, *inner),
+            TyKind::Ptr { space, .. } => self.occurs(h, *space),
             TyKind::DevArray {
                 elem, placement, ..
             } => self.occurs(h, *elem) || self.occurs(h, *placement),
@@ -622,6 +633,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             (TyKind::Nullable(x), TyKind::Nullable(y)) => self.unify_instantiated(*x, inst, *y),
             (TyKind::Arc(x), TyKind::Arc(y)) => self.unify_instantiated(*x, inst, *y),
             (TyKind::ConstSeq(x), TyKind::ConstSeq(y)) => self.unify_instantiated(*x, inst, *y),
+            (TyKind::Ptr { space: x, kind: k1 }, TyKind::Ptr { space: y, kind: k2 })
+                if k1 == k2 =>
+            {
+                self.unify_instantiated(*x, inst, *y)
+            }
+            (TyKind::GenericAddrSpace, TyKind::GenericAddrSpace) => Ok(()),
             (TyKind::Cell { elem: x, kind: e1 }, TyKind::Cell { elem: y, kind: e2 })
                 if e1 == e2 =>
             {
@@ -695,6 +712,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::ConstSeq(elem) => {
                 let elem = self.materialize(*elem, inst);
                 self.tcx.mk_const_seq(elem)
+            }
+            TyKind::Ptr { space, kind } => {
+                let space = self.materialize(*space, inst);
+                self.tcx.mk_ptr(space, *kind)
             }
             TyKind::Array { elem, dims } => {
                 let elem = self.materialize(*elem, inst);

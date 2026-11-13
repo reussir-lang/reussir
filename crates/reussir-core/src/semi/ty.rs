@@ -255,6 +255,34 @@ impl CellKind {
     }
 }
 
+/// Whether memory may be written through an opaque pointer.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PtrKind {
+    /// Surface `Ptr<A>`.
+    Mut,
+    /// Surface `ConstPtr<A>`: a pointer to memory that is only read.
+    Const,
+}
+
+impl PtrKind {
+    /// The surface type-constructor name, also used by the textual IR.
+    pub fn surface_name(self) -> &'static str {
+        match self {
+            PtrKind::Mut => "Ptr",
+            PtrKind::Const => "ConstPtr",
+        }
+    }
+
+    /// Parse a surface / textual-IR type-constructor name.
+    pub fn parse(name: &str) -> Option<PtrKind> {
+        match name {
+            "Ptr" => Some(PtrKind::Mut),
+            "ConstPtr" => Some(PtrKind::Const),
+            _ => None,
+        }
+    }
+}
+
 /// The structure of a type. Compound variants hold interned children
 /// (`Ty<'tcx>` and arena slices), so `TyKind` is `Copy` and its derived
 /// `Eq`/`Hash` bottom out in pointer comparison — exactly the hash-cons key.
@@ -333,6 +361,18 @@ pub enum TyKind<'tcx> {
         kind: CellKind,
     },
     Nullable(Ty<'tcx>),
+    /// The address space every target has (`core::ptr::Generic`):
+    /// a zero-field marker, used as the `A` of a pointer type.
+    GenericAddrSpace,
+    /// An opaque pointer into the address space `space` (`Ptr<A>`,
+    /// `ConstPtr<A>`). It carries no pointee type and no ownership: a null,
+    /// dangling, or unaligned pointer is a valid value, and what it points
+    /// to is named by each access. `space` is an `AddrSpace` marker or a
+    /// type parameter bounded by it.
+    Ptr {
+        space: Ty<'tcx>,
+        kind: PtrKind,
+    },
     /// An immutable static sequence of constants (`ConstSeq<T>`): a view of
     /// compile-time constant data and its length, with no reference count.
     /// The element is a constant type (see [`crate::semi::const_eval`]); a
@@ -406,6 +446,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Cell { elem, .. }
             | TyKind::Array { elem, .. }
             | TyKind::Tensor { elem, .. } => elem.mentions_bigint(atomic),
+            TyKind::Ptr { space, .. } => space.mentions_bigint(atomic),
             TyKind::DevArray { elem, .. } => elem.mentions_bigint(atomic),
             TyKind::Tuple(ps) | TyKind::Future(ps) => ps.iter().any(|p| p.mentions_bigint(atomic)),
             _ => false,
@@ -598,6 +639,10 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_nullable(&self, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.mk(TyKind::Nullable(inner))
+    }
+
+    pub fn mk_ptr(&self, space: Ty<'tcx>, kind: PtrKind) -> Ty<'tcx> {
+        self.mk(TyKind::Ptr { space, kind })
     }
 
     pub fn mk_const_seq(&self, elem: Ty<'tcx>) -> Ty<'tcx> {

@@ -20,6 +20,9 @@
 // forward declared.
 #include <mlir/Bytecode/BytecodeImplementation.h>
 #include <mlir/CAPI/IR.h>
+#include <mlir/Dialect/Ptr/IR/PtrAttrs.h>
+#include <mlir/Dialect/Ptr/IR/PtrDialect.h>
+#include <mlir/Dialect/Ptr/IR/PtrTypes.h>
 #include <mlir/IR/BuiltinAttributes.h>
 
 #include "Reussir/Conversion/OpenXLATarget.h"
@@ -66,6 +69,12 @@ RecordKind toRecordKind(ReussirRecordKind kind) {
 
 MlirType reussirRawPtrTypeGet(MlirType elementType) {
   return wrap(RawPtrType::get(unwrap(elementType)));
+}
+
+MlirType reussirGenericPtrTypeGet(MlirContext context) {
+  auto *ctx = unwrap(context);
+  ctx->getOrLoadDialect<mlir::ptr::PtrDialect>();
+  return wrap(mlir::ptr::PtrType::get(mlir::ptr::GenericSpaceAttr::get(ctx)));
 }
 
 MlirType reussirStablehloTokenTypeGet(MlirContext context) {

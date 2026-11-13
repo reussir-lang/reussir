@@ -656,6 +656,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             TyKind::Array { elem, .. }
             | TyKind::Tensor { elem, .. }
             | TyKind::Cell { elem, .. }
+            | TyKind::Ptr { space: elem, .. }
             | TyKind::Nullable(elem)
             | TyKind::Arc(elem)
             | TyKind::ConstSeq(elem) => self.lower_ty_level(*elem, level, seen),

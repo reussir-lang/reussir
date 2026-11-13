@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use crate::ast::{Input, Item};
 
-/// The closed scalar vocabulary an impl clause may name, with the type
+/// The closed vocabulary an impl clause may name (the scalars and the
+/// `Generic` address space), with the type
 /// constructor each expands to.
 fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
     let ts = match ident.to_string().as_str() {
@@ -33,13 +34,14 @@ fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
         "f64" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Ieee(64))),
         "bf16" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::BFloat16)),
         "f8" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Float8)),
+        "Generic" => quote!(tcx.mk(crate::semi::ty::TyKind::GenericAddrSpace)),
         _ => return None,
     };
     Some(ts)
 }
 
 const KNOWN_SCALARS: &str =
-    "i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f16, f32, f64, bf16, f8";
+    "i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f16, f32, f64, bf16, f8, Generic";
 
 pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let input: Input = syn::parse2(input)?;

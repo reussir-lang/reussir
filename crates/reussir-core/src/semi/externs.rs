@@ -673,6 +673,10 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 let elem = self.ty(elem);
                 self.tcx.mk_cell(elem, kind)
             }
+            TyKind::Ptr { space, kind } => {
+                let space = self.ty(space);
+                self.tcx.mk_ptr(space, kind)
+            }
             TyKind::Array { elem, dims } => {
                 let elem = self.ty(elem);
                 self.tcx.mk_array(elem, dims)

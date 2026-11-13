@@ -1,0 +1,31 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+import core::ptr::Generic;
+struct [value] Space {}
+
+// CHECK-DAG: `Ptr<i64>` is ill-formed: `i64` does not implement `AddrSpace`
+fn scalar(p: Ptr<i64>) {}
+// CHECK-DAG: `ConstPtr<Space>` is ill-formed: `Space` does not implement `AddrSpace`
+fn record(p: ConstPtr<Space>) {}
+// CHECK-DAG: `Ptr<A>` is ill-formed: `A` does not implement `AddrSpace`
+fn unbounded<A>(p: Ptr<A>) {}
+fn bounded<A: AddrSpace>(p: Ptr<A>) {}
+// CHECK-DAG: `i64` does not implement `AddrSpace`
+fn instance(p: Ptr<Generic>) { bounded<i64>(p) }
+// CHECK-DAG: `Ptr` takes exactly one address space argument
+fn bare(p: Ptr) {}
+// CHECK-DAG: `ConstPtr` takes exactly one address space argument
+fn extra(p: ConstPtr<Generic, Generic>) {}
+// CHECK-DAG: `Generic` takes no type arguments
+fn applied(p: Ptr<Generic<i64>>) {}
+// CHECK-DAG: `AddrSpace` is a built-in trait and cannot be implemented
+impl AddrSpace for Space {}
+// CHECK-DAG: type mismatch: expected `Ptr<core::ptr::Generic>`, found `ConstPtr<core::ptr::Generic>`
+fn mutable(p: ConstPtr<Generic>) -> Ptr<Generic> { p }
+// A pointer may be null itself.
+// CHECK-DAG: `Nullable` inner type `Ptr<core::ptr::Generic>` is not a pointer-like type
+fn nullable(p: Nullable<Ptr<Generic>>) {}
+// CHECK-DAG: `Atomic<Ptr<core::ptr::Generic>>` is ill-formed
+fn atomic(p: Atomic<Ptr<Generic>>) {}
+// CHECK-DAG: array element type `Ptr<core::ptr::Generic>` is not supported yet
+fn array(p: [Ptr<Generic>; 4]) {}

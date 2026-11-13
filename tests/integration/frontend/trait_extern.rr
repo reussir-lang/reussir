@@ -39,10 +39,10 @@
 // RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_extern_dep \
 // RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
 
-// MIR-DAG: pub fn @_RINvNvNvNvC3dep3dep4Show3Box4showNvC3app1QE(v0 (self): dep::Box::<app::Q>) -> i64 {
-// MIR-DAG: pub fn @_RNvNvNvNvC3dep3dep4Show1P4show(v0 (self): dep::P) -> i64;
-// MIR-DAG: pub fn @_RNvNvNvNvC3app3dep4Show1Q4show(v0 (self): app::Q) -> i64 {
-// MIR-DAG: pub fn @_RINvC3dep8describeINvC3dep3BoxNvC3app1QEE(v0 (x): dep::Box::<app::Q>) -> i64 {
+// MIR-DAG: pub fn @_RINvNvNvNvC3dep3dep4Show3Box4showNvC3app1QE(v0 (self): #dep::Box::<#app::Q>) -> i64 {
+// MIR-DAG: pub fn @_RNvNvNvNvC3dep3dep4Show1P4show(v0 (self): #dep::P) -> i64;
+// MIR-DAG: pub fn @_RNvNvNvNvC3app3dep4Show1Q4show(v0 (self): #app::Q) -> i64 {
+// MIR-DAG: pub fn @_RINvC3dep8describeINvC3dep3BoxNvC3app1QEE(v0 (x): #dep::Box::<#app::Q>) -> i64 {
 
 // (3) The orphan rule holds across the boundary: both the trait and the
 // head extern is refused.

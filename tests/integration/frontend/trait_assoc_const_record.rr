@@ -73,18 +73,18 @@ fn memory_code(m: MemoryKind) -> u64 {
 
 // A concrete use projects a field of the value directly: 3.
 // MIR: pub fn @_RC12first_device() -> i32 {
-// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RC9Placement{ConstSeq[3, 1] : ConstSeq<i32>, {{.*}}} : Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
+// MIR-NEXT: intrinsic#const_seq#get#0(proj(@_RC9Placement{ConstSeq[3, 1] : ConstSeq<i32>, {{.*}}} : #Placement, 0) : ConstSeq<i32>, 0 : u64) : i32
 pub fn first_device() -> i32 {
     core::intrinsic::const_seq::get(Sized::PLACEMENT.devices, 0)
 }
 
 // Each instance builds the value its impl selects, or the default.
-// MIR: fn @_RIC7summaryC5PlainE(v0 (x): Plain) -> u64 {
-// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[0] : ConstSeq<i32>, @_RC8Sharding::#0() : Sharding, @_RC10MemoryKind::#0() : MemoryKind} : Placement;
-// MIR: fn @_RIC7summaryC5SizedE(v0 (x): Sized) -> u64 {
-// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[3, 1] : ConstSeq<i32>, @_RC8Sharding::#1(@_RC6Tiling{ConstSeq[2, 1] : ConstSeq<u64>, 0 : u64} : Tiling) : Sharding, @_RC10MemoryKind::#0() : MemoryKind} : Placement;
-// MIR: fn @_RIC7summaryC6PinnedE(v0 (x): Pinned) -> u64 {
-// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[] : ConstSeq<i32>, @_RC8Sharding::#1(@_RC6Tiling{ConstSeq[4] : ConstSeq<u64>, 1 : u64} : Tiling) : Sharding, @_RC10MemoryKind::#1() : MemoryKind} : Placement;
+// MIR: fn @_RIC7summaryC5PlainE(v0 (x): #Plain) -> u64 {
+// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[0] : ConstSeq<i32>, @_RC8Sharding::#0() : #Sharding, @_RC10MemoryKind::#0() : #MemoryKind} : #Placement;
+// MIR: fn @_RIC7summaryC5SizedE(v0 (x): #Sized) -> u64 {
+// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[3, 1] : ConstSeq<i32>, @_RC8Sharding::#1(@_RC6Tiling{ConstSeq[2, 1] : ConstSeq<u64>, 0 : u64} : #Tiling) : #Sharding, @_RC10MemoryKind::#0() : #MemoryKind} : #Placement;
+// MIR: fn @_RIC7summaryC6PinnedE(v0 (x): #Pinned) -> u64 {
+// MIR-NEXT: let v1 (p) = @_RC9Placement{ConstSeq[] : ConstSeq<i32>, @_RC8Sharding::#1(@_RC6Tiling{ConstSeq[4] : ConstSeq<u64>, 1 : u64} : #Tiling) : #Sharding, @_RC10MemoryKind::#1() : #MemoryKind} : #Placement;
 fn summary<T: Placed>(x: T) -> u64 {
     let p = T::PLACEMENT;
     core::intrinsic::const_seq::len(p.devices) * 1000 + shard_code(p.sharding) * 10 + memory_code(p.memory)

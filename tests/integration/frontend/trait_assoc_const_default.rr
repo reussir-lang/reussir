@@ -43,14 +43,14 @@ impl Config for Narrow {
 // Generic uses take the selected impl's value, or the default where the
 // impl omits the const.
 // MIR: pub fn @_RC8concrete() -> u64 {
-// MIR-NEXT: len#0(ConstSeq[] : ConstSeq<u64>){{.*}}#get#0(ConstSeq[3, 4] : ConstSeq<u64>, 1 : u64)
-// MIR: fn @_RIC12weight_countC4WideE(v0 (x): Wide) -> u64 {
-// MIR-NEXT: len#0(ConstSeq[3, 4] : ConstSeq<u64>)
-// MIR: fn @_RIC12weight_countC6NarrowE(v0 (x): Narrow) -> u64 {
-// MIR-NEXT: len#0(ConstSeq[] : ConstSeq<u64>)
-// MIR: fn @_RIC7enabledC4WideE(v0 (x): Wide) -> i64 {
+// MIR-NEXT: #len#0(ConstSeq[] : ConstSeq<u64>){{.*}}#get#0(ConstSeq[3, 4] : ConstSeq<u64>, 1 : u64)
+// MIR: fn @_RIC12weight_countC4WideE(v0 (x): #Wide) -> u64 {
+// MIR-NEXT: #len#0(ConstSeq[3, 4] : ConstSeq<u64>)
+// MIR: fn @_RIC12weight_countC6NarrowE(v0 (x): #Narrow) -> u64 {
+// MIR-NEXT: #len#0(ConstSeq[] : ConstSeq<u64>)
+// MIR: fn @_RIC7enabledC4WideE(v0 (x): #Wide) -> i64 {
 // MIR-NEXT: if true : bool then {
-// MIR: fn @_RIC7enabledC6NarrowE(v0 (x): Narrow) -> i64 {
+// MIR: fn @_RIC7enabledC6NarrowE(v0 (x): #Narrow) -> i64 {
 // MIR-NEXT: if false : bool then {
 fn enabled<T: Config>(x: T) -> i64 {
     if T::ENABLED { 1 } else { 0 }

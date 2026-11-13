@@ -56,22 +56,22 @@ fn make_point_explicit() -> Point {
 // CHECK-NEXT:     #Point{v0 : i32, v1 : i32} : #Point
 // CHECK-NEXT: }
 
-// FULL: record @_RC5Point : shared struct Point { "x": i32, "y": i32 };
+// FULL: record @_RC5Point : shared struct #Point { "x": i32, "y": i32 };
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC10make_point(v0 (x): i32, v1 (y): i32) -> Point {
-// FULL-NEXT:     @_RC5Point{v0 : i32, v1 : i32} : Point
+// FULL-NEXT: fn @_RC10make_point(v0 (x): i32, v1 (y): i32) -> #Point {
+// FULL-NEXT:     @_RC5Point{v0 : i32, v1 : i32} : #Point
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC16make_point_mixed(v0 (x): i32) -> Point {
-// FULL-NEXT:     @_RC5Point{v0 : i32, 10 : i32} : Point
+// FULL-NEXT: fn @_RC16make_point_mixed(v0 (x): i32) -> #Point {
+// FULL-NEXT:     @_RC5Point{v0 : i32, 10 : i32} : #Point
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC19make_point_explicit() -> Point {
+// FULL-NEXT: fn @_RC19make_point_explicit() -> #Point {
 // FULL-NEXT:     let v0 (x) = 5 : i32;
 // FULL-NEXT:     let v1 (y) = 10 : i32;
-// FULL-NEXT:     @_RC5Point{v0 : i32, v1 : i32} : Point
+// FULL-NEXT:     @_RC5Point{v0 : i32, v1 : i32} : #Point
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC19make_point_reversed(v0 (x): i32, v1 (y): i32) -> Point {
-// FULL-NEXT:     @_RC5Point{v0 : i32, v1 : i32} : Point
+// FULL-NEXT: fn @_RC19make_point_reversed(v0 (x): i32, v1 (y): i32) -> #Point {
+// FULL-NEXT:     @_RC5Point{v0 : i32, v1 : i32} : #Point
 // FULL-NEXT: }

@@ -30,5 +30,5 @@ extern "C" trampoline "impl_rt_ffi" = use_it;
 // HIR-DAG: fn #demo::use_it() -> i64 {
 // HIR-DAG: #demo::Box::scaled::<i64>(#demo::Box::<i64>{21 : i64} : #demo::Box::<i64>, 2 : i64) : i64
 
-// MIR-DAG: pub fn @_RINvNvC4demo3Box6scaledxE(v0 (self): demo::Box::<i64>, v1 (k): i64) -> i64 {
+// MIR-DAG: pub fn @_RINvNvC4demo3Box6scaledxE(v0 (self): #demo::Box::<i64>, v1 (k): i64) -> i64 {
 // MIR-DAG: fn @_RNvC4demo6use_it() -> i64 {
