@@ -2629,6 +2629,25 @@ def ReussirStrLenOp : ReussirStrOp<"len", [Pure]> {
   }];
 }
 
+def ReussirStrDataPtrOp : ReussirStrOp<"data_ptr", [Pure]> {
+  let summary = "Get the pointer to the bytes of the string";
+  let description = [{
+    `reussir.str.data_ptr` returns an opaque pointer to the first byte of the
+    string.
+
+    Example:
+
+    ```mlir
+    %p = reussir.str.data_ptr (%s : !reussir.str<global>) : !ptr.ptr<#ptr.generic_space>
+    ```
+  }];
+  let arguments = (ins Arg<ReussirStrType, "String to point into">:$str);
+  let results = (outs Res<Ptr_PtrType, "Pointer to the first byte">:$ptr);
+  let assemblyFormat = [{
+    `(` $str `:` type($str) `)` `:` qualified(type($ptr)) attr-dict
+  }];
+}
+
 // Strings are immutable views of static storage, so inspecting their contents
 // has no memory effects. Unchecked operations additionally require bounds
 // proofs before they can be speculated.

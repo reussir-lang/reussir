@@ -22,6 +22,7 @@
 // CHECK-NEXT: string/eq: unit
 // CHECK-NEXT: string/unicode: unit
 // CHECK-NEXT: string/ranges and raw roundtrip: unit
+// CHECK-NEXT: string/data pointers: unit
 // CHECK-NEXT: string/cow operations & byte-list model (fuzz):
 // CHECK-NEXT: string/utf8 char roundtrip & scalar boundaries (fuzz):
 // CHECK-NEXT: string/concatenation monoid & range algebra (fuzz):
@@ -115,6 +116,41 @@ fn test_ranges_and_raw() -> Outcome {
         .and_then(|| should_be(base.byte_at(2), 187))
         .and_then(|| should_be(base.byte_at(10), 122))
         .and_then(|| expect(roundtrip == sub, "from_raw(into_raw()) roundtrip"))
+}
+
+fn byte_through(p : ConstPtr<core::ptr::Generic>, index : i64) -> u8 {
+    core::ptr::load(core::ptr::offset(p, index, core::ptr::PtrArithFlag::Inbounds))
+}
+
+// A data pointer keeps nothing alive, so each owner is read through its
+// pointer first and used once more afterwards.
+fn test_data_ptr() -> Outcome {
+    let owned = String::from_str("hello");
+    let owned_first = byte_through(owned.unsafe_data_ptr(), 0);
+    let owned_last = byte_through(owned.unsafe_data_ptr(), 4);
+    let owned_len = owned.len();
+
+    let literal = byte_through(core::intrinsic::str::unsafe_data_ptr("world"), 1);
+
+    let text = Text::from_string(String::from_str("abcdef"));
+    let text_byte = byte_through(text.unsafe_data_ptr(), 2);
+    let view = text.view().slice_byte(3, 5).unwrap_or_panic();
+    let view_byte = byte_through(view.unsafe_data_ptr(), 1);
+    let text_len = text.len();
+
+    let bytes = Vec::new().push(7 as u8).push(9 as u8).push(11 as u8);
+    let vec_byte = byte_through(bytes.unsafe_data_ptr(), 2);
+    let vec_len = bytes.len();
+
+    should_be(owned_first, 104)
+        .and_then(|| should_be(owned_last, 111))
+        .and_then(|| should_be(owned_len, 5))
+        .and_then(|| should_be(literal, 111))
+        .and_then(|| should_be(text_byte, 99))
+        .and_then(|| should_be(view_byte, 101))
+        .and_then(|| should_be(text_len, 6))
+        .and_then(|| should_be(vec_byte, 11))
+        .and_then(|| should_be(vec_len, 3))
 }
 
 // ------------------------------ Model helpers ------------------------------
@@ -607,6 +643,7 @@ fn suite() -> TestTree {
         .with_case("eq", test_eq)
         .with_case("unicode", test_unicode)
         .with_case("ranges and raw roundtrip", test_ranges_and_raw)
+        .with_case("data pointers", test_data_ptr)
         .with_fuzz(
             "cow operations & byte-list model (fuzz)",
             tuple3(

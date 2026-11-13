@@ -1099,6 +1099,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     /// Report a pointer type whose address space is not an `AddrSpace`. An
     /// address space still being inferred is decided by what it unifies with.
+    /// The generic address space is one by definition, which `core` relies
+    /// on in signatures elaborated before its own `impl` is.
     pub(crate) fn report_ptr_wf(
         &mut self,
         space: Ty<'tcx>,
@@ -1106,7 +1108,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: Option<surface::Span>,
     ) {
         use crate::semi::traits::{Obligation, SelectCtxt, TraitRef};
-        if matches!(space.kind(), TyKind::Hole(_) | TyKind::Bottom) {
+        if matches!(
+            space.kind(),
+            TyKind::Hole(_) | TyKind::Bottom | TyKind::GenericAddrSpace
+        ) {
             return;
         }
         let goal = Obligation::Trait(TraitRef {

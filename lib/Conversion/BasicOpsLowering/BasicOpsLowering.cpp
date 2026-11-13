@@ -3262,6 +3262,20 @@ struct ReussirStrLenOpConversionPattern
   }
 };
 
+struct ReussirStrDataPtrOpConversionPattern
+    : public mlir::OpConversionPattern<ReussirStrDataPtrOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirStrDataPtrOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Extract the pointer field (index 0) from the string struct
+    rewriter.replaceOpWithNewOp<mlir::LLVM::ExtractValueOp>(
+        op, adaptor.getStr(), llvm::ArrayRef<int64_t>{0});
+    return mlir::success();
+  }
+};
+
 struct ReussirStrUnsafeByteAtOpConversionPattern
     : public mlir::OpConversionPattern<ReussirStrUnsafeByteAtOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -4345,7 +4359,8 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirClosureInstantiateOp, ReussirClosureVtableOp,
         ReussirClosureCreateOp, ReussirRcFetchOp, ReussirRcFetchSubOp,
         ReussirRcSetOp, ReussirStrGlobalOp, ReussirStrLiteralOp,
-        ReussirStrCastOp, ReussirStrLenOp, ReussirStrUnsafeByteAtOp,
+        ReussirStrCastOp, ReussirStrLenOp, ReussirStrDataPtrOp,
+        ReussirStrUnsafeByteAtOp,
         ReussirStrUnsafeStartWithOp, ReussirStrSliceOp, ReussirStrRefEqOp,
         ReussirStrUnsafeMemcmpOp, ReussirConstSeqGlobalOp,
         ReussirConstSeqLiteralOp, ReussirConstSeqLenOp,
@@ -4577,6 +4592,7 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
       ReussirRcSetConversionPattern, ReussirStrGlobalOpConversionPattern,
       ReussirStrLiteralOpConversionPattern, ReussirPanicConversionPattern,
       ReussirStrCastOpConversionPattern, ReussirStrLenOpConversionPattern,
+      ReussirStrDataPtrOpConversionPattern,
       ReussirStrUnsafeByteAtOpConversionPattern,
       ReussirStrUnsafeStartWithOpConversionPattern,
       ReussirStrSliceOpConversionPattern, ReussirStrRefEqOpConversionPattern,

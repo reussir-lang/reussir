@@ -966,7 +966,10 @@ fn interp<'tcx>(
         // array base, which follows the `Proj` borrow rule.
         ExprKind::ArrayOp { op, args } => {
             use crate::intrinsic::ArrayFn;
-            let borrows_base = matches!(op, ArrayFn::Get | ArrayFn::Fold | ArrayFn::Dim);
+            let borrows_base = matches!(
+                op,
+                ArrayFn::Get | ArrayFn::Fold | ArrayFn::Dim | ArrayFn::UnsafeDataPtr
+            );
             for (i, a) in args.iter().enumerate() {
                 if i == 0 && borrows_base {
                     interp_borrow(a, ot, rr, rc);

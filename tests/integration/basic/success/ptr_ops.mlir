@@ -13,6 +13,13 @@ func.func @address_ops(%p: !P, %i: index) -> (!P, !P) {
   return %masked, %q : !P, !P
 }
 
+// CHECK-LABEL: func.func @str_data
+// CHECK: reussir.str.data_ptr(%{{.*}} : <global>) : !ptr.ptr<#ptr.generic_space>
+func.func @str_data(%s: !reussir.str<global>) -> !P {
+  %p = reussir.str.data_ptr (%s : !reussir.str<global>) : !P
+  return %p : !P
+}
+
 // CHECK-LABEL: func.func @provenance_ops
 // CHECK: reussir.ptr.expose_addr %{{.*}} : !ptr.ptr<#ptr.generic_space> -> i64
 // CHECK: %[[FRESH:.*]] = reussir.ptr.launder_invariant_group %{{.*}} : !ptr.ptr<#ptr.generic_space>

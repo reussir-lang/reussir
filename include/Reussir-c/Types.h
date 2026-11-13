@@ -84,6 +84,10 @@ MlirType reussirRawPtrTypeGet(MlirType elementType);
 // space of the `ptr` dialect.
 MlirType reussirGenericPtrTypeGet(MlirContext context);
 
+// `memref`, a memref type, moved to the generic memory space of the `ptr`
+// dialect, which `ptr.to_ptr` requires of its operand.
+MlirType reussirMemRefTypeInGenericSpace(MlirType memref);
+
 // `!reussir.token<align: N, size: N>`.
 // StableHLO kernel SSA types, distinct from Reussir allocation tokens.
 // Return a null type if OpenXLA is disabled or a future payload is invalid.

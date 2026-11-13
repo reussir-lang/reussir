@@ -43,6 +43,12 @@ pub fn generic_ptr(context: &Context) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirGenericPtrTypeGet(context.to_raw())) }
 }
 
+/// `memref`, a memref type, in the generic memory space of the `ptr`
+/// dialect.
+pub fn memref_in_generic_space(memref: Type<'_>) -> Type<'_> {
+    unsafe { Type::from_raw(sys::reussirMemRefTypeInGenericSpace(memref.to_raw())) }
+}
+
 /// Creates a `!reussir.token<align: …, size: …>` type.
 pub fn token(context: &Context, align: usize, size: usize) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirTokenTypeGet(context.to_raw(), align, size)) }

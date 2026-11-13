@@ -44,6 +44,9 @@ impl<T: Clone> Vec<T> {
     pub fn len(&self) -> usize {
         self.0.data_ref().len()
     }
+    pub fn as_ptr(&self) -> *const T {
+        self.0.data_ref().as_ptr()
+    }
     pub fn is_empty(&self) -> bool {
         self.0.data_ref().is_empty()
     }

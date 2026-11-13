@@ -4063,6 +4063,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
+    /// `ConstPtr<core::ptr::Generic>`, the type of a data pointer.
+    fn const_generic_ptr(&self) -> Ty<'tcx> {
+        let space = self.tcx.mk(TyKind::GenericAddrSpace);
+        self.tcx.mk_ptr(space, crate::semi::ty::PtrKind::Const)
+    }
+
     /// The flag of a pointer offset: a constant `core::ptr::PtrArithFlag`.
     fn ptr_arith_flag(&mut self, e: &surface::Expr) -> crate::intrinsic::PtrArithFlag {
         use crate::intrinsic::PtrArithFlag;
@@ -4512,6 +4518,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(8)),
             ),
             StrFn::Slice => (vec![str_ty, u64_ty], str_ty),
+            StrFn::UnsafeDataPtr => (vec![str_ty], self.const_generic_ptr()),
         };
         if fc.args.len() != params.len() {
             self.error(
@@ -5191,7 +5198,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     span,
                 )
             }
-            _ => unreachable!("routed here only for get/set/fold/dim"),
+            "unsafe_data_ptr" => {
+                if !args.is_empty() {
+                    self.error(span, "`unsafe_data_ptr` expects only the array");
+                    return self.poison(span);
+                }
+                let ptr_ty = self.const_generic_ptr();
+                self.mk_expr(
+                    ExprKind::ArrayOp {
+                        op: ArrayFn::UnsafeDataPtr,
+                        args: vec![base],
+                    },
+                    ptr_ty,
+                    span,
+                )
+            }
+            _ => unreachable!("routed here only for the accessing array intrinsics"),
         }
     }
 

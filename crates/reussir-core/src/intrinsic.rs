@@ -183,6 +183,10 @@ pub enum ArrayFn {
     /// dimension (`[T; ?, 4]`), whose extent lives in the box header; on a
     /// fully static array it folds to a constant.
     Dim,
+    /// `unsafe_data_ptr(a)`: the pointer to the first element. Value
+    /// operands: `[a]`; `a` is borrowed, not consumed, and the pointer does
+    /// not keep it alive.
+    UnsafeDataPtr,
 }
 
 /// A built-in operation on a shared mutable [`Cell`](crate::semi::ty::TyKind::Cell),
@@ -278,6 +282,7 @@ impl ArrayFn {
             "set" => Some(ArrayFn::Set),
             "fold" => Some(ArrayFn::Fold),
             "dim" => Some(ArrayFn::Dim),
+            "unsafe_data_ptr" => Some(ArrayFn::UnsafeDataPtr),
             _ => None,
         }
     }
@@ -291,6 +296,7 @@ impl ArrayFn {
             ArrayFn::Set => "set",
             ArrayFn::Fold => "fold",
             ArrayFn::Dim => "dim",
+            ArrayFn::UnsafeDataPtr => "unsafe_data_ptr",
         }
     }
 
@@ -712,6 +718,8 @@ pub enum StrFn {
     /// `slice(s, offset)`: the suffix from byte `offset`, clamped to empty
     /// when the offset passes the end.
     Slice,
+    /// `unsafe_data_ptr(s)`: the pointer to the first byte.
+    UnsafeDataPtr,
 }
 
 impl StrFn {
@@ -721,6 +729,7 @@ impl StrFn {
             "len" => Some(StrFn::Len),
             "byte_at" => Some(StrFn::ByteAt),
             "slice" => Some(StrFn::Slice),
+            "unsafe_data_ptr" => Some(StrFn::UnsafeDataPtr),
             _ => None,
         }
     }
@@ -731,6 +740,7 @@ impl StrFn {
             StrFn::Len => "len",
             StrFn::ByteAt => "byte_at",
             StrFn::Slice => "slice",
+            StrFn::UnsafeDataPtr => "unsafe_data_ptr",
         }
     }
 }

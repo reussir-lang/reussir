@@ -106,6 +106,22 @@ func.func @provenance(%p: !P) -> !P {
   return %plain : !P
 }
 
+// CHECK-LABEL: define ptr @str_data(
+// CHECK-SAME: { ptr, i64 } %[[S:.*]])
+// CHECK: extractvalue { ptr, i64 } %[[S]], 0
+func.func @str_data(%s: !reussir.str<global>) -> !P {
+  %p = reussir.str.data_ptr (%s : !reussir.str<global>) : !P
+  return %p : !P
+}
+
+// CHECK-LABEL: define ptr @view_data(
+// CHECK: ret ptr
+func.func @view_data(%m: memref<4xf64>) -> !P {
+  %c = memref.memory_space_cast %m : memref<4xf64> to memref<4xf64, #ptr.generic_space>
+  %p = ptr.to_ptr %c : memref<4xf64, #ptr.generic_space> -> !P
+  return %p : !P
+}
+
 // CHECK-LABEL: define ptr @null()
 // CHECK: ret ptr null
 func.func @null() -> !P {
