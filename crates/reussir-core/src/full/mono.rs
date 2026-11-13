@@ -2627,17 +2627,14 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         }
     }
 
-    /// A numeric literal is arbitrary-precision until here; now that its type
-    /// is ground, reject values the type cannot hold. Integers must be in
-    /// range; a float that would round to infinity is an error (there is no
-    /// literal syntax for `inf`, so it can only be a mistake). Checked on the
-    /// *lowered* kind so folded negations (`-128 : i8`) see the signed value.
     /// The ground backstop of the checker's pointee check.
-    fn check_ptr_pointee(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
+    fn check_ptr_pointee(&mut self, op: &str, ty: Ty<'tcx>, span: Option<Span>) {
         if let Some(reason) = crate::semi::ty_eval::ptr_pointee_rejection(ty) {
             self.error(
                 span,
-                format!("this instantiation accesses a type through a pointer that cannot be accessed through one ({reason})"),
+                format!(
+                    "`core::ptr::{op}` cannot access the type of this instantiation ({reason})"
+                ),
             );
         }
     }
@@ -2671,6 +2668,11 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         }
     }
 
+    /// A numeric literal is arbitrary-precision until here; now that its type
+    /// is ground, reject values the type cannot hold. Integers must be in
+    /// range; a float that would round to infinity is an error (there is no
+    /// literal syntax for `inf`, so it can only be a mistake). Checked on the
+    /// *lowered* kind so folded negations (`-128 : i8`) see the signed value.
     fn check_literal_range(
         &mut self,
         kind: &mir::ExprKind<'tcx>,
@@ -2887,7 +2889,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             ExprKind::TypeOffset(t) => {
                 let t = subst_ty(self.tcx, *t, subst);
                 self.note_records(t);
-                self.check_ptr_pointee(t, span);
+                self.check_ptr_pointee("type_offset", t, span);
                 M::TypeOffset(t)
             }
             ExprKind::Cast(e, t) => {
@@ -3008,7 +3010,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         _ => None,
                     };
                     if let Some(ty) = accessed {
-                        self.check_ptr_pointee(ty, span);
+                        self.check_ptr_pointee(func.as_str(), ty, span);
                     }
                 }
                 M::Intrinsic {

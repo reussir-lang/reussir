@@ -556,7 +556,8 @@ unsafe extern "C" {
     );
 
     /// Set the access flags of a `ptr.load` or `ptr.store`, which are
-    /// operation properties. A zero `alignment` leaves it unset.
+    /// operation properties. A zero `alignment` leaves it unset. Returns
+    /// false if the operation cannot take the flags.
     pub fn reussirPtrAccessSetFlags(
         op: mlir_sys::MlirOperation,
         is_volatile: bool,
@@ -564,5 +565,5 @@ unsafe extern "C" {
         is_invariant: bool,
         is_invariant_group: bool,
         alignment: u64,
-    );
+    ) -> bool;
 }

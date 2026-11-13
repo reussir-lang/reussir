@@ -89,8 +89,9 @@ void reussirOperationSetLocation(MlirOperation op, MlirLocation location);
 
 // Set the access flags of a `ptr.load` or `ptr.store`. They are operation
 // properties, which the generic operation builder cannot set. `alignment` is
-// in bytes; zero leaves it unset. `invariant` applies to a load only.
-void reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
+// in bytes; zero leaves it unset. Returns false if `op` is neither operation,
+// or is a store asked to be `invariant`, which only a load can be.
+bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
                               bool isNonTemporal, bool isInvariant,
                               bool isInvariantGroup, uint64_t alignment);
 

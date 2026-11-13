@@ -39,6 +39,17 @@ pub fn tag(p: ConstPtr<Generic>) -> ConstPtr<Generic> { ptr::mask(p, 7) }
 // LLVM: ptrtoaddr ptr %0 to i64
 pub fn bits(p: Ptr<Generic>) -> u64 { ptr::addr(p) }
 
+// A `bool` is a byte in memory.
+// CHECK-LABEL: func.func @{{.*}}flip
+// CHECK: %[[BYTE:.*]] = ptr.load %arg0 : !ptr.ptr<#ptr.generic_space> -> i8
+// CHECK: %[[FLAG:.*]] = arith.trunci %[[BYTE]] : i8 to i1
+// CHECK: %[[WIDE:.*]] = arith.extui %{{.*}} : i1 to i8
+// CHECK: ptr.store %[[WIDE]], %arg0 : i8, !ptr.ptr<#ptr.generic_space>
+// LLVM-LABEL: define {{.*}}void @{{.*}}flip
+// LLVM: load i8, ptr %0, align 1
+// LLVM: store i8 %{{.*}}, ptr %0, align 1
+pub fn flip(p: Ptr<Generic>) { ptr::store(p, !ptr::load<bool>(p)) }
+
 // HIR-DAG: intrinsic#ptr#load#769(v0 : Ptr<GenericAddrSpace>) : u32
 // MIR-DAG: intrinsic#ptr#load#769(v0 : Ptr<GenericAddrSpace>) : u32
 // CHECK-LABEL: func.func @{{.*}}mmio

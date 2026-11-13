@@ -577,6 +577,10 @@ pub struct PtrAccess {
 }
 
 impl PtrAccess {
+    /// The largest alignment an access may state, which is the largest the
+    /// LLVM dialect's `load` and `store` builders take.
+    pub const MAX_ALIGN: u64 = 1 << 31;
+
     /// The packed form printed in the textual IR: the four flags in the low
     /// bits, then one more than the base-two logarithm of the alignment.
     pub fn bits(self) -> u32 {
@@ -593,7 +597,7 @@ impl PtrAccess {
 
     pub fn from_bits(bits: u32) -> Option<PtrAccess> {
         let align = bits >> 8;
-        (bits & 0xf0 == 0 && align <= 64).then(|| PtrAccess {
+        (bits & 0xf0 == 0 && align <= 32).then(|| PtrAccess {
             volatile: bits & 1 != 0,
             nontemporal: bits & 2 != 0,
             invariant: bits & 4 != 0,
@@ -1061,6 +1065,15 @@ mod tests {
                 Some(op)
             );
         }
+        for flags in 0..16u32 {
+            for log2 in 0..=32u32 {
+                let access = PtrAccess::from_bits(flags | log2 << 8).expect("valid access");
+                assert_eq!(access.bits(), flags | log2 << 8);
+                assert!(access.align <= PtrAccess::MAX_ALIGN);
+            }
+        }
+        assert_eq!(PtrAccess::from_bits(33 << 8), None);
+        assert_eq!(PtrAccess::from_bits(1 << 4), None);
         let access = PtrAccess {
             volatile: true,
             nontemporal: false,
@@ -1068,7 +1081,6 @@ mod tests {
             invariant_group: true,
             align: 4096,
         };
-        assert_eq!(PtrAccess::from_bits(access.bits()), Some(access));
         let load = IntrinsicOp::Ptr {
             func: PtrFn::Load,
             access,

@@ -109,20 +109,25 @@ void reussirOperationSetLocation(MlirOperation op, MlirLocation location) {
   unwrap(op)->setLoc(unwrap(location));
 }
 
-void reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
+bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
                               bool isNonTemporal, bool isInvariant,
                               bool isInvariantGroup, uint64_t alignment) {
   auto set = [&](auto access) {
     access.setVolatile_(isVolatile);
     access.setNontemporal(isNonTemporal);
     access.setInvariantGroup(isInvariantGroup);
-    if (alignment != 0)
-      access.setAlignment(static_cast<int64_t>(alignment));
+    access.setAlignment(alignment == 0
+                            ? std::nullopt
+                            : std::optional(static_cast<int64_t>(alignment)));
   };
   if (auto load = llvm::dyn_cast<mlir::ptr::LoadOp>(unwrap(op))) {
     set(load);
     load.setInvariant(isInvariant);
-  } else {
-    set(llvm::cast<mlir::ptr::StoreOp>(unwrap(op)));
+    return true;
   }
+  if (auto store = llvm::dyn_cast<mlir::ptr::StoreOp>(unwrap(op))) {
+    set(store);
+    return !isInvariant;
+  }
+  return false;
 }

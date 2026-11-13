@@ -3957,7 +3957,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     plain
                 };
                 let result = ty_arg.unwrap_or_else(|| self.infer.new_hole_ty());
-                self.report_ptr_pointee(result, &shown, span);
                 mk(self, PtrFn::Load, access, vec![ptr], result)
             }
             PtrFn::Store | PtrFn::StoreExtended => {
@@ -3982,7 +3981,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     Some(ty) => self.check_expr(&fc.args[1], ty),
                     None => self.infer_expr(&fc.args[1]),
                 };
-                self.report_ptr_pointee(value.ty, &shown, span);
                 let access = if func == PtrFn::StoreExtended {
                     let [volatile, nontemporal, invariant_group, align] = &fc.args[2..] else {
                         unreachable!("arity checked above");
@@ -4037,7 +4035,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         )
     }
 
-    /// A load or store alignment: a `u64` constant, zero or a power of two.
+    /// A load or store alignment: a `u64` constant, zero or a power of two
+    /// no larger than [`PtrAccess::MAX_ALIGN`](crate::intrinsic::PtrAccess::MAX_ALIGN).
     fn ptr_access_align(&mut self, e: &surface::Expr) -> u64 {
         use crate::semi::const_eval::{ConstScalar, ConstValue};
         let u64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
@@ -4045,10 +4044,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return 0;
         };
         let align = u64::try_from(&n).expect("a `u64` constant fits `u64`");
-        if align != 0 && !align.is_power_of_two() {
+        let max = crate::intrinsic::PtrAccess::MAX_ALIGN;
+        if align != 0 && (!align.is_power_of_two() || align > max) {
             self.error(
                 Some(e.span()),
-                "the alignment of a pointer access must be zero or a power of two",
+                format!(
+                    "the alignment of a pointer access must be zero or a power of two no larger than {max}"
+                ),
             );
             return 0;
         }
@@ -5967,6 +5969,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // it — where the annotation belongs — and suppressed on the ancestors.
         e.kind = self.zonk_kind(e.kind, e.span);
         e.ty = self.zonk_ty(e.ty, e.span);
+        if let ExprKind::Intrinsic {
+            op: crate::intrinsic::IntrinsicOp::Ptr { func, .. },
+            args,
+        } = &e.kind
+        {
+            // The accessed type may be inferred, so it is checked once resolved.
+            let accessed = match func {
+                crate::intrinsic::PtrFn::Load => Some(e.ty),
+                crate::intrinsic::PtrFn::Store => Some(args[1].ty),
+                _ => None,
+            };
+            if let Some(ty) = accessed {
+                let shown = format!("`core::ptr::{}`", func.as_str());
+                self.report_ptr_pointee(ty, &shown, e.span);
+            }
+        }
         let validation = match &e.kind {
             ExprKind::Async(c) => crate::async_check::hir(&c.captures, &c.body, e.ty),
             ExprKind::TensorOp { op, args } => crate::async_check::hir_tensor_op(*op, e.ty, args),

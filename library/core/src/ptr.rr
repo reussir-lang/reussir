@@ -26,7 +26,8 @@ pub struct ConstPtr<A> { }
 
 // Declaration sites of the pointer operations. A pointer parameter `P` is a
 // `Ptr<A>` or a `ConstPtr<A>`; only a `Ptr<A>` is stored through. `T` is an
-// integer, a floating-point number, `bool`, `char` or a pointer. Every
+// integer, a floating-point number, `bool`, `char` or a pointer. A call
+// writes at most `T`; the pointer types are taken from the arguments. Every
 // access is the caller's to justify: the pointer must be valid for it.
 
 /// The pointer `bytes` bytes after `ptr`.

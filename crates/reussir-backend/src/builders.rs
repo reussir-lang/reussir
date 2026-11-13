@@ -863,7 +863,7 @@ pub struct PtrAccess {
 }
 
 fn set_ptr_access(operation: &Operation<'_>, access: PtrAccess) {
-    unsafe {
+    let set = unsafe {
         sys::reussirPtrAccessSetFlags(
             operation.to_raw(),
             access.volatile,
@@ -871,8 +871,9 @@ fn set_ptr_access(operation: &Operation<'_>, access: PtrAccess) {
             access.invariant,
             access.invariant_group,
             access.align,
-        );
-    }
+        )
+    };
+    assert!(set, "access flags apply to a `ptr.load` or `ptr.store`");
 }
 
 /// `ptr.load %ptr : <ptr> -> <result_type>`, with the flags of `access`.

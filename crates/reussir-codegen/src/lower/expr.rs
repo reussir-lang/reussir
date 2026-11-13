@@ -1008,22 +1008,44 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                             self.tys.mlir_ty(e.ty)?,
                             loc,
                         ),
+                        // A `bool` occupies a byte in memory, where it is 0 or 1.
+                        PtrFn::Load if matches!(e.ty.kind(), TyKind::Bool) => {
+                            let byte = self.append(
+                                block,
+                                builders::ptr_load(
+                                    operands[0],
+                                    IntegerType::new(self.context, 8).into(),
+                                    access,
+                                    loc,
+                                ),
+                            );
+                            arith::trunci(byte, self.tys.mlir_ty(e.ty)?, loc)
+                        }
                         PtrFn::Load => {
                             builders::ptr_load(operands[0], self.tys.mlir_ty(e.ty)?, access, loc)
                         }
                         PtrFn::Store => {
+                            let value = if matches!(args[1].ty.kind(), TyKind::Bool) {
+                                let byte = IntegerType::new(self.context, 8).into();
+                                self.append(block, arith::extui(operands[1], byte, loc))
+                            } else {
+                                operands[1]
+                            };
                             block.append_operation(builders::ptr_store(
-                                operands[1],
+                                value,
                                 operands[0],
                                 access,
                                 loc,
                             ));
                             return Ok(None);
                         }
-                        other => {
+                        PtrFn::TypeOffset
+                        | PtrFn::Advance
+                        | PtrFn::LoadExtended
+                        | PtrFn::StoreExtended => {
                             return err(format!(
                                 "`core::ptr::{}` reached lowering unelaborated",
-                                other.as_str()
+                                func.as_str()
                             ));
                         }
                     };
