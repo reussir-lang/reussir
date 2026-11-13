@@ -49,6 +49,7 @@
 #include <mlir/Dialect/Vector/IR/VectorOps.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/Target/LLVMIR/Dialect/ArmSVE/ArmSVEToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 
@@ -135,6 +136,8 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
   // Translations needed to lower the LLVM dialect to LLVM IR.
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerBuiltinDialectTranslation(registry);
+  // The SVE vector lowering leaves `arm_sve` intrinsic operations.
+  mlir::registerArmSVEDialectTranslation(registry);
 }
 } // namespace
 

@@ -4323,6 +4323,70 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 builders::vector_insert(self.context, values[1], values[0], &positions(2)?, loc)
             }
             SimdFn::Select => arith::select(values[0], values[1], values[2], loc),
+            SimdFn::MaskFirst => {
+                let index_ty = Type::index(self.context);
+                let counts: Vec<_> = values
+                    .iter()
+                    .map(|&n| self.append(block, arith::index_castui(n, index_ty, loc)))
+                    .collect();
+                builders::vector_create_mask(&counts, result, loc)
+            }
+            SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => {
+                use builders::VectorCombiningKind as Kind;
+                let TyKind::Simd { dims, scalable, .. } = *args[0].ty.kind() else {
+                    return err("a mask operation takes a mask");
+                };
+                // A reduction reads one dimension, so several are flattened.
+                let lanes = dims.iter().product::<u64>() as i64;
+                let i1 = IntegerType::new(self.context, 1).into();
+                let i32_ty: Type = IntegerType::new(self.context, 32).into();
+                let flat_ty = reussir_backend::dialect::ty::vector(i1, &[lanes], scalable);
+                let counters = reussir_backend::dialect::ty::vector(i32_ty, &[lanes], scalable);
+                let mask = match dims.len() {
+                    1 => values[0],
+                    _ => self.append(block, builders::vector_shape_cast(values[0], flat_ty, loc)),
+                };
+                let reduce = |kind, vector, ty| {
+                    builders::vector_reduction(self.context, kind, vector, ty, loc)
+                };
+                match func {
+                    SimdFn::Any => reduce(Kind::Or, mask, i1),
+                    SimdFn::All => reduce(Kind::And, mask, i1),
+                    SimdFn::Count => {
+                        let ones = self.append(block, arith::extui(mask, counters, loc));
+                        let total = self.append(block, reduce(Kind::Add, ones, i32_ty));
+                        arith::extui(total, result, loc)
+                    }
+                    _ => {
+                        // The smallest index among the set lanes; a clear
+                        // lane counts as the number of lanes.
+                        let fixed = self.append(
+                            block,
+                            arith::constant(
+                                self.context,
+                                IntegerAttribute::new(i32_ty, lanes).into(),
+                                loc,
+                            ),
+                        );
+                        let count = match scalable {
+                            false => fixed,
+                            true => {
+                                let vscale =
+                                    self.append(block, builders::vector_vscale(self.context, loc));
+                                let vscale =
+                                    self.append(block, arith::index_castui(vscale, i32_ty, loc));
+                                self.append(block, arith::muli(vscale, fixed, loc))
+                            }
+                        };
+                        let none =
+                            self.append(block, builders::vector_broadcast(count, counters, loc));
+                        let indices = self.append(block, builders::vector_step(counters, loc));
+                        let live = self.append(block, arith::select(mask, indices, none, loc));
+                        let first = self.append(block, reduce(Kind::MinUI, live, i32_ty));
+                        arith::extui(first, result, loc)
+                    }
+                }
+            }
             SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
             _ => {
                 // The lanewise operations: the lane type of the operands
@@ -4334,7 +4398,13 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 let lane = self.tys.mlir_ty(elem)?;
                 let float = matches!(elem.kind(), TyKind::Fp(_));
                 let signed = matches!(elem.kind(), TyKind::Int(IntTy::Signed(_)));
-                let (a, b) = (values[0], values.get(1).copied().unwrap_or(values[0]));
+                let Some((arity, _, compares)) = func.lanewise() else {
+                    return err("vector operation reached lowering unelaborated");
+                };
+                // One operand more than the operation needs is its mask.
+                let mask = values.get(arity).copied();
+                let a = values[0];
+                let b = if arity >= 2 { values[1] } else { a };
                 // Every lane set to an integer constant, for `neg` and `not`.
                 let all = |n: i64| {
                     let constant = self.append(
@@ -4354,9 +4424,16 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     true => arith::cmpf(self.context, fp, a, b, loc),
                     false => arith::cmpi(self.context, int[usize::from(signed)], a, b, loc),
                 };
+                // A masked lane must not trap: its integer divisor becomes one.
+                let b = match mask {
+                    Some(mask) if !float && matches!(func, SimdFn::Div | SimdFn::Rem) => {
+                        self.append(block, arith::select(mask, b, all(1), loc))
+                    }
+                    _ => b,
+                };
                 use CmpfPredicate as F;
                 use CmpiPredicate as I;
-                match (func, float, signed) {
+                let unmasked = match (func, float, signed) {
                     (SimdFn::Add, false, _) => arith::addi(a, b, loc),
                     (SimdFn::Add, true, _) => arith::addf(a, b, loc),
                     (SimdFn::Sub, false, _) => arith::subi(a, b, loc),
@@ -4405,6 +4482,18 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     (SimdFn::Gt, ..) => cmp([I::Ugt, I::Sgt], F::Ogt),
                     (SimdFn::Ge, ..) => cmp([I::Uge, I::Sge], F::Oge),
                     _ => return err("vector operation reached lowering unelaborated"),
+                };
+                match mask {
+                    None => unmasked,
+                    Some(mask) => {
+                        let value = self.append(block, unmasked);
+                        // A masked lane is false in a comparison and keeps
+                        // the first operand otherwise.
+                        match compares {
+                            true => arith::andi(value, mask, loc),
+                            false => arith::select(mask, value, a, loc),
+                        }
+                    }
                 }
             }
         };
