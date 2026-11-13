@@ -532,6 +532,42 @@ pub fn simd_extents_text(dims: &[u64], scalable: bool) -> String {
         .join(", ")
 }
 
+/// Whether a scalable vector occurs anywhere in `ty`.
+pub fn mentions_scalable_simd(ty: Ty<'_>) -> bool {
+    match *ty.kind() {
+        TyKind::Simd { scalable, .. } => scalable,
+        TyKind::Record { args, .. } | TyKind::Tuple(args) | TyKind::Future(args) => {
+            args.iter().any(|&a| mentions_scalable_simd(a))
+        }
+        TyKind::Closure { params, ret } => {
+            params.iter().any(|&p| mentions_scalable_simd(p)) || mentions_scalable_simd(ret)
+        }
+        TyKind::Array { elem, .. }
+        | TyKind::Tensor { elem, .. }
+        | TyKind::DevArray { elem, .. }
+        | TyKind::Cell { elem, .. }
+        | TyKind::Nullable(elem)
+        | TyKind::ConstSeq(elem)
+        | TyKind::Arc(elem) => mentions_scalable_simd(elem),
+        _ => false,
+    }
+}
+
+/// Why `ty` is not a legal type because of a scalable vector in it, if it is
+/// not. The size of a scalable vector is unknown when the program is
+/// compiled, so it has no place in a layout: it is a value on its own, and
+/// nothing may contain one. That includes a tuple, which is one value with
+/// a layout.
+pub fn scalable_storage_rejection(ty: Ty<'_>) -> Option<&'static str> {
+    match *ty.kind() {
+        TyKind::Simd { .. } => None,
+        _ if mentions_scalable_simd(ty) => Some(
+            "a scalable vector has no fixed size, so only a parameter, a result or a local may be one",
+        ),
+        _ => None,
+    }
+}
+
 /// Why `ty` cannot be the element of a vector, if it cannot: lanes are
 /// fixed-width integers up to 64 bits, `f32`, `f64` or `bool`.
 pub fn simd_elem_rejection(ty: Ty<'_>) -> Option<&'static str> {
