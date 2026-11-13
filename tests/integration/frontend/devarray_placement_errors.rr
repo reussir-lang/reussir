@@ -16,7 +16,7 @@
 // UNKNOWN: multi-device array placement requires concrete sharding
 
 // A malformed placement descriptor imported through MIR is rejected safely.
-// RUN: echo 'record @P: value placement "#reussir.target<devices = [0, 0]>" struct P { }; pub fn @f(v0 (x): DevArray<f32, P>) -> DevArray<f32, P> { v0 : DevArray<f32, P> }' > %t.bad.mir
+// RUN: echo 'record @P: value placement "#reussir.target<devices = [0, 0]>" struct #P { }; pub fn @f(v0 (x): DevArray<f32, #P>) -> DevArray<f32, #P> { v0 : DevArray<f32, #P> }' > %t.bad.mir
 // RUN: %not %rrc %t.bad.mir --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=DUPLICATE
 // DUPLICATE: distinct logical device IDs
 
