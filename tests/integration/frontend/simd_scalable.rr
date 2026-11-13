@@ -1,0 +1,35 @@
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit llvm-ir -o %t.ll
+// RUN: %FileCheck %s --check-prefix=SVE < %t.ll
+// RUN: %rrc %s --target-triple riscv64-unknown-linux-gnu --target-features=+v --emit llvm-ir -o %t.rv.ll
+// RUN: %FileCheck %s --check-prefix=SVE < %t.rv.ll
+// RUN: %not %rrc %s --target-triple x86_64-unknown-linux-gnu --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=TARGET
+// RUN: %not %rrc %s --target-triple aarch64-unknown-linux-gnu --emit mlir -o - 2>&1 | %FileCheck %s --check-prefix=TARGET
+// RUN: %not %rrc %S/Inputs/simd_scalable_errors.rr --emit mir -o - 2>&1 | %FileCheck %S/Inputs/simd_scalable_errors.rr --check-prefix=ERR
+
+// A target without scalable vectors rejects the program where it uses one.
+// TARGET: does not support scalable vectors; they need AArch64 with SVE or RISC-V with the vector extension
+
+// HIR-DAG: fn #rows(v0 (v): Simd<[f32; 2, [4]]>) -> Simd<[f32; 2, [4]]>
+// CHECK-LABEL: func.func @{{.*}}rows(%arg0: vector<2x[4]xf32>) -> vector<2x[4]xf32>
+// SVE-LABEL: define {{.*}}[2 x <vscale x 4 x float>] @{{.*}}rows(
+pub fn rows(v: Simd<[f32; 2, [4]]>) -> Simd<[f32; 2, [4]]> { v }
+
+// The last extent in brackets counts multiples of `vscale`.
+// HIR-DAG: fn #bytes(v0 (v): Simd<[u8; [16]]>) -> Simd<[u8; [16]]>
+// MIR-DAG: (v0 (v): Simd<[u8; [16]]>) -> Simd<[u8; [16]]>
+// CHECK-LABEL: func.func @{{.*}}bytes(%arg0: vector<[16]xi8>) -> vector<[16]xi8>
+// SVE-LABEL: define {{.*}}<vscale x 16 x i8> @{{.*}}bytes(<vscale x 16 x i8>
+pub fn bytes(v: Simd<[u8; [16]]>) -> Simd<[u8; [16]]> { v }
+
+// A function generic in a value may be instantiated with one.
+fn same<T>(x: T) -> T { x }
+// CHECK-LABEL: func.func @{{.*}}through
+pub fn through(v: Simd<[i32; [4]]>) -> Simd<[i32; [4]]> { same(v) }
