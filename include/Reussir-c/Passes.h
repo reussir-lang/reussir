@@ -135,6 +135,8 @@ MlirPass reussirCreateLowerAffinePass(void);
 // Lowers the `vector` dialect to the LLVM dialect, as the upstream
 // `convert-vector-to-llvm` pass. `armSVE` selects the Arm SVE lowerings.
 MlirPass reussirCreateConvertVectorToLLVMPass(bool armSVE);
+// Gives scalable vectors a scale of one, for a target without them.
+MlirPass reussirCreateFixVectorScalePass(void);
 // Makes stored scalable masks and multi-dimensional scalable vectors legal
 // for Arm SVE, as the upstream `arm-sve-legalize-vector-storage` pass. It
 // runs on a function.

@@ -86,29 +86,6 @@ impl<'tcx> Program<'tcx> {
     /// Whether the program handles a built-in integer (`Nat` or `Int`) — in a
     /// signature, an expression, or a record it lays out — and so needs the
     /// rcgmp runtime when it is linked.
-    /// Where the program first uses a scalable vector, if it does: the span
-    /// and file of a function whose signature has one, or of an expression
-    /// of such a type.
-    pub fn scalable_vector_use(&self) -> Option<(Option<Span>, FileId)> {
-        use crate::semi::ty::mentions_scalable_simd;
-        self.functions.iter().find_map(|function| {
-            let in_signature = function.params.iter().any(|p| mentions_scalable_simd(p.ty))
-                || mentions_scalable_simd(function.return_ty);
-            if in_signature {
-                return Some((function.body.and_then(|body| body.span), function.file));
-            }
-            let mut found = None;
-            if let Some(body) = function.body {
-                for_each_expr(body, &mut |e| {
-                    if found.is_none() && mentions_scalable_simd(e.ty) {
-                        found = Some((e.span, function.file));
-                    }
-                });
-            }
-            found
-        })
-    }
-
     pub fn uses_bigint(&self) -> bool {
         let in_records = self.records.iter().any(|record| match record.layout {
             RecordLayout::Compound(members) => members.iter().any(|m| contains_bigint(m.ty)),
