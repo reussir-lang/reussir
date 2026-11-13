@@ -1,0 +1,44 @@
+//! Vectors of lanes.
+//!
+//! `Simd<[T; d...]>` is a vector whose lanes are integers, `f32`, `f64` or
+//! `bool`; a vector of `bool` is a mask. It may have several extents, and
+//! the last may be scalable, written `[n]`: `n` times a factor of the
+//! machine that is known only when the program runs. A fixed vector is a
+//! value like any other. A scalable one is only a parameter, a result or a
+//! local.
+
+// Declaration sites of the vector operations. `V` is a vector type, written
+// at the call; the argument and result types below that mention its lanes
+// are spelled with placeholders, because they depend on `V`.
+
+/// The vector whose every lane is `x`.
+#[lang("core::simd::splat")]
+pub fn splat<V, T>(x: T) -> V;
+
+/// The one-dimensional integer vector with the lanes 0, 1, 2, ....
+#[lang("core::simd::step")]
+pub fn step<V>() -> V;
+
+/// The factor of scalable extents on this machine: at least 1.
+#[lang("core::simd::vscale")]
+pub fn vscale() -> u64;
+
+/// The number of lanes of `V`.
+#[lang("core::simd::lanes")]
+pub fn lanes<V>() -> u64;
+
+/// The fixed vector with the given lanes, in row-major order. A call passes
+/// one argument per lane.
+#[lang("core::simd::from_elements")]
+pub fn from_elements<V, T>(x: T) -> V;
+
+/// The lane of `v` at the indices, one per dimension, or the sub-vector when
+/// fewer are given. An index into the last dimension may be computed; the
+/// others are literals. An index outside the vector yields an unspecified
+/// lane.
+#[lang("core::simd::extract")]
+pub fn extract<V, T>(v: V, index: u64) -> T;
+
+/// `v` with the lane or sub-vector at the indices replaced by `x`.
+#[lang("core::simd::insert")]
+pub fn insert<V, T>(v: V, x: T, index: u64) -> V;

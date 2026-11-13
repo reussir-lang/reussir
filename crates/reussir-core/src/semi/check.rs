@@ -3751,6 +3751,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if segs.as_slice() == ["core", "ptr"] {
             return Some(self.infer_ptr_intrinsic(fc, span));
         }
+        if segs.as_slice() == ["core", "simd"] {
+            return Some(self.infer_simd_intrinsic(fc, span));
+        }
         // Intrinsic families use their compiler-defined checkers.
         let ["core", "intrinsic", family] = segs.as_slice() else {
             let shown = self.path_display(&fc.name);
@@ -3794,6 +3797,255 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// `core::ptr::<func>` ([`crate::intrinsic::PtrFn`]). A pointer
     /// operand is a `Ptr<A>` or a `ConstPtr<A>`; an operation returning a
     /// pointer returns the type of its operand.
+    /// The vector type argument of a `core::simd` operation.
+    fn simd_type_arg(
+        &mut self,
+        fc: &surface::FuncCall,
+        shown: &str,
+        span: Option<Span>,
+    ) -> Option<(Ty<'tcx>, Ty<'tcx>, &'tcx [u64], bool)> {
+        let [Some(arg)] = fc.ty_args.as_slice() else {
+            self.error(
+                span,
+                format!("{shown} requires the vector type as its type argument"),
+            );
+            return None;
+        };
+        let ty = self.eval_type(arg);
+        match *ty.kind() {
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => Some((ty, elem, dims, scalable)),
+            TyKind::Bottom => None,
+            _ => {
+                self.error(
+                    span,
+                    format!("{shown} makes a vector, not a `{}`", self.ty_display(ty)),
+                );
+                None
+            }
+        }
+    }
+
+    /// A vector operand of a `core::simd` operation.
+    fn infer_simd_operand(
+        &mut self,
+        arg: &surface::Expr,
+        shown: &str,
+    ) -> Option<(Expr<'tcx>, Ty<'tcx>, &'tcx [u64], bool)> {
+        let vector = self.infer_expr(arg);
+        let ty = self.infer.resolve(vector.ty);
+        match *ty.kind() {
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => Some((vector, elem, dims, scalable)),
+            TyKind::Bottom => None,
+            _ => {
+                self.error(
+                    vector.span,
+                    format!("{shown} takes a vector, found `{}`", self.ty_display(ty)),
+                );
+                None
+            }
+        }
+    }
+
+    /// The indices of `extract` and `insert`: at most one per dimension. An
+    /// index into the last dimension may be a run-time value; the others are
+    /// literals, and a literal is checked against a fixed extent.
+    fn check_simd_indices(
+        &mut self,
+        args: &[surface::Expr],
+        dims: &[u64],
+        scalable: bool,
+        shown: &str,
+        span: Option<Span>,
+    ) -> Option<Vec<Expr<'tcx>>> {
+        if args.is_empty() || args.len() > dims.len() {
+            self.error(
+                span,
+                format!(
+                    "{shown} takes between 1 and {} indices for this vector, got {}",
+                    dims.len(),
+                    args.len()
+                ),
+            );
+            return None;
+        }
+        let u64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
+        let last = dims.len() - 1;
+        let mut indices = Vec::with_capacity(args.len());
+        for (i, arg) in args.iter().enumerate() {
+            let index = self.check_expr(arg, u64_ty);
+            let literal = match index.kind {
+                ExprKind::ConstInt(n) => u64::try_from(n).ok(),
+                _ => None,
+            };
+            if literal.is_none() && i != last {
+                self.error(
+                    index.span,
+                    format!("{shown} takes a literal index for every dimension but the last"),
+                );
+                return None;
+            }
+            let fixed = !(scalable && i == last);
+            if fixed && literal.is_some_and(|n| n >= dims[i]) {
+                self.error(
+                    index.span,
+                    format!("index out of range: the extent is {}", dims[i]),
+                );
+                return None;
+            }
+            indices.push(index);
+        }
+        Some(indices)
+    }
+
+    fn infer_simd_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, SimdFn};
+        use crate::semi::ty::IntTy;
+
+        let name = self.sym(fc.name.basename).to_owned();
+        let Some(func) = SimdFn::parse(&name) else {
+            self.error(span, format!("unknown simd intrinsic `core::simd::{name}`"));
+            return self.poison(span);
+        };
+        let shown = format!("`core::simd::{name}`");
+        let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
+        let mk = |this: &mut Self, func, args, result| {
+            this.mk_expr(
+                ExprKind::Intrinsic {
+                    op: IntrinsicOp::Simd { func },
+                    args,
+                },
+                result,
+                span,
+            )
+        };
+        let takes_type = matches!(
+            func,
+            SimdFn::Splat | SimdFn::Step | SimdFn::Lanes | SimdFn::FromElements
+        );
+        if !takes_type && !fc.ty_args.is_empty() {
+            self.error(span, format!("{shown} takes no type arguments"));
+            return self.poison(span);
+        }
+        let arity = match func {
+            SimdFn::Splat => Some(1),
+            SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale => Some(0),
+            SimdFn::FromElements | SimdFn::Extract | SimdFn::Insert => None,
+        };
+        if arity.is_some_and(|n| n != fc.args.len()) {
+            self.error(
+                span,
+                format!(
+                    "{shown} expects {} argument(s), got {}",
+                    arity.unwrap_or_default(),
+                    fc.args.len()
+                ),
+            );
+            return self.poison(span);
+        }
+        match func {
+            SimdFn::Vscale => mk(self, func, Vec::new(), u64_ty),
+            SimdFn::Splat => {
+                let Some((ty, elem, ..)) = self.simd_type_arg(fc, &shown, span) else {
+                    return self.poison(span);
+                };
+                let value = self.check_expr(&fc.args[0], elem);
+                mk(self, func, vec![value], ty)
+            }
+            SimdFn::Step => {
+                let Some((ty, elem, dims, _)) = self.simd_type_arg(fc, &shown, span) else {
+                    return self.poison(span);
+                };
+                let wide = matches!(elem.kind(), TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) if *w >= 8);
+                if dims.len() != 1 || !wide {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} makes a one-dimensional vector of integers of at least 8 bits, not a `{}`",
+                            self.ty_display(ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                mk(self, func, Vec::new(), ty)
+            }
+            SimdFn::Lanes => {
+                let Some((_, _, dims, scalable)) = self.simd_type_arg(fc, &shown, span) else {
+                    return self.poison(span);
+                };
+                let count = self.tcx.alloc(malachite_nz::integer::Integer::from(
+                    dims.iter().product::<u64>(),
+                ));
+                let count = self.mk_expr(ExprKind::ConstInt(count), u64_ty, span);
+                if !scalable {
+                    return count;
+                }
+                let vscale = mk(self, SimdFn::Vscale, Vec::new(), u64_ty);
+                self.mk_expr(
+                    ExprKind::Arith(Box::new(vscale), ArithOp::Mul, Box::new(count)),
+                    u64_ty,
+                    span,
+                )
+            }
+            SimdFn::FromElements => {
+                let Some((ty, elem, dims, scalable)) = self.simd_type_arg(fc, &shown, span) else {
+                    return self.poison(span);
+                };
+                let lanes = dims.iter().product::<u64>();
+                if scalable || fc.args.len() as u64 != lanes {
+                    let expected = match scalable {
+                        true => "a fixed vector type".to_string(),
+                        false => format!("{lanes} elements, got {}", fc.args.len()),
+                    };
+                    self.error(span, format!("{shown} expects {expected}"));
+                    return self.poison(span);
+                }
+                let values = fc.args.iter().map(|a| self.check_expr(a, elem)).collect();
+                mk(self, func, values, ty)
+            }
+            SimdFn::Extract | SimdFn::Insert => {
+                let fixed = if func == SimdFn::Insert { 2 } else { 1 };
+                if fc.args.len() < fixed {
+                    self.error(span, format!("{shown} expects a vector first"));
+                    return self.poison(span);
+                }
+                let Some((vector, elem, dims, scalable)) =
+                    self.infer_simd_operand(&fc.args[0], &shown)
+                else {
+                    return self.poison(span);
+                };
+                let vector_ty = vector.ty;
+                let Some(indices) =
+                    self.check_simd_indices(&fc.args[fixed..], dims, scalable, &shown, span)
+                else {
+                    return self.poison(span);
+                };
+                // What the indices select: a lane, or the remaining dimensions.
+                let rest = &dims[indices.len()..];
+                let selected = match rest {
+                    [] => elem,
+                    _ => self.tcx.mk_simd(elem, rest, scalable),
+                };
+                let mut args = vec![vector];
+                let result = if func == SimdFn::Insert {
+                    args.push(self.check_expr(&fc.args[1], selected));
+                    vector_ty
+                } else {
+                    selected
+                };
+                args.extend(indices);
+                mk(self, func, args, result)
+            }
+        }
+    }
+
     fn infer_ptr_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
         use crate::intrinsic::{IntrinsicOp, PtrAccess, PtrArithFlag, PtrFn};
         use crate::semi::ty::{IntTy, PtrKind};

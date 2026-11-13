@@ -493,6 +493,10 @@ pub enum IntrinsicOp {
     BigInt {
         func: BigIntFn,
     },
+    /// `core::simd::<func>`, an operation on vectors.
+    Simd {
+        func: SimdFn,
+    },
     /// `core::ptr::<func>`. A load or store carries how it accesses memory,
     /// and an offset what it assumes of the arithmetic.
     Ptr {
@@ -500,6 +504,62 @@ pub enum IntrinsicOp {
         access: PtrAccess,
         arith: PtrArithFlag,
     },
+}
+
+/// Operations on vectors (`Simd<...>`). `V` is a vector type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum SimdFn {
+    /// `splat<V>(x)`: every lane is `x`.
+    Splat,
+    /// `step<V>()`: lanes 0, 1, 2, ... of a one-dimensional integer vector.
+    Step,
+    /// `vscale() -> u64`: the factor of scalable extents on this machine.
+    Vscale,
+    /// `lanes<V>() -> u64`: the number of lanes of `V`; elaborates to a
+    /// constant, times `vscale()` for a scalable `V`.
+    Lanes,
+    /// `from_elements<V>(x...)`: one argument per lane, in row-major order;
+    /// `V` is fixed.
+    FromElements,
+    /// `extract(v, i...)`: the lane at the indices, or the sub-vector when
+    /// fewer indices than dimensions are given. Only an index into the last
+    /// dimension may be a run-time value.
+    Extract,
+    /// `insert(v, x, i...)`: `v` with that lane or sub-vector replaced.
+    Insert,
+}
+
+impl SimdFn {
+    pub const ALL: &'static [SimdFn] = &[
+        SimdFn::Splat,
+        SimdFn::Step,
+        SimdFn::Vscale,
+        SimdFn::Lanes,
+        SimdFn::FromElements,
+        SimdFn::Extract,
+        SimdFn::Insert,
+    ];
+
+    pub fn parse(name: &str) -> Option<SimdFn> {
+        SimdFn::ALL.iter().copied().find(|f| f.as_str() == name)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SimdFn::Splat => "splat",
+            SimdFn::Step => "step",
+            SimdFn::Vscale => "vscale",
+            SimdFn::Lanes => "lanes",
+            SimdFn::FromElements => "from_elements",
+            SimdFn::Extract => "extract",
+            SimdFn::Insert => "insert",
+        }
+    }
+
+    /// Whether the function survives elaboration; `lanes` does not.
+    pub fn is_lowered(self) -> bool {
+        self != SimdFn::Lanes
+    }
 }
 
 /// Operations on opaque pointers. `Ptr<A>` and `ConstPtr<A>` share them,
@@ -923,6 +983,7 @@ impl IntrinsicOp {
             IntrinsicOp::Pjrt { .. } => "pjrt",
             IntrinsicOp::BigInt { .. } => "bigint",
             IntrinsicOp::Ptr { .. } => "ptr",
+            IntrinsicOp::Simd { .. } => "simd",
         }
     }
 
@@ -938,6 +999,7 @@ impl IntrinsicOp {
             IntrinsicOp::Pjrt { func } => func.as_str(),
             IntrinsicOp::BigInt { func } => func.as_str(),
             IntrinsicOp::Ptr { func, .. } => func.as_str(),
+            IntrinsicOp::Simd { func } => func.as_str(),
         }
     }
 
@@ -958,6 +1020,7 @@ impl IntrinsicOp {
                 ..
             } => arith.bits(),
             IntrinsicOp::Ptr { access, .. } => access.bits(),
+            IntrinsicOp::Simd { .. } => 0,
         }
     }
 
@@ -988,6 +1051,10 @@ impl IntrinsicOp {
             "bigint" if imm == 0 => Some(IntrinsicOp::BigInt {
                 func: BigIntFn::parse(name)?,
             }),
+            "simd" if imm == 0 => {
+                let func = SimdFn::parse(name)?;
+                func.is_lowered().then_some(IntrinsicOp::Simd { func })
+            }
             "ptr" => {
                 let func = PtrFn::parse(name)?;
                 let plain = PtrAccess::default();
@@ -1203,6 +1270,14 @@ mod tests {
             );
         }
         assert_eq!(IntrinsicOp::parse("ptr", "offset", 4), None);
+        for &func in SimdFn::ALL {
+            let op = IntrinsicOp::Simd { func };
+            assert_eq!(
+                IntrinsicOp::parse(op.family(), op.name(), op.imm()),
+                func.is_lowered().then_some(op)
+            );
+        }
+        assert_eq!(IntrinsicOp::parse("simd", "splat", 1), None);
         assert_eq!(IntrinsicOp::parse("ptr", "as_const", 1), None);
         assert_eq!(IntrinsicOp::parse("ptr", "load", load.imm()), Some(load));
         assert_eq!(IntrinsicOp::parse("ptr", "store", load.imm()), None);

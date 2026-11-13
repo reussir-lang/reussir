@@ -846,7 +846,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 | crate::intrinsic::IntrinsicOp::ConstSeq { .. }
                 | crate::intrinsic::IntrinsicOp::Panic => self.place_args(args, live_after),
                 // Pointers and the values accessed through them own nothing.
-                crate::intrinsic::IntrinsicOp::Ptr { .. } => self.place_args(args, live_after),
+                crate::intrinsic::IntrinsicOp::Ptr { .. }
+                | crate::intrinsic::IntrinsicOp::Simd { .. } => self.place_args(args, live_after),
             },
             ExprKind::NullableCall(opt) => {
                 if let Some(x) = opt {

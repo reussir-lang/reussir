@@ -977,6 +977,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .lower_bigint_intrinsic(block, env, e, *func, args)
                     .map(Some),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
+                IntrinsicOp::Simd { func } => self.lower_simd_intrinsic(block, env, e, *func, args),
                 IntrinsicOp::Ptr {
                     func,
                     access,
@@ -4265,6 +4266,65 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .build()
                 .expect("valid device extent"),
         )
+    }
+
+    /// A `core::simd` operation, as the `vector` dialect operation of the
+    /// same meaning.
+    fn lower_simd_intrinsic<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        e: &Expr<'tcx>,
+        func: reussir_core::intrinsic::SimdFn,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Option<Value<'c, 'b>>> {
+        use builders::VectorPosition;
+        use reussir_core::intrinsic::SimdFn;
+        let loc = self.loc();
+        let result = self.tys.mlir_ty(e.ty)?;
+        let mut values = Vec::with_capacity(args.len());
+        for a in args.iter() {
+            values.push(
+                self.expr(block, env, a)?
+                    .ok_or_else(|| LoweringError("vector operand produced no value".into()))?,
+            );
+        }
+        // The indices of `extract` and `insert`, from operand `first` on: a
+        // literal is a static position, anything else an `index` value.
+        let positions = |first: usize| {
+            args[first..]
+                .iter()
+                .zip(&values[first..])
+                .map(|(index, &value)| match index.kind {
+                    ExprKind::ConstInt(n) => i64::try_from(n)
+                        .map(VectorPosition::Static)
+                        .map_err(|_| LoweringError("vector index is out of range".into())),
+                    _ => {
+                        let index_ty = Type::index(self.context);
+                        Ok(VectorPosition::Dynamic(
+                            self.append(block, arith::index_castui(value, index_ty, loc)),
+                        ))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let built = match func {
+            SimdFn::Splat => builders::vector_broadcast(values[0], result, loc),
+            SimdFn::Step => builders::vector_step(result, loc),
+            SimdFn::Vscale => {
+                let vscale = self.append(block, builders::vector_vscale(self.context, loc));
+                arith::index_castui(vscale, result, loc)
+            }
+            SimdFn::FromElements => builders::vector_from_elements(&values, result, loc),
+            SimdFn::Extract => {
+                builders::vector_extract(self.context, values[0], &positions(1)?, result, loc)
+            }
+            SimdFn::Insert => {
+                builders::vector_insert(self.context, values[1], values[0], &positions(2)?, loc)
+            }
+            SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
+        };
+        Ok(Some(self.append(block, built)))
     }
 
     /// The pointer to the first element of an array: its memref view, moved
