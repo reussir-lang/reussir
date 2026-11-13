@@ -161,6 +161,41 @@ struct PtrAddrConversion : ConvertOpToLLVMPattern<ReussirPtrAddrOp> {
   }
 };
 
+struct PtrExposeAddrConversion
+    : ConvertOpToLLVMPattern<ReussirPtrExposeAddrOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ReussirPtrExposeAddrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getAddr().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the result type");
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    // `ptrtoint` extends or truncates the address itself.
+    rewriter.replaceOpWithNewOp<LLVM::PtrToIntOp>(op, type, adaptor.getPtr());
+    return success();
+  }
+};
+
+/// Convert an operation from a pointer to a pointer of the same type to the
+/// LLVM intrinsic `Intrinsic` of that shape.
+template <typename Op, typename Intrinsic>
+struct PtrIntrinsicConversion : ConvertOpToLLVMPattern<Op> {
+  using ConvertOpToLLVMPattern<Op>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(Op op, typename Op::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value pointer = adaptor.getPtr();
+    if (!llvm::isa<LLVM::LLVMPointerType>(pointer.getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    rewriter.replaceOpWithNewOp<Intrinsic>(op, pointer.getType(), pointer);
+    return success();
+  }
+};
+
 struct PtrFromAddrConversion : ConvertOpToLLVMPattern<ReussirPtrFromAddrOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
@@ -197,7 +232,11 @@ struct PtrMaskConversion : ConvertOpToLLVMPattern<ReussirPtrMaskOp> {
 void populatePtrLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                  mlir::RewritePatternSet &patterns) {
   patterns.add<PtrLoadConversion, PtrStoreConversion, PtrDiffConversion,
-               PtrAddrConversion, PtrFromAddrConversion, PtrMaskConversion>(
-      converter);
+               PtrAddrConversion, PtrExposeAddrConversion,
+               PtrFromAddrConversion, PtrMaskConversion,
+               PtrIntrinsicConversion<ReussirPtrLaunderInvariantGroupOp,
+                                      LLVM::LaunderInvariantGroupOp>,
+               PtrIntrinsicConversion<ReussirPtrStripInvariantGroupOp,
+                                      LLVM::StripInvariantGroupOp>>(converter);
 }
 } // namespace reussir
