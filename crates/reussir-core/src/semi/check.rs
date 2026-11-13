@@ -1103,6 +1103,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 let l = self.infer_expr(l);
                 let ty = l.ty;
+                if self.is_simd(ty) {
+                    use crate::intrinsic::SimdFn;
+                    let (func, shown) = match op {
+                        BinOp::Add => (SimdFn::Add, "+"),
+                        BinOp::Sub => (SimdFn::Sub, "-"),
+                        BinOp::Mul => (SimdFn::Mul, "*"),
+                        BinOp::Div => (SimdFn::Div, "/"),
+                        _ => (SimdFn::Rem, "%"),
+                    };
+                    return self.simd_operator(func, shown, l, Some(r), span);
+                }
                 if self.infer.tensor_view(ty).is_some() {
                     let r = self.check_expr(r, ty);
                     let top = match op {
@@ -1150,6 +1161,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 // monomorphization.
                 let l = self.infer_expr(l);
                 let ty = l.ty;
+                if self.is_simd(ty) {
+                    use crate::intrinsic::SimdFn;
+                    let (func, shown) = match op {
+                        BinOp::BitAnd => (SimdFn::And, "&"),
+                        BinOp::BitOr => (SimdFn::Or, "|"),
+                        BinOp::BitXor => (SimdFn::Xor, "^"),
+                        BinOp::Shl => (SimdFn::Shl, "<<"),
+                        _ => (SimdFn::Shr, ">>"),
+                    };
+                    return self.simd_operator(func, shown, l, Some(r), span);
+                }
                 self.register_bound(self.lang.integral, ty, span);
                 let shifts_bigint = matches!(op, BinOp::Shl | BinOp::Shr)
                     && self.infer.shallow_resolve(ty).bigint().is_some();
@@ -1368,6 +1390,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             UnaryOp::Negate => {
                 let e = self.infer_expr(e);
                 let ty = e.ty;
+                if self.is_simd(ty) {
+                    return self.simd_operator(crate::intrinsic::SimdFn::Neg, "-", e, None, span);
+                }
                 if self.infer.tensor_view(ty).is_some() {
                     let args = vec![e];
 
@@ -1403,7 +1428,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             UnaryOp::Not => {
                 let bool_ty = self.tcx.mk_bool();
-                let e = self.check_expr(e, bool_ty);
+                // `!` complements a vector lane by lane; anything else is a
+                // `bool`.
+                let e = self.infer_expr(e);
+                if self.is_simd(e.ty) {
+                    return self.simd_operator(crate::intrinsic::SimdFn::Not, "!", e, None, span);
+                }
+                self.expect(e.ty, bool_ty, e.span);
                 self.mk_expr(ExprKind::Not(Box::new(e)), bool_ty, span)
             }
         }
@@ -3903,6 +3934,60 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             indices.push(index);
         }
         Some(indices)
+    }
+
+    fn is_simd(&mut self, ty: Ty<'tcx>) -> bool {
+        matches!(self.infer.shallow_resolve(ty).kind(), TyKind::Simd { .. })
+    }
+
+    /// An operator whose left operand is a vector: the lanewise function of
+    /// the same meaning, with the other operand of the same vector type.
+    fn simd_operator(
+        &mut self,
+        func: crate::intrinsic::SimdFn,
+        shown: &str,
+        first: Expr<'tcx>,
+        second: Option<&surface::Expr>,
+        span: Option<Span>,
+    ) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, SimdLanes};
+        let ty = self.infer.resolve(first.ty);
+        let TyKind::Simd { elem, .. } = *ty.kind() else {
+            unreachable!("routed here only for vectors");
+        };
+        let (_, lanes, _) = func.lanewise().expect("an operator is a lanewise function");
+        let integer = matches!(elem.kind(), TyKind::Int(_));
+        let float = matches!(elem.kind(), TyKind::Fp(_));
+        let accepted = match lanes {
+            SimdLanes::Numeric => integer || float,
+            SimdLanes::Integer => integer,
+            SimdLanes::Bits => !float,
+            SimdLanes::Float => float,
+            SimdLanes::Any => true,
+        };
+        if !accepted {
+            self.error(
+                span,
+                format!(
+                    "`{shown}` works on {} lanes, found `{}`",
+                    lanes.describe(),
+                    self.ty_display(ty)
+                ),
+            );
+            return self.poison(span);
+        }
+        let mut args = vec![first];
+        if let Some(second) = second {
+            args.push(self.check_expr(second, ty));
+        }
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::Simd { func },
+                args,
+            },
+            ty,
+            span,
+        )
     }
 
     /// An operation applied lane by lane: `arity` vectors of one type.
