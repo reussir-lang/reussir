@@ -2995,12 +2995,34 @@ def ReussirPtrAddrOp : ReussirPtrOp<"addr", [Pure]> {
   }];
 }
 
+def ReussirPtrExposeAddrOp : ReussirPtrOp<"expose_addr", [Pure]> {
+  let summary = "The address of an opaque pointer, exposing its provenance";
+  let description = [{
+    `reussir.ptr.expose_addr` returns the address of `ptr` as an integer, as
+    `reussir.ptr.addr` does, and exposes the pointer's provenance as an LLVM
+    `ptrtoint` does: a pointer later made from the address by
+    `reussir.ptr.from_addr` may access the object `ptr` points into.
+
+    Example:
+
+    ```mlir
+    %addr = reussir.ptr.expose_addr %p : !ptr.ptr<#ptr.generic_space> -> i64
+    ```
+  }];
+  let arguments = (ins Arg<Ptr_PtrType, "pointer">:$ptr);
+  let results = (outs Res<AnySignlessIntegerOrIndex, "address">:$addr);
+  let assemblyFormat = [{
+    $ptr `:` qualified(type($ptr)) `->` type($addr) attr-dict
+  }];
+}
+
 def ReussirPtrFromAddrOp : ReussirPtrOp<"from_addr", [Pure]> {
   let summary = "An opaque pointer to an address";
   let description = [{
-    `reussir.ptr.from_addr` converts an integer address to a pointer. The
-    address is zero-extended or truncated to the index width of the pointer's
-    memory space.
+    `reussir.ptr.from_addr` converts an integer address to a pointer, as an
+    LLVM `inttoptr` does: the pointer may access only objects whose provenance
+    was exposed. The address is zero-extended or truncated to the index width
+    of the pointer's memory space.
 
     Example:
 
@@ -3036,5 +3058,46 @@ def ReussirPtrMaskOp
   let assemblyFormat = [{
     $ptr `,` $mask `:` qualified(type($ptr)) `,` type($mask) attr-dict
   }];
+}
+
+def ReussirPtrLaunderInvariantGroupOp
+    : ReussirPtrOp<"launder_invariant_group",
+                   [AllTypesMatch<["ptr", "result"]>]> {
+  let summary = "Start a new invariant group at an opaque pointer";
+  let description = [{
+    `reussir.ptr.launder_invariant_group` returns a pointer to the same
+    address as `ptr` that belongs to a new invariant group, as
+    `llvm.launder.invariant.group` does. Accesses marked `invariant_group`
+    through the result are unrelated to those through `ptr`.
+
+    Example:
+
+    ```mlir
+    %q = reussir.ptr.launder_invariant_group %p : !ptr.ptr<#ptr.generic_space>
+    ```
+  }];
+  let arguments = (ins Arg<Ptr_PtrType, "pointer">:$ptr);
+  let results = (outs Res<Ptr_PtrType, "laundered pointer">:$result);
+  let assemblyFormat = "$ptr `:` qualified(type($ptr)) attr-dict";
+}
+
+def ReussirPtrStripInvariantGroupOp
+    : ReussirPtrOp<"strip_invariant_group",
+                   [Pure, AllTypesMatch<["ptr", "result"]>]> {
+  let summary = "Remove the invariant group of an opaque pointer";
+  let description = [{
+    `reussir.ptr.strip_invariant_group` returns a pointer to the same address
+    as `ptr` that belongs to no invariant group, as
+    `llvm.strip.invariant.group` does.
+
+    Example:
+
+    ```mlir
+    %q = reussir.ptr.strip_invariant_group %p : !ptr.ptr<#ptr.generic_space>
+    ```
+  }];
+  let arguments = (ins Arg<Ptr_PtrType, "pointer">:$ptr);
+  let results = (outs Res<Ptr_PtrType, "stripped pointer">:$result);
+  let assemblyFormat = "$ptr `:` qualified(type($ptr)) attr-dict";
 }
 #endif // REUSSIR_IR_REUSSIROPS_TD

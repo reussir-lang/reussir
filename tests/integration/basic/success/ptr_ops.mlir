@@ -12,3 +12,14 @@ func.func @address_ops(%p: !P, %i: index) -> (!P, !P) {
   %q = reussir.ptr.from_addr %i : index -> !P
   return %masked, %q : !P, !P
 }
+
+// CHECK-LABEL: func.func @provenance_ops
+// CHECK: reussir.ptr.expose_addr %{{.*}} : !ptr.ptr<#ptr.generic_space> -> i64
+// CHECK: %[[FRESH:.*]] = reussir.ptr.launder_invariant_group %{{.*}} : !ptr.ptr<#ptr.generic_space>
+// CHECK: reussir.ptr.strip_invariant_group %[[FRESH]] : !ptr.ptr<#ptr.generic_space>
+func.func @provenance_ops(%p: !P) -> (i64, !P) {
+  %addr = reussir.ptr.expose_addr %p : !P -> i64
+  %fresh = reussir.ptr.launder_invariant_group %p : !P
+  %plain = reussir.ptr.strip_invariant_group %fresh : !P
+  return %addr, %plain : i64, !P
+}

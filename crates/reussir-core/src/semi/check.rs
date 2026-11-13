@@ -3795,7 +3795,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// operand is a `Ptr<A>` or a `ConstPtr<A>`; an operation returning a
     /// pointer returns the type of its operand.
     fn infer_ptr_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
-        use crate::intrinsic::{IntrinsicOp, PtrAccess, PtrFn};
+        use crate::intrinsic::{IntrinsicOp, PtrAccess, PtrArithFlag, PtrFn};
         use crate::semi::ty::{IntTy, PtrKind};
 
         let name = self.sym(fc.name.basename).to_owned();
@@ -3806,11 +3806,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let shown = format!("`core::ptr::{name}`");
         let (arity, takes_type) = match func {
             PtrFn::TypeOffset => (0, true),
-            PtrFn::Addr => (1, false),
+            PtrFn::Addr
+            | PtrFn::ExposeAddr
+            | PtrFn::AsConst
+            | PtrFn::AsMut
+            | PtrFn::LaunderInvariantGroup
+            | PtrFn::StripInvariantGroup => (1, false),
             PtrFn::FromAddr => (1, true),
             PtrFn::Load => (1, true),
-            PtrFn::Offset | PtrFn::Mask | PtrFn::Diff => (2, false),
-            PtrFn::Advance | PtrFn::Store => (2, true),
+            PtrFn::Mask | PtrFn::Diff | PtrFn::WithProvenance => (2, false),
+            PtrFn::Store => (2, true),
+            PtrFn::Offset => (3, false),
+            PtrFn::Advance => (3, true),
             PtrFn::LoadExtended | PtrFn::StoreExtended => (6, true),
         };
         if fc.args.len() != arity {
@@ -3835,15 +3842,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         let i64_ty = self.tcx.mk_int(IntTy::Signed(64));
         let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
-        let mk = |this: &mut Self, func, access, args, result| {
+        let mk_op = |this: &mut Self, func, access, arith, args, result| {
             this.mk_expr(
                 ExprKind::Intrinsic {
-                    op: IntrinsicOp::Ptr { func, access },
+                    op: IntrinsicOp::Ptr {
+                        func,
+                        access,
+                        arith,
+                    },
                     args,
                 },
                 result,
                 span,
             )
+        };
+        let mk = |this: &mut Self, func, access, args, result| {
+            mk_op(this, func, access, PtrArithFlag::None, args, result)
         };
         let plain = PtrAccess::default();
         match func {
@@ -3876,24 +3890,47 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let addr = self.check_expr(&fc.args[0], u64_ty);
                 mk(self, func, plain, vec![addr], ty)
             }
-            PtrFn::Addr => {
+            PtrFn::Addr | PtrFn::ExposeAddr => {
                 let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
                     return self.poison(span);
                 };
                 mk(self, func, plain, vec![ptr], u64_ty)
             }
-            PtrFn::Offset | PtrFn::Mask => {
+            PtrFn::LaunderInvariantGroup | PtrFn::StripInvariantGroup => {
                 let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
                     return self.poison(span);
                 };
-                let operand_ty = if func == PtrFn::Offset {
-                    i64_ty
-                } else {
-                    u64_ty
+                let result = ptr.ty;
+                mk(self, func, plain, vec![ptr], result)
+            }
+            PtrFn::AsConst | PtrFn::AsMut => {
+                let Some((ptr, space)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
                 };
-                let operand = self.check_expr(&fc.args[1], operand_ty);
+                let kind = if func == PtrFn::AsConst {
+                    PtrKind::Const
+                } else {
+                    PtrKind::Mut
+                };
+                let result = self.tcx.mk_ptr(space, kind);
+                mk(self, func, plain, vec![ptr], result)
+            }
+            PtrFn::Mask | PtrFn::WithProvenance => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let operand = self.check_expr(&fc.args[1], u64_ty);
                 let result = ptr.ty;
                 mk(self, func, plain, vec![ptr, operand], result)
+            }
+            PtrFn::Offset => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let bytes = self.check_expr(&fc.args[1], i64_ty);
+                let arith = self.ptr_arith_flag(&fc.args[2]);
+                let result = ptr.ty;
+                mk_op(self, func, plain, arith, vec![ptr, bytes], result)
             }
             PtrFn::Advance => {
                 let Some(ty) = ty_arg else {
@@ -3908,6 +3945,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     return self.poison(span);
                 };
                 let count = self.check_expr(&fc.args[1], i64_ty);
+                let arith = self.ptr_arith_flag(&fc.args[2]);
                 let stride = self.mk_expr(ExprKind::TypeOffset(ty), i64_ty, span);
                 let bytes = self.mk_expr(
                     ExprKind::Arith(Box::new(count), ArithOp::Mul, Box::new(stride)),
@@ -3915,7 +3953,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     span,
                 );
                 let result = ptr.ty;
-                mk(self, PtrFn::Offset, plain, vec![ptr, bytes], result)
+                mk_op(self, PtrFn::Offset, plain, arith, vec![ptr, bytes], result)
             }
             PtrFn::Diff => {
                 let Some((lhs, lhs_space)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
@@ -4023,6 +4061,34 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 None
             }
         }
+    }
+
+    /// The flag of a pointer offset: a constant `core::ptr::PtrArithFlag`.
+    fn ptr_arith_flag(&mut self, e: &surface::Expr) -> crate::intrinsic::PtrArithFlag {
+        use crate::intrinsic::PtrArithFlag;
+        use crate::semi::const_eval::ConstValue;
+        use crate::semi::lang::LangItem;
+        let Some(def) = self.lang.get(LangItem::PtrArithFlag) else {
+            self.error(
+                Some(e.span()),
+                "`core::ptr::PtrArithFlag` is not declared; import `core`",
+            );
+            return PtrArithFlag::None;
+        };
+        let ty = self.tcx.mk_record(def, &[], Flexivity::Irrelevant);
+        let variant = match self.eval_const(e, ty) {
+            Some(ConstValue::Record {
+                variant: Some(variant),
+                ..
+            }) => u32::try_from(variant).ok(),
+            _ => return PtrArithFlag::None,
+        };
+        variant
+            .and_then(PtrArithFlag::from_bits)
+            .unwrap_or_else(|| {
+                self.error(Some(e.span()), "unknown `core::ptr::PtrArithFlag` variant");
+                PtrArithFlag::None
+            })
     }
 
     /// A load or store flag: a `bool` constant.

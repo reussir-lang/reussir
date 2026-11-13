@@ -38,6 +38,16 @@ pub enum ReussirCapability {
     Regional = 6,
 }
 
+/// The flags of a `ptr.ptr_add`. Mirrors `mlir::ptr::PtrAddFlags`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReussirPtrAddFlags {
+    None = 0,
+    Nusw = 1,
+    Nuw = 2,
+    Inbounds = 3,
+}
+
 /// Reference-count atomicity. Mirrors `reussir::AtomicKind`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -566,4 +576,8 @@ unsafe extern "C" {
         is_invariant_group: bool,
         alignment: u64,
     ) -> bool;
+
+    /// Set the flags of a `ptr.ptr_add`, an operation property. Returns
+    /// false if the operation is not a `ptr.ptr_add`.
+    pub fn reussirPtrAddSetFlags(op: mlir_sys::MlirOperation, flags: ReussirPtrAddFlags) -> bool;
 }

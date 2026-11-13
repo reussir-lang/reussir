@@ -1,26 +1,27 @@
-// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
-// RUN: %not %rrc %S/Inputs/ptr_intrinsics_instance_error.rr --emit mir -o - 2>&1 | %FileCheck %S/Inputs/ptr_intrinsics_instance_error.rr --check-prefix=MONO
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %not %rrc %s --package-name ptrs --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %S/Inputs/ptr_intrinsics_instance_error.rr --package-name ptrs --extern core=%t.core.rri --emit mir -o - 2>&1 | %FileCheck %S/Inputs/ptr_intrinsics_instance_error.rr --check-prefix=MONO
 
 import core::ptr;
 import core::ptr::Generic;
 struct [shared] Box { value: i64 }
 
 // CHECK-DAG: `core::ptr::offset` takes a `Ptr` or a `ConstPtr`, found `i64`
-fn not_ptr(x: i64) -> i64 { ptr::offset(x, 1) }
+fn not_ptr(x: i64) -> i64 { ptr::offset(x, 1, ptr::PtrArithFlag::None) }
 // CHECK-DAG: `core::ptr::store` cannot write through a `ConstPtr<core::ptr::Generic>`
 fn const_store(p: ConstPtr<Generic>) { ptr::store(p, 1 as i32) }
 // Pointers access integers, floating-point numbers, `bool`, `char` and
 // pointers.
 // CHECK-DAG: `core::ptr::load` cannot access a `unit` (not an integer, a floating-point number, `bool`, `char` or a pointer)
 fn unit_load(p: Ptr<Generic>) { ptr::load<()>(p) }
-// CHECK-DAG: `core::ptr::load` cannot access a `Box`
+// CHECK-DAG: `core::ptr::load` cannot access a `ptrs::Box`
 fn object_load(p: Ptr<Generic>) -> Box { ptr::load<Box>(p) }
 // CHECK-DAG: `core::ptr::store` cannot access a `str`
 fn str_store(p: Ptr<Generic>, s: str) { ptr::store(p, s) }
 // CHECK-DAG: `core::ptr::type_offset` cannot access a `(i8, i64)`
 fn tuple_size() -> u64 { ptr::type_offset<(i8, i64)>() }
-// CHECK-DAG: `core::ptr::advance` cannot access a `Box`
-fn object_step(p: Ptr<Generic>) -> Ptr<Generic> { ptr::advance<Box>(p, 1) }
+// CHECK-DAG: `core::ptr::advance` cannot access a `ptrs::Box`
+fn object_step(p: Ptr<Generic>) -> Ptr<Generic> { ptr::advance<Box>(p, 1, ptr::PtrArithFlag::None) }
 // CHECK-DAG: `core::ptr::type_offset` requires a type argument
 fn no_type() -> u64 { ptr::type_offset() }
 // CHECK-DAG: `core::ptr::from_addr` makes a `Ptr` or a `ConstPtr`, not `i64`
@@ -37,14 +38,23 @@ fn large_align(p: Ptr<Generic>) -> i32 { ptr::load_extended<i32>(p, false, false
 // CHECK-DAG: expected a constant of type `u64`
 fn runtime_align(p: Ptr<Generic>, a: u64) -> i32 { ptr::load_extended<i32>(p, false, false, false, false, a) }
 // A loaded type taken from the context is checked as a written one is.
-// CHECK-DAG: `core::ptr::load` cannot access a `Box`
+// CHECK-DAG: `core::ptr::load` cannot access a `ptrs::Box`
 fn inferred_load(p: Ptr<Generic>) -> Box { ptr::load(p) }
 // CHECK-DAG: `core::ptr::store_extended` cannot write through a `ConstPtr<core::ptr::Generic>`
 fn const_store_extended(p: ConstPtr<Generic>) { ptr::store_extended(p, 1 as i32, false, false, false, 0) }
 // CHECK-DAG: `core::ptr::advance` requires the element type as its type argument
-fn untyped_step(p: Ptr<Generic>) -> Ptr<Generic> { ptr::advance(p, 1) }
+fn untyped_step(p: Ptr<Generic>) -> Ptr<Generic> { ptr::advance(p, 1, ptr::PtrArithFlag::None) }
 // CHECK-DAG: `core::ptr::load` takes at most one type argument
 fn two_types(p: Ptr<Generic>) -> i32 { ptr::load<i32, Ptr<Generic> >(p) }
+// The flag of an offset is part of the operation, so it is a constant.
+// CHECK-DAG: expected a constant of type `core::ptr::PtrArithFlag`
+fn runtime_arith(p: Ptr<Generic>, f: ptr::PtrArithFlag) -> Ptr<Generic> { ptr::offset(p, 1, f) }
+// CHECK-DAG: `core::ptr::offset` expects 3 argument(s), got 2
+fn unflagged(p: Ptr<Generic>) -> Ptr<Generic> { ptr::offset(p, 1) }
+// CHECK-DAG: `core::ptr::as_const` takes a `Ptr` or a `ConstPtr`, found `u64`
+fn cast_integer(a: u64) -> ConstPtr<Generic> { ptr::as_const(a) }
+// CHECK-DAG: `core::ptr::with_provenance` takes a `Ptr` or a `ConstPtr`, found `u64`
+fn provenance_of_integer(a: u64) -> Ptr<Generic> { ptr::with_provenance(a, a) }
 // CHECK-DAG: `core::ptr::addr` expects 1 argument(s), got 2
 fn arity(p: Ptr<Generic>) -> u64 { ptr::addr(p, p) }
 // CHECK-DAG: unknown ptr intrinsic `core::ptr::nope`

@@ -977,8 +977,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .lower_bigint_intrinsic(block, env, e, *func, args)
                     .map(Some),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
-                IntrinsicOp::Ptr { func, access } => {
-                    use reussir_core::intrinsic::PtrFn;
+                IntrinsicOp::Ptr {
+                    func,
+                    access,
+                    arith,
+                } => {
+                    use reussir_core::intrinsic::{PtrArithFlag, PtrFn};
                     let mut operands = Vec::with_capacity(args.len());
                     for a in args.iter() {
                         let v = self.expr(block, env, a)?.ok_or_else(|| {
@@ -994,10 +998,38 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         align: access.align,
                     };
                     let built = match func {
-                        PtrFn::Offset => builders::ptr_add(operands[0], operands[1], loc),
+                        PtrFn::Offset => {
+                            let flags = match arith {
+                                PtrArithFlag::None => builders::PtrAddFlags::None,
+                                PtrArithFlag::Nusw => builders::PtrAddFlags::Nusw,
+                                PtrArithFlag::Nuw => builders::PtrAddFlags::Nuw,
+                                PtrArithFlag::Inbounds => builders::PtrAddFlags::Inbounds,
+                            };
+                            builders::ptr_add(operands[0], operands[1], flags, loc)
+                        }
                         PtrFn::Mask => builders::ptr_mask(operands[0], operands[1], loc),
                         PtrFn::Addr => {
                             builders::ptr_addr(operands[0], self.tys.mlir_ty(e.ty)?, loc)
+                        }
+                        PtrFn::ExposeAddr => {
+                            builders::ptr_expose_addr(operands[0], self.tys.mlir_ty(e.ty)?, loc)
+                        }
+                        // The address moves; the provenance stays that of the
+                        // pointer.
+                        PtrFn::WithProvenance => {
+                            let address = operands[1].r#type();
+                            let from =
+                                self.append(block, builders::ptr_addr(operands[0], address, loc));
+                            let delta = self.append(block, arith::subi(operands[1], from, loc));
+                            builders::ptr_add(operands[0], delta, builders::PtrAddFlags::None, loc)
+                        }
+                        // `Ptr` and `ConstPtr` are one MLIR type.
+                        PtrFn::AsConst | PtrFn::AsMut => return Ok(Some(operands[0])),
+                        PtrFn::LaunderInvariantGroup => {
+                            builders::ptr_launder_invariant_group(operands[0], loc)
+                        }
+                        PtrFn::StripInvariantGroup => {
+                            builders::ptr_strip_invariant_group(operands[0], loc)
                         }
                         PtrFn::FromAddr => {
                             builders::ptr_from_addr(operands[0], self.tys.mlir_ty(e.ty)?, loc)

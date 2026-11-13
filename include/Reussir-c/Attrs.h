@@ -95,6 +95,18 @@ bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
                               bool isNonTemporal, bool isInvariant,
                               bool isInvariantGroup, uint64_t alignment);
 
+// The flags of a `ptr.ptr_add`, as `mlir::ptr::PtrAddFlags`.
+typedef enum ReussirPtrAddFlags {
+  ReussirPtrAddFlagsNone = 0,
+  ReussirPtrAddFlagsNusw = 1,
+  ReussirPtrAddFlagsNuw = 2,
+  ReussirPtrAddFlagsInbounds = 3,
+} ReussirPtrAddFlags;
+
+// Set the flags of a `ptr.ptr_add`, an operation property. Returns false if
+// `op` is not that operation.
+bool reussirPtrAddSetFlags(MlirOperation op, ReussirPtrAddFlags flags);
+
 #ifdef __cplusplus
 }
 #endif

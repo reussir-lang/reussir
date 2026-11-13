@@ -220,6 +220,9 @@ pub enum LangItem {
     Ord,
     /// `core::cmp::Ordering`, the result of `Ord::cmp`.
     Ordering,
+    /// `core::ptr::PtrArithFlag`, the constant flag of a pointer offset
+    /// ([`crate::intrinsic::PtrArithFlag`]).
+    PtrArithFlag,
     /// `core::num::Nat` and `core::num::Int`: enums whose constructors and
     /// patterns are those of the built-in arbitrary-precision integers
     /// ([`crate::semi::ty::BigIntTy`]). Naming either enum names the built-in
@@ -254,7 +257,7 @@ impl LangItem {
     ];
 
     /// The fixed (non-intrinsic) items, for enumeration.
-    pub const FIXED: [LangItem; 13] = [
+    pub const FIXED: [LangItem; 14] = [
         LangItem::Num,
         LangItem::Integral,
         LangItem::FloatingPoint,
@@ -266,6 +269,7 @@ impl LangItem {
         LangItem::PartialOrd,
         LangItem::Ord,
         LangItem::Ordering,
+        LangItem::PtrArithFlag,
         LangItem::Nat,
         LangItem::Int,
     ];
@@ -285,6 +289,7 @@ impl LangItem {
             LangItem::PartialOrd => "partial_ord".into(),
             LangItem::Ord => "ord".into(),
             LangItem::Ordering => "ordering".into(),
+            LangItem::PtrArithFlag => "ptr_arith_flag".into(),
             LangItem::Nat => "nat".into(),
             LangItem::Int => "int".into(),
             LangItem::Intrinsic(IntrinsicItem::Object(op)) => {
@@ -334,9 +339,11 @@ impl LangItem {
 
     pub fn kind(self) -> LangItemKind {
         match self {
-            LangItem::Ordering | LangItem::Nat | LangItem::Int | LangItem::Former(_) => {
-                LangItemKind::Record
-            }
+            LangItem::Ordering
+            | LangItem::PtrArithFlag
+            | LangItem::Nat
+            | LangItem::Int
+            | LangItem::Former(_) => LangItemKind::Record,
             LangItem::Intrinsic(_) => LangItemKind::Function,
             _ => LangItemKind::Trait,
         }

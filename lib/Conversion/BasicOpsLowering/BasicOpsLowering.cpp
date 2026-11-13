@@ -4350,7 +4350,9 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirStrUnsafeMemcmpOp, ReussirConstSeqGlobalOp,
         ReussirConstSeqLiteralOp, ReussirConstSeqLenOp,
         ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp,
-        ReussirPtrAddrOp, ReussirPtrFromAddrOp, ReussirPtrMaskOp>();
+        ReussirPtrAddrOp, ReussirPtrExposeAddrOp, ReussirPtrFromAddrOp,
+        ReussirPtrMaskOp, ReussirPtrLaunderInvariantGroupOp,
+        ReussirPtrStripInvariantGroupOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express

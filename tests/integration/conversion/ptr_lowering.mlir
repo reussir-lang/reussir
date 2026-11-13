@@ -92,6 +92,20 @@ func.func @resized_addresses(%p: !P, %mask: i128) -> !P {
   return %s : !P
 }
 
+// CHECK-LABEL: define ptr @provenance(
+// CHECK-SAME: ptr %[[P:.*]])
+// CHECK: %[[ADDR:.*]] = ptrtoint ptr %[[P]] to i32
+// CHECK: %[[Q:.*]] = inttoptr i32 %[[ADDR]] to ptr
+// CHECK: %[[FRESH:.*]] = call ptr @llvm.launder.invariant.group.p0(ptr %[[Q]])
+// CHECK: call ptr @llvm.strip.invariant.group.p0(ptr %[[FRESH]])
+func.func @provenance(%p: !P) -> !P {
+  %addr = reussir.ptr.expose_addr %p : !P -> i32
+  %q = reussir.ptr.from_addr %addr : i32 -> !P
+  %fresh = reussir.ptr.launder_invariant_group %q : !P
+  %plain = reussir.ptr.strip_invariant_group %fresh : !P
+  return %plain : !P
+}
+
 // CHECK-LABEL: define ptr @null()
 // CHECK: ret ptr null
 func.func @null() -> !P {

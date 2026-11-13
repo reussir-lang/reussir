@@ -21,3 +21,11 @@ func.func @mask_with_float(%p: !ptr.ptr<#ptr.generic_space>, %m: f64) -> !ptr.pt
   %q = reussir.ptr.mask %p, %m : !ptr.ptr<#ptr.generic_space>, f64
   return %q : !ptr.ptr<#ptr.generic_space>
 }
+
+// -----
+
+func.func @launder_integer(%p: i64) -> i64 {
+  // expected-error @+1 {{operand #0 must be pointer type, but got 'i64'}}
+  %q = reussir.ptr.launder_invariant_group %p : i64
+  return %q : i64
+}

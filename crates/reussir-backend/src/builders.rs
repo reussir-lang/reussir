@@ -907,18 +907,24 @@ pub fn ptr_store<'c>(
     operation
 }
 
-/// `ptr.ptr_add %base, %offset : <ptr>, <offset>`: `base` moved by `offset`
-/// bytes.
+pub use sys::ReussirPtrAddFlags as PtrAddFlags;
+
+/// `ptr.ptr_add <flags> %base, %offset : <ptr>, <offset>`: `base` moved by
+/// `offset` bytes.
 pub fn ptr_add<'c>(
     base: Value<'c, '_>,
     offset: Value<'c, '_>,
+    flags: PtrAddFlags,
     location: Location<'c>,
 ) -> Operation<'c> {
-    OperationBuilder::new("ptr.ptr_add", location)
+    let operation = OperationBuilder::new("ptr.ptr_add", location)
         .add_operands(&[base, offset])
         .add_results(&[base.r#type()])
         .build()
-        .expect("valid ptr.ptr_add")
+        .expect("valid ptr.ptr_add");
+    let set = unsafe { sys::reussirPtrAddSetFlags(operation.to_raw(), flags) };
+    assert!(set, "flags apply to a `ptr.ptr_add`");
+    operation
 }
 
 /// `ptr.ptr_diff %lhs, %rhs : <ptr> -> <result_type>`: `lhs - rhs` in bytes.
@@ -963,6 +969,40 @@ pub fn ptr_addr<'c>(
         .add_results(&[result_type])
         .build()
         .expect("valid reussir.ptr.addr")
+}
+
+/// `reussir.ptr.expose_addr %ptr : <ptr> -> <result_type>`.
+pub fn ptr_expose_addr<'c>(
+    ptr: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.expose_addr", location)
+        .add_operands(&[ptr])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid reussir.ptr.expose_addr")
+}
+
+/// `reussir.ptr.launder_invariant_group %ptr : <ptr>`.
+pub fn ptr_launder_invariant_group<'c>(
+    ptr: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.launder_invariant_group", location)
+        .add_operands(&[ptr])
+        .add_results(&[ptr.r#type()])
+        .build()
+        .expect("valid reussir.ptr.launder_invariant_group")
+}
+
+/// `reussir.ptr.strip_invariant_group %ptr : <ptr>`.
+pub fn ptr_strip_invariant_group<'c>(ptr: Value<'c, '_>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.strip_invariant_group", location)
+        .add_operands(&[ptr])
+        .add_results(&[ptr.r#type()])
+        .build()
+        .expect("valid reussir.ptr.strip_invariant_group")
 }
 
 /// `reussir.ptr.from_addr %addr : <addr> -> <ptr_type>`.

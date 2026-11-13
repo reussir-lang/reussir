@@ -131,3 +131,24 @@ bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
   }
   return false;
 }
+
+bool reussirPtrAddSetFlags(MlirOperation op, ReussirPtrAddFlags flags) {
+  auto add = llvm::dyn_cast<mlir::ptr::PtrAddOp>(unwrap(op));
+  if (!add)
+    return false;
+  switch (flags) {
+  case ReussirPtrAddFlagsNone:
+    add.setFlags(mlir::ptr::PtrAddFlags::none);
+    return true;
+  case ReussirPtrAddFlagsNusw:
+    add.setFlags(mlir::ptr::PtrAddFlags::nusw);
+    return true;
+  case ReussirPtrAddFlagsNuw:
+    add.setFlags(mlir::ptr::PtrAddFlags::nuw);
+    return true;
+  case ReussirPtrAddFlagsInbounds:
+    add.setFlags(mlir::ptr::PtrAddFlags::inbounds);
+    return true;
+  }
+  return false;
+}

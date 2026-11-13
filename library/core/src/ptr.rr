@@ -24,35 +24,78 @@ pub struct Ptr<A> { }
 #[lang("const_ptr")]
 pub struct ConstPtr<A> { }
 
+/// What a pointer offset assumes, as the flags of an LLVM `getelementptr`.
+/// An offset that breaks its flag yields a poison pointer.
+#[lang("ptr_arith_flag")]
+pub enum [value] PtrArithFlag {
+    /// The offset wraps.
+    None,
+    /// The offset does not wrap when added to the address as a signed value.
+    Nusw,
+    /// The offset does not wrap when added as an unsigned value.
+    Nuw,
+    /// `Nusw`, and the pointer stays within the bounds of its object.
+    Inbounds
+}
+
 // Declaration sites of the pointer operations. A pointer parameter `P` is a
 // `Ptr<A>` or a `ConstPtr<A>`; only a `Ptr<A>` is stored through. `T` is an
 // integer, a floating-point number, `bool`, `char` or a pointer. A call
 // writes at most `T`; the pointer types are taken from the arguments. Every
 // access is the caller's to justify: the pointer must be valid for it.
 
-/// The pointer `bytes` bytes after `ptr`.
+/// The pointer `bytes` bytes after `ptr`. `flag` is a constant.
 #[lang("core::ptr::offset")]
-pub fn offset<P>(ptr: P, bytes: i64) -> P;
+pub fn offset<P>(ptr: P, bytes: i64, flag: PtrArithFlag) -> P;
 
 /// The distance in bytes between two consecutive values of `T` in memory.
 #[lang("core::ptr::type_offset")]
 pub fn type_offset<T>() -> u64;
 
-/// The pointer `count` values of `T` after `ptr`.
+/// The pointer `count` values of `T` after `ptr`. `flag` is a constant and
+/// applies to the offset in bytes.
 #[lang("core::ptr::advance")]
-pub fn advance<T, P>(ptr: P, count: i64) -> P;
+pub fn advance<T, P>(ptr: P, count: i64, flag: PtrArithFlag) -> P;
 
 /// `ptr` with the address bits that are zero in `mask` cleared.
 #[lang("core::ptr::mask")]
 pub fn mask<P>(ptr: P, mask: u64) -> P;
 
-/// The address of `ptr`.
+/// The address of `ptr`. A pointer made from it by `from_addr` may not
+/// access what `ptr` points to; `with_provenance` makes one that may.
 #[lang("core::ptr::addr")]
 pub fn addr<P>(ptr: P) -> u64;
 
-/// The pointer of type `P` to `addr`.
+/// The address of `ptr`, exposing its provenance: a pointer later made from
+/// the address by `from_addr` may access what `ptr` points to.
+#[lang("core::ptr::expose_addr")]
+pub fn expose_addr<P>(ptr: P) -> u64;
+
+/// The pointer of type `P` to `addr`. It may access only memory whose
+/// provenance was exposed, by `expose_addr` or outside the program.
 #[lang("core::ptr::from_addr")]
 pub fn from_addr<P>(addr: u64) -> P;
+
+/// The pointer to `addr` that may access what `ptr` may.
+#[lang("core::ptr::with_provenance")]
+pub fn with_provenance<P>(ptr: P, addr: u64) -> P;
+
+/// `ptr` as a pointer to memory that is only read.
+#[lang("core::ptr::as_const")]
+pub fn as_const<A>(ptr: Ptr<A>) -> ConstPtr<A>;
+
+/// `ptr` as a pointer that is stored through. The memory must be writable.
+#[lang("core::ptr::as_mut")]
+pub fn as_mut<A>(ptr: ConstPtr<A>) -> Ptr<A>;
+
+/// `ptr` in a new invariant group: `invariant_group` accesses through the
+/// result are unrelated to those through `ptr`.
+#[lang("core::ptr::launder_invariant_group")]
+pub fn launder_invariant_group<P>(ptr: P) -> P;
+
+/// `ptr` in no invariant group.
+#[lang("core::ptr::strip_invariant_group")]
+pub fn strip_invariant_group<P>(ptr: P) -> P;
 
 /// The distance in bytes from `rhs` to `lhs`.
 #[lang("core::ptr::diff")]
