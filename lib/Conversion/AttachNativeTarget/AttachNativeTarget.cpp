@@ -25,6 +25,7 @@
 #include <llvm/TargetParser/Triple.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/Ptr/IR/PtrDialect.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Pass/Pass.h>

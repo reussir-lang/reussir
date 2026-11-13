@@ -30,6 +30,7 @@
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/Ptr/IR/PtrAttrs.h>
+#include <mlir/Dialect/Ptr/IR/PtrDialect.h>
 #include <mlir/Dialect/Ptr/IR/PtrTypes.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
@@ -523,6 +524,7 @@ translateDataLayout(const llvm::DataLayout &dataLayout,
   mlir::DataLayoutSpecInterface spec =
       mlir::translateDataLayout(dataLayout, context);
   llvm::SmallVector<mlir::DataLayoutEntryInterface> entries(spec.getEntries());
+  context->getOrLoadDialect<mlir::ptr::PtrDialect>();
   // The generic memory space is LLVM address space 0.
   entries.push_back(mlir::DataLayoutEntryAttr::get(
       mlir::ptr::PtrType::get(mlir::ptr::GenericSpaceAttr::get(context)),
