@@ -1,0 +1,47 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name object --extern core=%t.core.rri --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --emit hir -o %t.hir
+// RUN: %rrc %t.hir --emit mir -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mlir -o - | %FileCheck %s
+// RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
+
+import core::object as object;
+pub struct [shared] Box { value: i64 }
+pub struct [shared] Outer { inner: Box }
+struct [regional] Node { value: i64 }
+
+// CHECK-LABEL: func.func {{.*}}adjust
+// CHECK: reussir.rc.inc{{.*}}{unsafe}
+// CHECK-NOT: reussir.rc.inc
+// CHECK: reussir.rc.is_unique
+// CHECK: reussir.rc.dec{{.*}}{unsafe}
+// CHECK: reussir.rc.dec
+pub fn adjust(b: Box) -> bool {
+    object::unsafe_inc(b);
+    let result = object::is_unique(b);
+    object::unsafe_dec(b);
+    result
+}
+
+// CHECK-LABEL: func.func {{.*}}unique
+// CHECK-NOT: reussir.rc.inc
+// CHECK: reussir.rc.is_unique
+// CHECK: reussir.rc.dec
+pub fn unique(b: Box) -> bool { object::is_unique(b) }
+
+fn generic<T>(x: T) -> bool { object::is_unique<T>(x) }
+pub fn array(x: [i64; 3]) -> bool { generic(x) }
+pub fn cell(x: Cell<i64>) -> bool { object::is_unique(x) }
+pub fn atomic(x: Arc<Box>) -> bool { object::is_unique(x) }
+pub fn frozen(n: i64) {
+    let x = regional { Node{n} };
+    object::unsafe_inc(x);
+    object::unsafe_dec(x);
+}
+pub fn projected(x: Outer) -> bool { object::is_unique(x.inner) }
+pub fn temporary() -> bool { object::is_unique(Box{1}) }
+
+// MIR-DAG: intrinsic#object#is_unique#0
+// MIR-DAG: intrinsic#object#unsafe_inc#0
+// MIR-DAG: intrinsic#object#unsafe_dec#0

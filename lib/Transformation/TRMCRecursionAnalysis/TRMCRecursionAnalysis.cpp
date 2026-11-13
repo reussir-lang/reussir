@@ -254,14 +254,49 @@ static bool readsImmutableMemory(ReussirRefLoadOp load) {
   }
 }
 
+// Whether the caller of this function keeps `value` alive for the whole call:
+// a borrowed parameter, or a value loaded through one.
+static bool isPinned(mlir::Value value) {
+  for (;;) {
+    if (auto argument = llvm::dyn_cast<mlir::BlockArgument>(value)) {
+      mlir::Operation *parent = argument.getOwner()->getParentOp();
+      if (auto dispatch = llvm::dyn_cast<ReussirRecordDispatchOp>(parent)) {
+        value = dispatch.getVariant();
+        continue;
+      }
+      auto function = llvm::dyn_cast<mlir::func::FuncOp>(parent);
+      return function &&
+             function.getArgAttr(argument.getArgNumber(), BorrowedAttr::name);
+    }
+    mlir::Operation *def = value.getDefiningOp();
+    if (!llvm::isa<ReussirRefLoadOp, ReussirRefProjectOp, ReussirRecordCoerceOp,
+                   ReussirRcBorrowOp>(def))
+      return false;
+    value = def->getOperand(0);
+  }
+}
+
+// Whether the self call `call` passes, at a borrowed position, a value that
+// only this function keeps alive.
+static bool lendsLocalValue(mlir::func::CallOp call) {
+  auto function = call->getParentOfType<mlir::func::FuncOp>();
+  for (auto [index, argument] : llvm::enumerate(call.getOperands()))
+    if (function.getArgAttr(index, BorrowedAttr::name) && !isPinned(argument))
+      return true;
+  return false;
+}
+
 // Whether running `op` before a self call it used to follow is unobservable.
 // The op must be speculatable, since the call may not return, and its effects
 // must not conflict with the callee's. Besides pure ops, that admits reads of
 // immutable memory and the bookkeeping of retains and releases: counts,
 // tokens, and allocation. Another call, a store, or a read of memory the
-// callee may write does not qualify.
-static bool canPrecedeSelfCall(mlir::Operation *op) {
-  if (llvm::isa<mlir::CallOpInterface>(op))
+// callee may write does not qualify, and neither does a manual count change
+// (an `unsafe` retain or release), whose place the program chose. When the
+// call borrows a value that only this function keeps alive (`lends`), an op
+// that may release has to follow it as well.
+static bool canPrecedeSelfCall(mlir::Operation *op, bool lends) {
+  if (llvm::isa<mlir::CallOpInterface>(op) || isUnsafeRcOperation(op))
     return false;
   if (auto load = llvm::dyn_cast<ReussirRefLoadOp>(op))
     return readsImmutableMemory(load);
@@ -273,7 +308,9 @@ static bool canPrecedeSelfCall(mlir::Operation *op) {
                 ReussirTokenEnsureOp, ReussirTokenLaunderOp,
                 ReussirTokenReallocOp>(op) ||
       op->hasAttr(kExpandedDecrementAttr))
-    return true;
+    return !lends || leavesCountsAlone(op) ||
+           llvm::isa<ReussirRcCreateOp, ReussirRcCreateCompoundOp,
+                     ReussirRcCreateVariantOp, ReussirTokenAllocOp>(op);
   if (op->getNumRegions() == 0)
     return mlir::isPure(op);
   // Nested ops are judged one by one, so the region op only has to defer
@@ -284,9 +321,9 @@ static bool canPrecedeSelfCall(mlir::Operation *op) {
   if (!speculatable ||
       speculatable.getSpeculatability() == mlir::Speculation::NotSpeculatable)
     return false;
-  return llvm::all_of(op->getRegions(), [](mlir::Region &region) {
-    return llvm::all_of(region.getOps(), [](mlir::Operation &nested) {
-      return canPrecedeSelfCall(&nested);
+  return llvm::all_of(op->getRegions(), [=](mlir::Region &region) {
+    return llvm::all_of(region.getOps(), [=](mlir::Operation &nested) {
+      return canPrecedeSelfCall(&nested, lends);
     });
   });
 }
@@ -294,10 +331,11 @@ static bool canPrecedeSelfCall(mlir::Operation *op) {
 // Whether `call` can be re-created at `terminator`.
 static bool canMoveCallTo(mlir::func::CallOp call,
                           mlir::Operation *terminator) {
+  bool lends = lendsLocalValue(call);
   for (mlir::Operation *op : precedingOps(terminator)) {
     if (op == call.getOperation())
       return true;
-    if (!canPrecedeSelfCall(op))
+    if (!canPrecedeSelfCall(op, lends))
       return false;
   }
   return false;
@@ -321,7 +359,12 @@ retainMovableFields(mlir::Operation *terminator, mlir::Operation *create,
       return info.call.getOperation() == op;
     });
     if (field == fields.end()) {
-      if (!canPrecedeSelfCall(op))
+      // `op` ends up before the calls not met yet.
+      bool lends = llvm::any_of(llvm::ArrayRef(fields).take_front(firstMovable),
+                                [](const RecursiveFieldInfo &info) {
+                                  return lendsLocalValue(info.call);
+                                });
+      if (!canPrecedeSelfCall(op, lends))
         break;
       continue;
     }

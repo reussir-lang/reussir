@@ -267,7 +267,9 @@ def ReussirTRMCRecursionAnalysisPass
     A self call is linearized only when each operation between it and its
     leaf is speculatable and has no effect that conflicts with the callee's:
     pure operations, reads of immutable memory, and the bookkeeping of retains
-    and releases. Otherwise the call stays in place.
+    and releases. Otherwise the call stays in place, as it does across a manual
+    count change (an `unsafe` retain or release) and across a release when the
+    call borrows a value that only this function keeps alive.
     Because every return leaf has a sound rewrite, mixed functions — where
     some arms pass the recursive result through another call first — keep
     full coverage of their constructor arms.

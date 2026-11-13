@@ -1,0 +1,22 @@
+// RUN: %rrc %s -Oaggressive --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/trmc_borrowed_argument.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+enum List { Nil, Cons(i64, List) }
+struct [shared] Box { value: i64, pad: i64 }
+
+// `fresh` is borrowed by the self call and released after it; its cell is
+// the size of a list cell, so releasing it first would let the new `Cons`
+// overwrite what the callee reads.
+fn build(n: i64, b: Box) -> List {
+    if n == 0 { List::Cons { b.value, List::Nil } } else {
+        let fresh = Box{n * 100, 0};
+        let rest = build(n - 1, fresh);
+        List::Cons { b.value + fresh.value, rest }
+    }
+}
+fn sum(l: List) -> i64 {
+    match l { List::Nil => 0, List::Cons(x, rest) => x + sum(rest) }
+}
+fn run(n: i64) -> i64 { sum(build(n, Box{7, 0})) }
+extern "C" trampoline "borrowed_sum" = run;

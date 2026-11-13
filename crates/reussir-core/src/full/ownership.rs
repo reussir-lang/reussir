@@ -807,6 +807,9 @@ impl<'tcx> Analyzer<'_, 'tcx> {
             | ExprKind::Ctor { args, .. }
             | ExprKind::Variant { args, .. } => self.place_args(args, live_after),
             ExprKind::Intrinsic { op, args } => match op {
+                crate::intrinsic::IntrinsicOp::Object { .. } => {
+                    self.navigate_base(&args[0], e.id, live_after);
+                }
                 crate::intrinsic::IntrinsicOp::Cell { func } => {
                     self.place_cell_intrinsic(e, func, args, live_after)
                 }

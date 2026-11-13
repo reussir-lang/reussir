@@ -689,6 +689,8 @@ mlir::LogicalResult ReussirRcDecOp::verify() {
     return emitOpError("cannot decrease reference count of a flex RC type");
   if (getDestructureTagAttr() && !getBoundMembersAttr())
     return emitOpError("destructureTag requires boundMembers");
+  if (getUnsafe() && isDestructuring())
+    return emitOpError("an unsafe decrement cannot destructure");
   if (isDestructuring()) {
     if (RcType.getAtomicKind() != AtomicKind::normal)
       return emitOpError("destructuring decrement requires a nonatomic box");
@@ -4141,6 +4143,8 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
 }
 
 bool leavesCountsAlone(mlir::Operation *op) {
+  if (isUnsafeRcOperation(op))
+    return false;
   if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op))
     return true;
   if (op->getNumRegions() > 0 || llvm::isa<mlir::CallOpInterface>(op))

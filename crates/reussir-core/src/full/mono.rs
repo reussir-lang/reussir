@@ -2967,6 +2967,16 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 }
             }
             ExprKind::Intrinsic { op, args } => {
+                if let crate::intrinsic::IntrinsicOp::Object { func } = *op {
+                    let ty = subst_ty(self.tcx, args[0].ty, subst);
+                    if let Some(reason) = crate::semi::ty_eval::object_operand_rejection(
+                        |def| self.record_defs.get(&def).map(|r| r.default_cap),
+                        ty,
+                        func,
+                    ) {
+                        self.error(span, format!("`core::object::{}` can only be applied to an RC-managed object; rejected in this instantiation: {reason}", func.as_str()));
+                    }
+                }
                 if let crate::intrinsic::IntrinsicOp::BigInt { func } = *op {
                     self.check_bigint_intrinsic(func, args, result_ty, subst, span);
                 }

@@ -455,6 +455,10 @@ impl TensorFn {
 /// rebuilds the typed op from that triple.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IntrinsicOp {
+    /// `core::object::<func>`; borrows one RC-managed object.
+    Object {
+        func: ObjectFn,
+    },
     /// `core::intrinsic::panic::panic()`: aborts execution and inhabits the
     /// contextually expected result type.
     Panic,
@@ -686,10 +690,38 @@ impl BigIntFn {
     }
 }
 
+/// Operations on an object's reference count.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ObjectFn {
+    IsUnique,
+    UnsafeInc,
+    UnsafeDec,
+}
+
+impl ObjectFn {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "is_unique" => Some(Self::IsUnique),
+            "unsafe_inc" => Some(Self::UnsafeInc),
+            "unsafe_dec" => Some(Self::UnsafeDec),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IsUnique => "is_unique",
+            Self::UnsafeInc => "unsafe_inc",
+            Self::UnsafeDec => "unsafe_dec",
+        }
+    }
+}
+
 impl IntrinsicOp {
     /// The family segment under `core::intrinsic::` (`math`, …).
     pub fn family(self) -> &'static str {
         match self {
+            IntrinsicOp::Object { .. } => "object",
             IntrinsicOp::Panic => "panic",
             IntrinsicOp::Math { .. } => "math",
             IntrinsicOp::Cell { .. } => "cell",
@@ -703,6 +735,7 @@ impl IntrinsicOp {
     /// The op's name within its family (also the dialect mnemonic).
     pub fn name(self) -> &'static str {
         match self {
+            IntrinsicOp::Object { func } => func.as_str(),
             IntrinsicOp::Panic => "panic",
             IntrinsicOp::Math { func, .. } => func.as_str(),
             IntrinsicOp::Cell { func, .. } => func.as_str(),
@@ -716,6 +749,7 @@ impl IntrinsicOp {
     /// The family's packed immediate, as printed in the textual IR.
     pub fn imm(self) -> u32 {
         match self {
+            IntrinsicOp::Object { .. } => 0,
             IntrinsicOp::Panic => 0,
             IntrinsicOp::Math { flag, .. } => flag,
             IntrinsicOp::Cell { .. } => 0,
@@ -730,6 +764,9 @@ impl IntrinsicOp {
     /// `None` if the family or name is unknown.
     pub fn parse(family: &str, name: &str, imm: u32) -> Option<IntrinsicOp> {
         match family {
+            "object" if imm == 0 => Some(IntrinsicOp::Object {
+                func: ObjectFn::parse(name)?,
+            }),
             "panic" if name == "panic" && imm == 0 => Some(IntrinsicOp::Panic),
             "math" => Some(IntrinsicOp::Math {
                 func: MathFn::parse(name)?,
@@ -868,6 +905,15 @@ mod tests {
                 Some(op)
             );
         }
+        for func in [ObjectFn::IsUnique, ObjectFn::UnsafeInc, ObjectFn::UnsafeDec] {
+            let op = IntrinsicOp::Object { func };
+            assert_eq!(
+                IntrinsicOp::parse(op.family(), op.name(), op.imm()),
+                Some(op)
+            );
+        }
+        assert_eq!(IntrinsicOp::parse("object", "is_unique", 1), None);
+        assert_eq!(IntrinsicOp::parse("object", "unknown", 0), None);
         assert_eq!(IntrinsicOp::parse("pjrt", "upload", 1), None);
         assert_eq!(IntrinsicOp::parse("pjrt", "unknown", 0), None);
         assert_eq!(IntrinsicOp::parse("math", "nope", 0), None);

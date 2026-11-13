@@ -30,6 +30,7 @@ use crate::semi::ty::DefId;
 /// while checking and lowering stay wired in the compiler.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum IntrinsicItem {
+    Object(crate::intrinsic::ObjectFn),
     Panic,
     PjrtLaunch,
     Math(crate::intrinsic::MathFn),
@@ -45,6 +46,7 @@ pub enum IntrinsicItem {
 impl IntrinsicItem {
     pub fn family(self) -> &'static str {
         match self {
+            IntrinsicItem::Object(_) => "object",
             IntrinsicItem::Panic => "panic",
             IntrinsicItem::PjrtLaunch => "pjrt",
             IntrinsicItem::Math(_) => "math",
@@ -60,6 +62,7 @@ impl IntrinsicItem {
 
     pub fn op_name(self) -> &'static str {
         match self {
+            IntrinsicItem::Object(f) => f.as_str(),
             IntrinsicItem::Panic => "panic",
             IntrinsicItem::PjrtLaunch => "launch",
             IntrinsicItem::Math(f) => f.as_str(),
@@ -84,6 +87,7 @@ impl IntrinsicItem {
 
     pub(crate) fn from_parts(family: &str, name: &str) -> Option<IntrinsicItem> {
         match family {
+            "object" => crate::intrinsic::ObjectFn::parse(name).map(IntrinsicItem::Object),
             "panic" if name == "panic" => Some(IntrinsicItem::Panic),
             "pjrt" if name == "launch" => Some(IntrinsicItem::PjrtLaunch),
             "math" => crate::intrinsic::MathFn::parse(name).map(IntrinsicItem::Math),
@@ -264,6 +268,9 @@ impl LangItem {
             LangItem::Ordering => "ordering".into(),
             LangItem::Nat => "nat".into(),
             LangItem::Int => "int".into(),
+            LangItem::Intrinsic(IntrinsicItem::Object(op)) => {
+                format!("core::object::{}", op.as_str())
+            }
             LangItem::Intrinsic(op) => {
                 format!("core::intrinsic::{}::{}", op.family(), op.op_name())
             }
@@ -272,6 +279,11 @@ impl LangItem {
     }
 
     pub fn from_name(name: &str) -> Option<LangItem> {
+        if let Some(op) = name.strip_prefix("core::object::") {
+            return crate::intrinsic::ObjectFn::parse(op)
+                .map(IntrinsicItem::Object)
+                .map(LangItem::Intrinsic);
+        }
         if let Some(rest) = name.strip_prefix("core::intrinsic::") {
             let (family, op) = rest.split_once("::")?;
             return IntrinsicItem::from_parts(family, op).map(LangItem::Intrinsic);

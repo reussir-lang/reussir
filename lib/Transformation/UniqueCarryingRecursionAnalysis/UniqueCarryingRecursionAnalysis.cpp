@@ -295,7 +295,7 @@ public:
   static bool isSharedAfterDefinition(mlir::Value value) {
     unsigned consumingUses = 0;
     for (mlir::Operation *user : value.getUsers()) {
-      if (llvm::isa<ReussirRcIncOp>(user))
+      if (isUnsafeRcOperation(user) || llvm::isa<ReussirRcIncOp>(user))
         return true;
       if (llvm::isa<mlir::scf::YieldOp, ReussirScfYieldOp,
                     mlir::func::ReturnOp>(user))

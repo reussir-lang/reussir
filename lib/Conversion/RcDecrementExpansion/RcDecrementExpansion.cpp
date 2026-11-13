@@ -51,7 +51,8 @@ namespace reussir {
 #include "Reussir/Conversion/Passes.h.inc"
 
 bool canScheduleDecrement(ReussirRcDecOp op) {
-  if (op.isDestructuring() || op->hasAttr(REUSSIR_NO_DEFER) ||
+  if (isUnsafeRcOperation(op) || op.isDestructuring() ||
+      op->hasAttr(REUSSIR_NO_DEFER) ||
       op.getRcPtr().getType().getCapability() != Capability::shared)
     return false;
   auto token = op.getNullableToken();
@@ -116,12 +117,18 @@ struct RcDecrementExpansionPattern
     // other thread's uses before the destruction. Destructuring decrements
     // never target atomic boxes (rejected by the `rc.dec` verifier).
     const bool atomic = type.getAtomicKind() == AtomicKind::atomic;
-    mlir::Value prevRcCount =
-        atomic
-            ? ReussirRcFetchSubOp::create(rewriter, op.getLoc(), op.getRcPtr())
-                  .getRefCount()
-            : ReussirRcFetchOp::create(rewriter, op.getLoc(), op.getRcPtr())
-                  .getRefCount();
+    mlir::Value prevRcCount;
+    if (atomic) {
+      auto fetchSub =
+          ReussirRcFetchSubOp::create(rewriter, op.getLoc(), op.getRcPtr());
+      fetchSub.setUnsafe(op.getUnsafe());
+      prevRcCount = fetchSub.getRefCount();
+    } else {
+      auto fetch =
+          ReussirRcFetchOp::create(rewriter, op.getLoc(), op.getRcPtr());
+      fetch.setUnsafe(op.getUnsafe());
+      prevRcCount = fetch.getRefCount();
+    }
     auto isOne = mlir::arith::CmpIOp::create(
         rewriter, op.getLoc(), mlir::arith::CmpIPredicate::eq, prevRcCount,
         mlir::arith::ConstantIndexOp::create(rewriter, op.getLoc(), 1));

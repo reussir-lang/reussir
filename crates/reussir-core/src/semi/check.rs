@@ -3741,7 +3741,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return Some(self.poison(span));
         }
         let segs: Vec<&str> = fc.name.segments.iter().map(|&k| self.sym(k)).collect();
-        // Everything under `core` is an intrinsic; nothing else lives there.
+        if segs.as_slice() == ["core", "object"] {
+            return Some(self.infer_object_intrinsic(fc, span));
+        }
+        // Intrinsic families use their compiler-defined checkers.
         let ["core", "intrinsic", family] = segs.as_slice() else {
             let shown = self.path_display(&fc.name);
             self.error(
@@ -3779,6 +3782,58 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 Some(self.poison(span))
             }
         }
+    }
+
+    fn infer_object_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
+        use crate::intrinsic::{IntrinsicOp, ObjectFn};
+        let name = self.sym(fc.name.basename).to_owned();
+        let Some(func) = ObjectFn::parse(&name) else {
+            self.error(
+                span,
+                format!("unknown object intrinsic `core::object::{name}`"),
+            );
+            return self.poison(span);
+        };
+        let [arg] = fc.args.as_slice() else {
+            self.error(span, format!("`core::object::{name}` expects one argument"));
+            return self.poison(span);
+        };
+        let arg = match fc.ty_args.as_slice() {
+            [] | [None] => self.infer_expr(arg),
+            [Some(t)] => {
+                let ty = self.eval_type(t);
+                self.check_expr(arg, ty)
+            }
+            _ => {
+                self.error(
+                    span,
+                    format!("`core::object::{name}` takes at most one type argument"),
+                );
+                return self.poison(span);
+            }
+        };
+        let ty = self.infer.resolve(arg.ty);
+        if let Some(reason) = crate::semi::ty_eval::object_operand_rejection(
+            |def| self.records.get(&def).map(|r| r.default_cap),
+            ty,
+            func,
+        ) {
+            self.error(arg.span, format!("`core::object::{name}` can only be applied to an RC-managed object; found `{}` ({reason})", self.ty_display(ty)));
+            return self.poison(span);
+        }
+        let result = if func == ObjectFn::IsUnique {
+            self.tcx.mk_bool()
+        } else {
+            self.tcx.mk_unit()
+        };
+        self.mk_expr(
+            ExprKind::Intrinsic {
+                op: IntrinsicOp::Object { func },
+                args: vec![arg],
+            },
+            result,
+            span,
+        )
     }
 
     fn infer_pjrt_intrinsic(&mut self, fc: &surface::FuncCall, span: Option<Span>) -> Expr<'tcx> {
