@@ -33,5 +33,5 @@ fn use_them(p: Point) -> i64 {
 
 extern "C" trampoline "impl_mangling_ffi" = use_them;
 
-// CHECK-DAG: pub fn @_RNvNvC4demo5Point4area(v0 (self): demo::Point) -> i64 {
-// CHECK-DAG: pub fn @_RINvNvC4demo3Box3getxE(v0 (self): demo::Box::<i64>) -> i64 {
+// CHECK-DAG: pub fn @_RNvNvC4demo5Point4area(v0 (self): #demo::Point) -> i64 {
+// CHECK-DAG: pub fn @_RINvNvC4demo3Box3getxE(v0 (self): #demo::Box::<i64>) -> i64 {

@@ -273,7 +273,7 @@ Ty: raw::Ty = {
     "ConstSeq" "<" <t:Ty> ">" => raw::Ty::ConstSeq(Box::new(t)),
     "Nat" => raw::Ty::BigInt(BigIntTy::Nat),
     "Int" => raw::Ty::BigInt(BigIntTy::Int),
-    <cap:Cap> <path:TyPathArgs>
+    <cap:Cap> "#" <path:TyPathArgs>
         => raw::Ty::Record { cap, path: path.0, args: path.1 },
 
     "[" <elem:Ty> ";" <dims:CommaPlus<Extent>> "]"
@@ -326,7 +326,7 @@ Extent: u64 = {
 /// (`pkg::m::Cell::<u64>`), factored into one recursive production so the
 /// grammar stays LR(1): after each `::` the next token — an identifier vs
 /// `<` — decides between another path segment and the type-argument list.
-TyPathArgs: (String, Vec<raw::Ty>) = <first:BareName> <tail:TyPathArgsTail> => {
+TyPathArgs: (String, Vec<raw::Ty>) = <first:SegName> <tail:TyPathArgsTail> => {
     let (rest, args) = tail;
     (format!("{first}{rest}"), args)
 };

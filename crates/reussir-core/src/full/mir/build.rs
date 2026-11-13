@@ -882,20 +882,25 @@ mod tests {
             "Mutex",
             "FlatLock",
             "RwLock",
+            "ConstSeq",
+            "Nat",
+            "Int",
         ] {
-            with_tcx(|tcx| {
-                let input = format!(
-                    "record @rec : value struct app::{name} {{ \"n\": i32 }}; fn @identity(v0 (x): app::{name}) -> app::{name} {{ v0 : app::{name} }}"
-                );
-                let parsed = parse_program(tcx, &input).expect("qualified nominal builtin name");
-                let printed = Printer::new(&parsed.defs, &parsed.names).program(&parsed.program);
-                let reparsed =
-                    parse_program(tcx, &printed).expect("reparse qualified nominal name");
-                assert_eq!(
-                    printed,
-                    Printer::new(&reparsed.defs, &reparsed.names).program(&reparsed.program)
-                );
-            });
+            for path in [format!("app::{name}"), name.to_string()] {
+                with_tcx(|tcx| {
+                    let input = format!(
+                        "record @rec : value struct #{path} {{ \"n\": i32 }}; fn @identity(v0 (x): #{path}) -> #{path} {{ v0 : #{path} }}"
+                    );
+                    let parsed = parse_program(tcx, &input).expect("nominal builtin name");
+                    let printed =
+                        Printer::new(&parsed.defs, &parsed.names).program(&parsed.program);
+                    let reparsed = parse_program(tcx, &printed).expect("reparse nominal name");
+                    assert_eq!(
+                        printed,
+                        Printer::new(&reparsed.defs, &reparsed.names).program(&reparsed.program)
+                    );
+                });
+            }
         }
     }
 
@@ -1315,9 +1320,9 @@ mod tests {
     #[test]
     fn roundtrips_ffi_trait_glue() {
         let text = concat!(
-            "record @_RC3Key : shared struct Key { \"value\": i64 };\n\n",
-            "ffi trait glue @_RC3Key_ffi_eq = @_RC11semantic_eq : Key => u8;\n\n",
-            "ffi trait glue @_RC3Key_ffi_cmp = @_RC12semantic_cmp : Key => i8;\n",
+            "record @_RC3Key : shared struct #Key { \"value\": i64 };\n\n",
+            "ffi trait glue @_RC3Key_ffi_eq = @_RC11semantic_eq : #Key => u8;\n\n",
+            "ffi trait glue @_RC3Key_ffi_cmp = @_RC12semantic_cmp : #Key => i8;\n",
         );
 
         with_tcx(|tcx| {

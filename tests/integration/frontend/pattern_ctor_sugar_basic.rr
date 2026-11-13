@@ -24,12 +24,12 @@ fn bar() -> Option<i32> {
 // CHECK-NEXT:     #Option::<i32>#1() : #Option::<i32>
 // CHECK-NEXT: }
 
-// FULL: record @_RIC6OptionlE : shared enum Option::<i32> { @_RNvIC6OptionlE4Some Some(i32), @_RNvIC6OptionlE4None None() };
+// FULL: record @_RIC6OptionlE : shared enum #Option::<i32> { @_RNvIC6OptionlE4Some Some(i32), @_RNvIC6OptionlE4None None() };
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC3bar() -> Option::<i32> {
-// FULL-NEXT:     @_RIC6OptionlE::#1() : Option::<i32>
+// FULL-NEXT: fn @_RC3bar() -> #Option::<i32> {
+// FULL-NEXT:     @_RIC6OptionlE::#1() : #Option::<i32>
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC3foo() -> Option::<i32> {
-// FULL-NEXT:     @_RIC6OptionlE::#1() : Option::<i32>
+// FULL-NEXT: fn @_RC3foo() -> #Option::<i32> {
+// FULL-NEXT:     @_RIC6OptionlE::#1() : #Option::<i32>
 // FULL-NEXT: }

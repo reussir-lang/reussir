@@ -72,9 +72,9 @@ fn closed<T: Shape>(shape: T) -> i64 {
 // HIR-DAG: trait#Shape::<#Square>#SIDES : i64
 // MIR: pub fn @_RC8concrete() -> i64 {
 // MIR-NEXT: 4 : i64
-// MIR: fn @_RIC5sidesC5WedgeE(v0 (shape): Wedge) -> i64 {
+// MIR: fn @_RIC5sidesC5WedgeE(v0 (shape): #Wedge) -> i64 {
 // MIR-NEXT: 3 : i64
-// MIR: fn @_RIC6scaledC6SquareE(v0 (shape): Square) -> f64 {
+// MIR: fn @_RIC6scaledC6SquareE(v0 (shape): #Square) -> f64 {
 // MIR-NEXT: (-0.5 : f64 *
 pub fn concrete() -> i64 { Square::SIDES }
 

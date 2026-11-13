@@ -42,7 +42,7 @@ fn test_field_call(s : HasClosure, x : i32) -> i32 {
 // CHECK-NEXT:     apply(proj(v0 : #HasClosure, 0) : (i32) -> i32, v1 : i32) : i32
 // CHECK-NEXT: }
 
-// FULL: record @_RC10HasClosure : shared struct HasClosure { "transform": (i32) -> i32 };
+// FULL: record @_RC10HasClosure : shared struct #HasClosure { "transform": (i32) -> i32 };
 // FULL-EMPTY:
 // FULL-NEXT: fn @_RC10make_adder(v0 (n): i32) -> (i32) -> i32 {
 // FULL-NEXT:     closure[v0: i32](v1: i32) { (v1 : i32 + v0 : i32) : i32 } : (i32) -> i32
@@ -56,6 +56,6 @@ fn test_field_call(s : HasClosure, x : i32) -> i32 {
 // FULL-NEXT:     apply(closure[](v1: i32) { (v1 : i32 + 1 : i32) : i32 } : (i32) -> i32, v0 : i32) : i32
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC15test_field_call(v0 (s): HasClosure, v1 (x): i32) -> i32 {
-// FULL-NEXT:     apply(proj(v0 : HasClosure, 0) : (i32) -> i32, v1 : i32) : i32
+// FULL-NEXT: fn @_RC15test_field_call(v0 (s): #HasClosure, v1 (x): i32) -> i32 {
+// FULL-NEXT:     apply(proj(v0 : #HasClosure, 0) : (i32) -> i32, v1 : i32) : i32
 // FULL-NEXT: }

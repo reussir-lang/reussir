@@ -17,8 +17,8 @@
 
 // HIR-DAG: enum fixed #Fx
 // HIR-DAG: enum #Vr
-// MIR-DAG: enum fixed Fx::<i32>
-// MIR-DAG: enum Vr::<i32>
+// MIR-DAG: enum fixed #Fx::<i32>
+// MIR-DAG: enum #Vr::<i32>
 
 #[repr(fixed)]
 enum Fx<T> {

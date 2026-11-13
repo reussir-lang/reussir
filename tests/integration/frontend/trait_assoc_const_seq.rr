@@ -76,7 +76,7 @@ extern "C" trampoline "reussir_stored" = stored;
 
 // Each instantiation reads its impl's value as a literal.
 // MIR: fn @_RC6stored() -> i32 {
-// MIR-NEXT: let v0 (h) = @_RC6Holder{{.*}}, ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>} : Holder;
+// MIR-NEXT: let v0 (h) = @_RC6Holder{{.*}}, ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>} : #Holder;
 // MIR: fn @_RIC3nthC4WideE(v0 (i): u64) -> i32 {
 // MIR-NEXT: intrinsic#const_seq#get#0(ConstSeq[-2147483648, -7, 0, 7, 2147483647] : ConstSeq<i32>, v0 : u64) : i32
 // MIR: fn @_RIC3sumC4WideE() -> i64 {

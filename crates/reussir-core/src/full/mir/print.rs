@@ -420,7 +420,7 @@ impl Render<'_> {
                     }
                     Flexivity::Irrelevant => Doc::Null,
                 };
-                d = d + text(self.defs.path(def).display(self.resolver));
+                d = d + text(format!("#{}", self.defs.path(def).display(self.resolver)));
                 if !args.is_empty() {
                     // Turbofish so record type args don't clash with cmp `<`.
                     let parts: Vec<Doc<'static>> = args.iter().map(|&a| self.ty(a)).collect();

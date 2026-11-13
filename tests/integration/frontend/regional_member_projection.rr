@@ -18,7 +18,7 @@ fn mk_inner(v: u64) -> Inner {
     regional { Inner { v: v } }
 }
 
-// MIR-DAG: record @_RC5Outer : regional struct Outer { "inner": [regional] Inner, "tag": u64 };
+// MIR-DAG: record @_RC5Outer : regional struct #Outer { "inner": [regional] #Inner, "tag": u64 };
 
 // A frozen member composed into a new region's object, then projected through
 // (a two-step path down to the scalar).
@@ -27,7 +27,7 @@ pub fn read_both(v: u64) -> u64 {
     let o = regional { Outer { inner: i, tag: v + 1 } };
     o.inner.v + o.tag
 }
-// MIR-DAG: proj(v2 : [rigid] Outer, 0, 0) : u64
+// MIR-DAG: proj(v2 : [rigid] #Outer, 0, 0) : u64
 
 // Projection that *stops at* the member: the loaded rc<_, rigid> value
 // escapes the parent (exercises the ownership pass's dup on the projected
@@ -36,7 +36,7 @@ pub fn take_inner(v: u64) -> Inner {
     let o = regional { Outer { inner: mk_inner(v), tag: v + 1 } };
     o.inner
 }
-// MIR-DAG: proj(v1 : [rigid] Outer, 0) : [rigid] Inner
+// MIR-DAG: proj(v1 : [rigid] #Outer, 0) : [rigid] #Inner
 
 pub fn use_inner(v: u64) -> u64 {
     let i = take_inner(v);

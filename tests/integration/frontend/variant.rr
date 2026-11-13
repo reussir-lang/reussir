@@ -1,20 +1,20 @@
 // RUN: %rrc %s --emit mir --no-source-locations -o - | %FileCheck %s
 // RUN: %rrc %s -o %t.o
 
-// CHECK: record @_RIC6OptionlE : value enum Option::<i32> { @_RNvIC6OptionlE4Some Some(i32), @_RNvIC6OptionlE4None None() };
+// CHECK: record @_RIC6OptionlE : value enum #Option::<i32> { @_RNvIC6OptionlE4Some Some(i32), @_RNvIC6OptionlE4None None() };
 // CHECK-EMPTY:
-// CHECK: record @_RIC8RcOptionlE : shared enum RcOption::<i32> { @_RNvIC8RcOptionlE4Some Some(i32), @_RNvIC8RcOptionlE4None None() };
+// CHECK: record @_RIC8RcOptionlE : shared enum #RcOption::<i32> { @_RNvIC8RcOptionlE4Some Some(i32), @_RNvIC8RcOptionlE4None None() };
 // CHECK-EMPTY:
-// CHECK: fn @_RC3bar() -> RcOption::<i32> {
-// CHECK-NEXT: @_RIC8RcOptionlE::#1() : RcOption::<i32>
+// CHECK: fn @_RC3bar() -> #RcOption::<i32> {
+// CHECK-NEXT: @_RIC8RcOptionlE::#1() : #RcOption::<i32>
 // CHECK-NEXT: }
 // CHECK-EMPTY:
-// CHECK: fn @_RC3baz() -> RcOption::<i32> {
-// CHECK-NEXT: @_RIC8RcOptionlE::#0(1 : i32) : RcOption::<i32>
+// CHECK: fn @_RC3baz() -> #RcOption::<i32> {
+// CHECK-NEXT: @_RIC8RcOptionlE::#0(1 : i32) : #RcOption::<i32>
 // CHECK-NEXT: }
 // CHECK-EMPTY:
-// CHECK: fn @_RC3foo() -> Option::<i32> {
-// CHECK-NEXT: @_RIC6OptionlE::#1() : Option::<i32>
+// CHECK: fn @_RC3foo() -> #Option::<i32> {
+// CHECK-NEXT: @_RIC6OptionlE::#1() : #Option::<i32>
 // CHECK-NEXT: }
 
 enum [value] Option<T> {

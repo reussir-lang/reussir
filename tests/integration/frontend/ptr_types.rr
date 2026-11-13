@@ -17,7 +17,7 @@ import core::ptr::Generic;
 // selects the memory space, and constness stays in the frontend.
 
 // HIR: pub [value] struct #Pair { "first": Ptr<GenericAddrSpace>, "second": ConstPtr<GenericAddrSpace> };
-// MIR: value struct Pair { "first": Ptr<GenericAddrSpace>, "second": ConstPtr<GenericAddrSpace> };
+// MIR: value struct #Pair { "first": Ptr<GenericAddrSpace>, "second": ConstPtr<GenericAddrSpace> };
 pub struct [value] Pair { first: Ptr<Generic>, second: ConstPtr<Generic> }
 pub struct [shared] Node { at: Ptr<Generic>, next: Nullable<Node> }
 enum Slot { Empty, Full(ConstPtr<Generic>) }

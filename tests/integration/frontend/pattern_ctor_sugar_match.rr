@@ -56,23 +56,23 @@ fn map_to_none(x : Option<i32>) -> Option<i32> {
 // CHECK-NEXT:     } : #Option::<i32>
 // CHECK-NEXT: }
 
-// FULL: record @_RIC6OptionlE : shared enum Option::<i32> { @_RNvIC6OptionlE4Some Some(i32), @_RNvIC6OptionlE4None None() };
+// FULL: record @_RIC6OptionlE : shared enum #Option::<i32> { @_RNvIC6OptionlE4Some Some(i32), @_RNvIC6OptionlE4None None() };
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC11map_to_none(v0 (x): Option::<i32>) -> Option::<i32> {
-// FULL-NEXT:     match v0 : Option::<i32> {
+// FULL-NEXT: fn @_RC11map_to_none(v0 (x): #Option::<i32>) -> #Option::<i32> {
+// FULL-NEXT:     match v0 : #Option::<i32> {
 // FULL-NEXT:         switch scrut {
 // FULL-NEXT:             #0 => {
-// FULL-NEXT:                 => @_RIC6OptionlE::#1() : Option::<i32>
+// FULL-NEXT:                 => @_RIC6OptionlE::#1() : #Option::<i32>
 // FULL-NEXT:             }
 // FULL-NEXT:             #1 => {
-// FULL-NEXT:                 => @_RIC6OptionlE::#1() : Option::<i32>
+// FULL-NEXT:                 => @_RIC6OptionlE::#1() : #Option::<i32>
 // FULL-NEXT:             }
 // FULL-NEXT:         }
-// FULL-NEXT:     } : Option::<i32>
+// FULL-NEXT:     } : #Option::<i32>
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC7is_some(v0 (x): Option::<i32>) -> bool {
-// FULL-NEXT:     match v0 : Option::<i32> {
+// FULL-NEXT: fn @_RC7is_some(v0 (x): #Option::<i32>) -> bool {
+// FULL-NEXT:     match v0 : #Option::<i32> {
 // FULL-NEXT:         switch scrut {
 // FULL-NEXT:             #0 => {
 // FULL-NEXT:                 => true : bool
@@ -84,6 +84,6 @@ fn map_to_none(x : Option<i32>) -> Option<i32> {
 // FULL-NEXT:     } : bool
 // FULL-NEXT: }
 // FULL-EMPTY:
-// FULL-NEXT: fn @_RC8none_val() -> Option::<i32> {
-// FULL-NEXT:     @_RIC6OptionlE::#1() : Option::<i32>
+// FULL-NEXT: fn @_RC8none_val() -> #Option::<i32> {
+// FULL-NEXT:     @_RIC6OptionlE::#1() : #Option::<i32>
 // FULL-NEXT: }

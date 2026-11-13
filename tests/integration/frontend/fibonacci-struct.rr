@@ -1,26 +1,26 @@
 // RUN: %rrc %s --emit mir --no-source-locations -o - | %FileCheck %s
 // RUN: %rrc %s -o %t.o
 
-// CHECK: record @_RC6Matrix : value struct Matrix { "m00": u64, "m01": u64, "m10": u64, "m11": u64 };
+// CHECK: record @_RC6Matrix : value struct #Matrix { "m00": u64, "m01": u64, "m10": u64, "m11": u64 };
 // CHECK-EMPTY:
-// CHECK: fn @_RC26fibonacci_logarithmic_impl(v0 (n): u64, v1 (a): Matrix, v2 (b): Matrix) -> u64 {
+// CHECK: fn @_RC26fibonacci_logarithmic_impl(v0 (n): u64, v1 (a): #Matrix, v2 (b): #Matrix) -> u64 {
 // CHECK-NEXT: if (v0 : u64 == 0 : u64) : bool then {
-// CHECK-NEXT: proj(v1 : Matrix, 1) : u64
+// CHECK-NEXT: proj(v1 : #Matrix, 1) : u64
 // CHECK-NEXT: } else {
 // CHECK-NEXT: if ((v0 : u64 % 2 : u64) : u64 == 1 : u64) : bool then {
-// CHECK-NEXT: @_RC26fibonacci_logarithmic_impl((v0 : u64 / 2 : u64) : u64, @_RC6matmul(v1 : Matrix, v2 : Matrix) : Matrix, @_RC6matmul(v2 : Matrix, v2 : Matrix) : Matrix) : u64
+// CHECK-NEXT: @_RC26fibonacci_logarithmic_impl((v0 : u64 / 2 : u64) : u64, @_RC6matmul(v1 : #Matrix, v2 : #Matrix) : #Matrix, @_RC6matmul(v2 : #Matrix, v2 : #Matrix) : #Matrix) : u64
 // CHECK-NEXT: } else {
-// CHECK-NEXT: @_RC26fibonacci_logarithmic_impl((v0 : u64 / 2 : u64) : u64, v1 : Matrix, @_RC6matmul(v2 : Matrix, v2 : Matrix) : Matrix) : u64
+// CHECK-NEXT: @_RC26fibonacci_logarithmic_impl((v0 : u64 / 2 : u64) : u64, v1 : #Matrix, @_RC6matmul(v2 : #Matrix, v2 : #Matrix) : #Matrix) : u64
 // CHECK-NEXT: } : u64
 // CHECK-NEXT: } : u64
 // CHECK-NEXT: }
 // CHECK-EMPTY:
-// CHECK: fn @_RC6matmul(v0 (a): Matrix, v1 (b): Matrix) -> Matrix {
-// CHECK-NEXT: let v2 (m00) = ((proj(v0 : Matrix, 0) : u64 * proj(v1 : Matrix, 0) : u64) : u64 + (proj(v0 : Matrix, 1) : u64 * proj(v1 : Matrix, 2) : u64) : u64) : u64;
-// CHECK-NEXT: let v3 (m01) = ((proj(v0 : Matrix, 0) : u64 * proj(v1 : Matrix, 1) : u64) : u64 + (proj(v0 : Matrix, 1) : u64 * proj(v1 : Matrix, 3) : u64) : u64) : u64;
-// CHECK-NEXT: let v4 (m10) = ((proj(v0 : Matrix, 2) : u64 * proj(v1 : Matrix, 0) : u64) : u64 + (proj(v0 : Matrix, 3) : u64 * proj(v1 : Matrix, 2) : u64) : u64) : u64;
-// CHECK-NEXT: let v5 (m11) = ((proj(v0 : Matrix, 2) : u64 * proj(v1 : Matrix, 1) : u64) : u64 + (proj(v0 : Matrix, 3) : u64 * proj(v1 : Matrix, 3) : u64) : u64) : u64;
-// CHECK-NEXT: @_RC6Matrix{v2 : u64, v3 : u64, v4 : u64, v5 : u64} : Matrix
+// CHECK: fn @_RC6matmul(v0 (a): #Matrix, v1 (b): #Matrix) -> #Matrix {
+// CHECK-NEXT: let v2 (m00) = ((proj(v0 : #Matrix, 0) : u64 * proj(v1 : #Matrix, 0) : u64) : u64 + (proj(v0 : #Matrix, 1) : u64 * proj(v1 : #Matrix, 2) : u64) : u64) : u64;
+// CHECK-NEXT: let v3 (m01) = ((proj(v0 : #Matrix, 0) : u64 * proj(v1 : #Matrix, 1) : u64) : u64 + (proj(v0 : #Matrix, 1) : u64 * proj(v1 : #Matrix, 3) : u64) : u64) : u64;
+// CHECK-NEXT: let v4 (m10) = ((proj(v0 : #Matrix, 2) : u64 * proj(v1 : #Matrix, 0) : u64) : u64 + (proj(v0 : #Matrix, 3) : u64 * proj(v1 : #Matrix, 2) : u64) : u64) : u64;
+// CHECK-NEXT: let v5 (m11) = ((proj(v0 : #Matrix, 2) : u64 * proj(v1 : #Matrix, 1) : u64) : u64 + (proj(v0 : #Matrix, 3) : u64 * proj(v1 : #Matrix, 3) : u64) : u64) : u64;
+// CHECK-NEXT: @_RC6Matrix{v2 : u64, v3 : u64, v4 : u64, v5 : u64} : #Matrix
 // CHECK-NEXT: }
 
 struct [value] Matrix {
