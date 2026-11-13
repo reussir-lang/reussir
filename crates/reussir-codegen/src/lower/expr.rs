@@ -1041,6 +1041,49 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                             self.tys.mlir_ty(e.ty)?,
                             loc,
                         ),
+                        // A vector is read at the alignment of one lane, and a
+                        // mask as a byte per lane.
+                        PtrFn::Load if matches!(e.ty.kind(), TyKind::Simd { .. }) => {
+                            let (memory, align, mask) = self.simd_memory(e.ty)?;
+                            let access = builders::PtrAccess {
+                                align: if access.align == 0 {
+                                    align
+                                } else {
+                                    access.align
+                                },
+                                ..access
+                            };
+                            let loaded = builders::ptr_load(operands[0], memory, access, loc);
+                            if !mask {
+                                loaded
+                            } else {
+                                let bytes = self.append(block, loaded);
+                                let zero = self.simd_bytes_zero(block, memory);
+                                arith::cmpi(self.context, CmpiPredicate::Ne, bytes, zero, loc)
+                            }
+                        }
+                        PtrFn::Store if matches!(args[1].ty.kind(), TyKind::Simd { .. }) => {
+                            let (memory, align, mask) = self.simd_memory(args[1].ty)?;
+                            let access = builders::PtrAccess {
+                                align: if access.align == 0 {
+                                    align
+                                } else {
+                                    access.align
+                                },
+                                ..access
+                            };
+                            let value = match mask {
+                                true => self.append(block, arith::extui(operands[1], memory, loc)),
+                                false => operands[1],
+                            };
+                            block.append_operation(builders::ptr_store(
+                                value,
+                                operands[0],
+                                access,
+                                loc,
+                            ));
+                            return Ok(None);
+                        }
                         // A `bool` occupies a byte in memory, where it is 0 or 1.
                         PtrFn::Load if matches!(e.ty.kind(), TyKind::Bool) => {
                             let byte = self.append(
@@ -1164,7 +1207,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             Cmp(l, op, r) => self.cmp(block, env, l, *op, r).map(Some),
             Cast(x, t) => self.cast(block, env, x, *t),
             TypeOffset(t) => {
-                let element = self.tys.mlir_ty(*t)?;
+                let element = match t.kind() {
+                    TyKind::Simd { .. } => self.simd_memory(*t)?.0,
+                    _ => self.tys.mlir_ty(*t)?,
+                };
                 let result = self.tys.mlir_ty(e.ty)?;
                 Ok(Some(self.append(
                     block,
@@ -4266,6 +4312,46 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .build()
                 .expect("valid device extent"),
         )
+    }
+
+    /// How a vector lies in memory: the type that is loaded and stored, the
+    /// alignment of one lane in bytes, and whether the vector is a mask. A
+    /// mask is a byte per lane; any other vector is itself.
+    fn simd_memory(&self, ty: Ty<'tcx>) -> Result<(Type<'c>, u64, bool)> {
+        let TyKind::Simd {
+            elem,
+            dims,
+            scalable,
+        } = *ty.kind()
+        else {
+            return err("vector memory layout requested for a non-vector type");
+        };
+        let extents: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+        match *elem.kind() {
+            TyKind::Bool => {
+                let byte = IntegerType::new(self.context, 8).into();
+                let bytes = reussir_backend::dialect::ty::vector(byte, &extents, scalable);
+                Ok((bytes, 1, true))
+            }
+            TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) => {
+                Ok((self.tys.mlir_ty(ty)?, u64::from(w).div_ceil(8), false))
+            }
+            TyKind::Fp(reussir_core::semi::ty::FpTy::Ieee(w)) => {
+                Ok((self.tys.mlir_ty(ty)?, u64::from(w) / 8, false))
+            }
+            _ => err("vector lane type has no memory layout"),
+        }
+    }
+
+    /// The vector of byte lanes `bytes` with every lane zero.
+    fn simd_bytes_zero<'b>(&self, block: &'b Block<'c>, bytes: Type<'c>) -> Value<'c, 'b> {
+        let loc = self.loc();
+        let byte = IntegerType::new(self.context, 8).into();
+        let zero = self.append(
+            block,
+            arith::constant(self.context, IntegerAttribute::new(byte, 0).into(), loc),
+        );
+        self.append(block, builders::vector_broadcast(zero, bytes, loc))
     }
 
     /// A `core::simd` operation, as the `vector` dialect operation of the
