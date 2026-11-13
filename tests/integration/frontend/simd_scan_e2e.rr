@@ -79,3 +79,37 @@ fn sum(base: ConstPtr<Generic>, len: u64) -> i64 {
     simd::reduce_add(acc) as i64
 }
 extern "C" trampoline "simd_sum" = sum;
+
+// The same count written with a scalable vector: the step is `lanes`, known
+// only when the program runs. A target without scalable vectors runs it with
+// a scale of one.
+fn count_scalable(base: ConstPtr<Generic>, len: u64, needle: u8) -> u64 {
+    let width = simd::lanes<Simd<[u8; [16]]>>();
+    let wanted = simd::splat<Simd<[u8; [16]]>>(needle);
+    let zero = simd::splat<Simd<[u8; [16]]>>(0);
+    let (end, total) = while [i = 0, total = 0] (i < len) {
+        let live = simd::mask_first<Simd<[bool; [16]]>>(len - i);
+        let at = ptr::offset(base, i as i64, PtrArithFlag::Inbounds);
+        let chunk = simd::load<Simd<[u8; [16]]>>(at, live, zero);
+        (i + width, total + simd::count(simd::eq(chunk, wanted, live)))
+    };
+    total
+}
+extern "C" trampoline "simd_count_scalable" = count_scalable;
+
+// The index of the first byte equal to `needle`, or `len`, with a scalable
+// vector.
+fn find_scalable(base: ConstPtr<Generic>, len: u64, needle: u8) -> u64 {
+    let width = simd::lanes<Simd<[u8; [16]]>>();
+    let wanted = simd::splat<Simd<[u8; [16]]>>(needle);
+    let zero = simd::splat<Simd<[u8; [16]]>>(0);
+    let (end, hit) = while [i = 0, hit = len] (i < len && hit == len) {
+        let live = simd::mask_first<Simd<[bool; [16]]>>(len - i);
+        let at = ptr::offset(base, i as i64, PtrArithFlag::Inbounds);
+        let found = simd::eq(simd::load<Simd<[u8; [16]]>>(at, live, zero), wanted, live);
+        let here = if simd::any(found) { i + simd::first_set(found) } else { len };
+        (i + width, here)
+    };
+    hit
+}
+extern "C" trampoline "simd_find_scalable" = find_scalable;
