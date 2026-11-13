@@ -1,0 +1,14 @@
+import core::simd;
+
+// A lane of a scalable vector is selected by a computed index.
+// CHECK-LABEL: define {{.*}}float @{{.*}}pick
+// CHECK: extractelement <vscale x 4 x float> %0, i64 %1
+pub fn pick(v: Simd<[f32; [4]]>, i: u64) -> f32 { simd::extract(v, i) }
+
+// CHECK-LABEL: define {{.*}}i64 @{{.*}}count
+// CHECK: call {{.*}}i64 @llvm.vscale.i64()
+pub fn count() -> u64 { simd::lanes<Simd<[u8; 2, [16]]>>() }
+
+// CHECK-LABEL: define {{.*}}<vscale x 4 x float> @{{.*}}filled
+// CHECK: shufflevector <vscale x 4 x float>
+pub fn filled(x: f32) -> Simd<[f32; [4]]> { simd::splat<Simd<[f32; [4]]>>(x) }
