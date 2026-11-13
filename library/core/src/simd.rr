@@ -257,3 +257,84 @@ pub fn count<M>(mask: M) -> u64;
 /// of lanes when none is set.
 #[lang("core::simd::first_set")]
 pub fn first_set<M>(mask: M) -> u64;
+
+// Reductions combine every lane of a vector `V` into one value of its lane
+// type `T`.
+
+/// The sum of the lanes. Floating-point lanes are added in lane order.
+#[lang("core::simd::reduce_add")]
+pub fn reduce_add<V, T>(v: V) -> T;
+
+/// The product of the lanes, in lane order for floating-point lanes.
+#[lang("core::simd::reduce_mul")]
+pub fn reduce_mul<V, T>(v: V) -> T;
+
+/// The smallest lane. A NaN lane is ignored.
+#[lang("core::simd::reduce_min")]
+pub fn reduce_min<V, T>(v: V) -> T;
+
+/// The largest lane. A NaN lane is ignored.
+#[lang("core::simd::reduce_max")]
+pub fn reduce_max<V, T>(v: V) -> T;
+
+/// The bitwise and of the lanes, of an integer vector or a mask.
+#[lang("core::simd::reduce_and")]
+pub fn reduce_and<V, T>(v: V) -> T;
+
+/// The bitwise or of the lanes.
+#[lang("core::simd::reduce_or")]
+pub fn reduce_or<V, T>(v: V) -> T;
+
+/// The bitwise exclusive or of the lanes.
+#[lang("core::simd::reduce_xor")]
+pub fn reduce_xor<V, T>(v: V) -> T;
+
+/// The floating-point sum of the lanes in any order. The result may differ
+/// from `reduce_add` in the last bits; the target may add in parallel.
+#[lang("core::simd::reduce_add_reassoc")]
+pub fn reduce_add_reassoc<V, T>(v: V) -> T;
+
+/// The floating-point product of the lanes in any order.
+#[lang("core::simd::reduce_mul_reassoc")]
+pub fn reduce_mul_reassoc<V, T>(v: V) -> T;
+
+// The masked reductions. Each is the reduction of the same name over the
+// lanes whose bit is set in a mask `M` of the shape of `V`. No set lane gives
+// the identity of the combination: zero for a sum, one for a product, the
+// largest value for a minimum and so on.
+
+/// `reduce_add` over the lanes where the mask is set.
+#[lang("core::simd::reduce_add_masked")]
+pub fn reduce_add_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_mul` over the lanes where the mask is set.
+#[lang("core::simd::reduce_mul_masked")]
+pub fn reduce_mul_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_min` over the lanes where the mask is set.
+#[lang("core::simd::reduce_min_masked")]
+pub fn reduce_min_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_max` over the lanes where the mask is set.
+#[lang("core::simd::reduce_max_masked")]
+pub fn reduce_max_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_and` over the lanes where the mask is set.
+#[lang("core::simd::reduce_and_masked")]
+pub fn reduce_and_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_or` over the lanes where the mask is set.
+#[lang("core::simd::reduce_or_masked")]
+pub fn reduce_or_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_xor` over the lanes where the mask is set.
+#[lang("core::simd::reduce_xor_masked")]
+pub fn reduce_xor_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_add_reassoc` over the lanes where the mask is set.
+#[lang("core::simd::reduce_add_reassoc_masked")]
+pub fn reduce_add_reassoc_masked<V, M, T>(v: V, mask: M) -> T;
+
+/// `reduce_mul_reassoc` over the lanes where the mask is set.
+#[lang("core::simd::reduce_mul_reassoc_masked")]
+pub fn reduce_mul_reassoc_masked<V, M, T>(v: V, mask: M) -> T;
