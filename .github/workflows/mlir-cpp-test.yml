@@ -16,9 +16,23 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request or branch supersedes this run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Skips the push run for a commit the merge queue has already tested.
+  merge-queue:
+    if: github.event_name == 'push'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/merge-queue-tested.yml
+
   build:
     name: ${{ matrix.name }}
+    needs: merge-queue
+    if: ${{ !cancelled() && needs.merge-queue.outputs.passed != 'true' }}
     strategy:
       fail-fast: false
       matrix:
