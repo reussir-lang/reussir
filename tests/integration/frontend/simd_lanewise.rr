@@ -1,0 +1,79 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit llvm-ir -O aggressive -o %t.sve.ll
+// RUN: %not %rrc %S/Inputs/simd_lanewise_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_lanewise_errors.rr --check-prefix=ERR
+
+import core::simd;
+
+// Signedness comes from the lane type.
+// CHECK-LABEL: func.func @{{.*}}sdiv
+// CHECK: arith.divsi %arg0, %arg1 : vector<4xi32>
+// CHECK: arith.remsi
+// CHECK: arith.shrsi
+pub fn sdiv(a: Simd<[i32; 4]>, b: Simd<[i32; 4]>) -> Simd<[i32; 4]> {
+    simd::shr(simd::rem(simd::div(a, b), b), b)
+}
+
+// CHECK-LABEL: func.func @{{.*}}udiv
+// CHECK: arith.divui %arg0, %arg1 : vector<4xi32>
+// CHECK: arith.remui
+// CHECK: arith.shrui
+pub fn udiv(a: Simd<[u32; 4]>, b: Simd<[u32; 4]>) -> Simd<[u32; 4]> {
+    simd::shr(simd::rem(simd::div(a, b), b), b)
+}
+
+// A comparison yields a mask, and `select` reads one.
+// HIR-DAG: intrinsic#simd#lt#0(v0 : Simd<[f32; 2, 4]>, v1 : Simd<[f32; 2, 4]>) : Simd<[bool; 2, 4]>
+// CHECK-LABEL: func.func @{{.*}}clamp
+// CHECK: %[[MASK:.*]] = arith.cmpf olt, %arg0, %arg1 : vector<2x4xf32>
+// CHECK: arith.select %[[MASK]], %arg0, %arg1 : vector<2x4xi1>, vector<2x4xf32>
+// LLVM-LABEL: define {{.*}}@{{.*}}clamp
+// LLVM: fcmp olt <4 x float>
+pub fn clamp(x: Simd<[f32; 2, 4]>, top: Simd<[f32; 2, 4]>) -> Simd<[f32; 2, 4]> {
+    simd::select(simd::lt(x, top), x, top)
+}
+
+// CHECK-LABEL: func.func @{{.*}}flags
+// CHECK: arith.cmpi ule
+// CHECK: arith.cmpi ne
+// CHECK: arith.andi %{{.*}}, %{{.*}} : vector<16xi1>
+// CHECK: arith.xori %{{.*}}, %{{.*}} : vector<16xi1>
+pub fn flags(a: Simd<[u8; 16]>, b: Simd<[u8; 16]>) -> Simd<[bool; 16]> {
+    simd::not(simd::and(simd::le(a, b), simd::ne(a, b)))
+}
+
+// HIR-DAG: intrinsic#simd#fma#0(v0 : Simd<[f64; 2]>, v1 : Simd<[f64; 2]>, v2 : Simd<[f64; 2]>) : Simd<[f64; 2]>
+// CHECK-LABEL: func.func @{{.*}}floats
+// CHECK: math.fma %arg0, %arg1, %arg2 : vector<2xf64>
+// CHECK: arith.minnumf
+// CHECK: arith.maxnumf
+// CHECK: arith.negf
+// CHECK: math.absf
+// LLVM-LABEL: define {{.*}}<2 x double> @{{.*}}floats
+// LLVM: call <2 x double> @llvm.fma.v2f64
+pub fn floats(a: Simd<[f64; 2]>, b: Simd<[f64; 2]>, c: Simd<[f64; 2]>) -> Simd<[f64; 2]> {
+    simd::abs(simd::neg(simd::max(simd::min(simd::fma(a, b, c), a), b)))
+}
+
+// CHECK-LABEL: func.func @{{.*}}integers
+// CHECK: arith.addi
+// CHECK: arith.muli
+// CHECK: arith.subi
+// CHECK: arith.xori
+// CHECK: arith.ori
+// CHECK: arith.shli
+// CHECK: arith.minsi
+// CHECK: arith.maxsi
+// CHECK: math.absi
+// LLVM-LABEL: define {{.*}}<8 x i16> @{{.*}}integers
+pub fn integers(a: Simd<[i16; 8]>, b: Simd<[i16; 8]>) -> Simd<[i16; 8]> {
+    let mixed = simd::or(simd::xor(simd::sub(simd::mul(simd::add(a, b), b), a), b), a);
+    simd::abs(simd::neg(simd::max(simd::min(simd::shl(mixed, b), a), b)))
+}
