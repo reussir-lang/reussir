@@ -709,8 +709,8 @@ struct ReussirVectorCttzEltsConversionPattern
   matchAndRewrite(ReussirVectorCttzEltsOp op, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     // A mask with no set lane counts every lane.
-    auto zeroIsPoison = mlir::LLVM::ConstantOp::create(
-        rewriter, op.getLoc(), rewriter.getI1Type(), 0);
+    auto zeroIsPoison = mlir::LLVM::ConstantOp::create(rewriter, op.getLoc(),
+                                                       rewriter.getI1Type(), 0);
     rewriter.replaceOpWithNewOp<mlir::LLVM::CallIntrinsicOp>(
         op, op.getResult().getType(),
         rewriter.getStringAttr("llvm.experimental.cttz.elts"),
@@ -4352,7 +4352,8 @@ struct ReussirConvertToLLVMPatternInterface
                         ReussirDropJoinOp, ReussirDropDeferIndexedOp>();
     target.addIllegalOp<
         ReussirPJRTJitCallOp, ReussirPJRTAfterOp, ReussirIFRTBytecodeOp,
-        ReussirPanicOp, ReussirExpectOp, ReussirCctxEmptyOp,
+        ReussirPanicOp, ReussirExpectOp, ReussirVectorCttzEltsOp,
+        ReussirCctxEmptyOp,
         ReussirCctxExtendOp, ReussirCctxApplyOp, ReussirTokenAllocOp,
         ReussirTokenFreeOp, ReussirTokenReinterpretOp, ReussirTokenReallocOp,
         ReussirRefLoadOp, ReussirRefStoreOp, ReussirRefSpilledOp, ReussirRefDropOp,
@@ -4385,7 +4386,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp,
         ReussirPtrAddrOp, ReussirPtrExposeAddrOp, ReussirPtrFromAddrOp,
         ReussirPtrMaskOp, ReussirPtrLaunderInvariantGroupOp,
-        ReussirPtrStripInvariantGroupOp, ReussirVectorCttzEltsOp>();
+        ReussirPtrStripInvariantGroupOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express

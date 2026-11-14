@@ -17,7 +17,7 @@ func.func @cttz_elts_of_two_dimensions(%m: vector<2x8xi1>) -> i64 {
 // -----
 
 func.func @cttz_elts_into_float(%m: vector<16xi1>) -> f64 {
-  // expected-error @+1 {{result #0 must be signless integer, but got 'f64'}}
+  // expected-error @+1 {{invalid kind of type specified: expected builtin.integer, but found 'f64'}}
   %n = reussir.vector.cttz_elts %m : vector<16xi1> -> f64
   return %n : f64
 }
