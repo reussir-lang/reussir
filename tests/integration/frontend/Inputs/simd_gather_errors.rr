@@ -1,0 +1,21 @@
+import core::ptr::Generic;
+import core::simd;
+
+// ERR-DAG: `core::simd::gather` takes a vector of integers of the same shape as its index, found `Simd<[f32; 4]>`
+fn floats(p: ConstPtr<Generic>, i: Simd<[f32; 4]>, m: Simd<[bool; 4]>, v: Simd<[i32; 4]>) -> Simd<[i32; 4]> {
+    simd::gather<Simd<[i32; 4]>>(p, i, m, v)
+}
+// ERR-DAG: `core::simd::gather` takes a vector of integers of the same shape as its index, found `Simd<[u32; 8]>`
+fn shaped(p: ConstPtr<Generic>, i: Simd<[u32; 8]>, m: Simd<[bool; 4]>, v: Simd<[i32; 4]>) -> Simd<[i32; 4]> {
+    simd::gather<Simd<[i32; 4]>>(p, i, m, v)
+}
+// ERR-DAG: `core::simd::scatter` cannot write through a `ConstPtr<core::ptr::Generic>`
+fn read_only(p: ConstPtr<Generic>, i: Simd<[u32; 4]>, m: Simd<[bool; 4]>, v: Simd<[i32; 4]>) {
+    simd::scatter(p, i, v, m)
+}
+// ERR-DAG: `core::simd::load_expand` reads a one-dimensional vector of numbers, not a `Simd<[i32; 2, 4]>`
+fn nested(p: ConstPtr<Generic>, m: Simd<[bool; 2, 4]>, v: Simd<[i32; 2, 4]>) -> Simd<[i32; 2, 4]> {
+    simd::load_expand<Simd<[i32; 2, 4]>>(p, m, v)
+}
+// ERR-DAG: `core::simd::store_compress` cannot write through a `ConstPtr<core::ptr::Generic>`
+fn packed(p: ConstPtr<Generic>, m: Simd<[bool; 4]>, v: Simd<[i32; 4]>) { simd::store_compress(p, v, m) }

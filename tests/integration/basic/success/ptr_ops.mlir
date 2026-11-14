@@ -30,3 +30,12 @@ func.func @provenance_ops(%p: !P) -> (i64, !P) {
   %plain = reussir.ptr.strip_invariant_group %fresh : !P
   return %addr, %plain : i64, !P
 }
+
+// CHECK-LABEL: func.func @packed_ops
+// CHECK: %[[L:.*]] = reussir.ptr.expand_load %{{.*}}, %{{.*}}, %{{.*}} : !ptr.ptr<#ptr.generic_space>, vector<8xi1>, vector<8xi32>
+// CHECK: reussir.ptr.compress_store %[[L]], %{{.*}}, %{{.*}} : vector<8xi32>, !ptr.ptr<#ptr.generic_space>, vector<8xi1>
+func.func @packed_ops(%p: !P, %m: vector<8xi1>, %v: vector<8xi32>) {
+  %l = reussir.ptr.expand_load %p, %m, %v : !P, vector<8xi1>, vector<8xi32>
+  reussir.ptr.compress_store %l, %p, %m : vector<8xi32>, !P, vector<8xi1>
+  return
+}
