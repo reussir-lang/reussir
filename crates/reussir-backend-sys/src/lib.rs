@@ -423,6 +423,12 @@ unsafe extern "C" {
     pub fn reussirRawPtrTypeGet(element_type: MlirType) -> MlirType;
     pub fn reussirGenericPtrTypeGet(context: MlirContext) -> MlirType;
     pub fn reussirMemRefTypeInGenericSpace(memref: MlirType) -> MlirType;
+    pub fn reussirVectorTypeGet(
+        element: MlirType,
+        rank: isize,
+        extents: *const i64,
+        scalable: bool,
+    ) -> MlirType;
     pub fn reussirStablehloTokenTypeGet(context: MlirContext) -> MlirType;
     pub fn reussirRcgmpMpzTypeGet(context: MlirContext, atomic: bool) -> MlirType;
     pub fn reussirStablehloFutureTypeGet(

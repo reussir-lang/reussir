@@ -43,6 +43,19 @@ pub fn generic_ptr(context: &Context) -> Type<'_> {
     unsafe { Type::from_raw(sys::reussirGenericPtrTypeGet(context.to_raw())) }
 }
 
+/// `vector<d0 x ... x element>`; with `scalable`, the last extent counts
+/// multiples of `vscale`.
+pub fn vector<'c>(element: Type<'c>, extents: &[i64], scalable: bool) -> Type<'c> {
+    unsafe {
+        Type::from_raw(sys::reussirVectorTypeGet(
+            element.to_raw(),
+            extents.len() as isize,
+            extents.as_ptr(),
+            scalable,
+        ))
+    }
+}
+
 /// `memref`, a memref type, in the generic memory space of the `ptr`
 /// dialect.
 pub fn memref_in_generic_space(memref: Type<'_>) -> Type<'_> {
