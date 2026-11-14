@@ -1,0 +1,22 @@
+import core::simd;
+
+// ERR-DAG: `core::simd::splat` requires the vector type as its type argument
+fn untyped(x: f32) -> Simd<[f32; 4]> { simd::splat(x) }
+// ERR-DAG: `core::simd::splat` makes a vector, not a `f32`
+fn scalar(x: f32) -> f32 { simd::splat<f32>(x) }
+// ERR-DAG: `core::simd::step` makes a one-dimensional vector of integers of at least 8 bits, not a `Simd<[f32; 4]>`
+fn floats() -> Simd<[f32; 4]> { simd::step<Simd<[f32; 4]>>() }
+// ERR-DAG: `core::simd::from_elements` expects 4 elements, got 3
+fn short(x: u8) -> Simd<[u8; 4]> { simd::from_elements<Simd<[u8; 4]>>(x, x, x) }
+// ERR-DAG: `core::simd::from_elements` expects a fixed vector type
+fn growing(x: u8) -> Simd<[u8; [4]]> { simd::from_elements<Simd<[u8; [4]]>>(x, x, x, x) }
+// ERR-DAG: `core::simd::extract` takes a vector, found `u64`
+fn number(x: u64) -> u64 { simd::extract(x, 0) }
+// ERR-DAG: `core::simd::extract` takes between 1 and 2 indices for this vector, got 3
+fn deep(m: Simd<[f32; 4, 8]>) -> f32 { simd::extract(m, 0, 0, 0) }
+// ERR-DAG: `core::simd::extract` takes a literal index for every dimension but the last
+fn computed(m: Simd<[f32; 4, 8]>, i: u64) -> f32 { simd::extract(m, i, 0) }
+// ERR-DAG: index out of range: the extent is 4
+fn outside(m: Simd<[f32; 4, 8]>) -> f32 { simd::extract(m, 4, 0) }
+// ERR-DAG: unknown simd intrinsic `core::simd::nope`
+fn unknown(m: Simd<[f32; 4]>) { simd::nope(m) }

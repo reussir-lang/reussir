@@ -1,0 +1,70 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name shape --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --package-name shape --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --package-name shape --extern core=%t.core.rri -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/simd_shape_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name shape --extern core=%t.core.rri -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/simd_shape_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %rrc %S/Inputs/simd_shape_scalable.rr --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit llvm-ir -O aggressive -o %t.sve.ll
+// RUN: %FileCheck %S/Inputs/simd_shape_scalable.rr < %t.sve.ll
+// RUN: %not %rrc %S/Inputs/simd_shape_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_shape_errors.rr --check-prefix=ERR
+
+import core::ptr;
+import core::ptr::Generic;
+import core::simd;
+
+// Read sixteen bytes as four 32-bit words, add the word index to each, and
+// write the middle two words back as bytes.
+// CHECK-LABEL: func.func {{.*}}@{{.*}}words
+// CHECK: vector.bitcast %{{.*}} : vector<16xi8> to vector<4xi32>
+// CHECK: vector.extract_strided_slice %{{.*}} {offsets = [1], sizes = [2], strides = [1]} : vector<4xi32> to vector<2xi32>
+// CHECK: vector.broadcast
+// CHECK: vector.insert_strided_slice
+// CHECK: vector.shape_cast
+fn words(from: ConstPtr<Generic>, to: Ptr<Generic>) {
+    let numbered = simd::bitcast<Simd<[u32; 4]>>(ptr::load<Simd<[u8; 16]>>(from))
+        + simd::step<Simd<[u32; 4]>>();
+    let middle = simd::slice(numbered, [1], [2]);
+    let rows = simd::broadcast<Simd<[u32; 2, 2]>>(middle);
+    let placed = simd::insert_slice(rows, simd::splat<Simd<[u32; 2]>>(9), [1, 0]);
+    ptr::store(to, simd::shape_cast<Simd<[u32; 4]>>(placed))
+}
+extern "C" trampoline "shape_words" = words;
+
+// The product of two 4 by 4 matrices in row-major order: a sum of four outer
+// products, each of a column of `a` with a row of `b`.
+// HIR-DAG: : Simd<[f32; 4, 4]>, ConstSeq[1, 0] : ConstSeq<i64>) : Simd<[f32; 4, 4]>
+// CHECK-LABEL: func.func {{.*}}@{{.*}}matmul
+// CHECK: vector.transpose %{{.*}}, [1, 0] : vector<4x4xf32> to vector<4x4xf32>
+// CHECK: vector.outerproduct %{{.*}}, %{{.*}} : vector<4xf32>, vector<4xf32>
+fn matmul(a: ConstPtr<Generic>, b: ConstPtr<Generic>, out: Ptr<Generic>) {
+    let left = simd::transpose(ptr::load<Simd<[f32; 4, 4]>>(a), [1, 0]);
+    let right = ptr::load<Simd<[f32; 4, 4]>>(b);
+    let product = simd::outer(simd::extract(left, 0), simd::extract(right, 0))
+        + simd::outer(simd::extract(left, 1), simd::extract(right, 1))
+        + simd::outer(simd::extract(left, 2), simd::extract(right, 2))
+        + simd::outer(simd::extract(left, 3), simd::extract(right, 3));
+    ptr::store(out, product)
+}
+extern "C" trampoline "shape_matmul" = matmul;
+
+// Reverse eight bytes, then swap the halves of each pair of lanes.
+// CHECK-LABEL: func.func {{.*}}@{{.*}}mirror
+// CHECK: vector.shuffle %{{.*}}, %{{.*}} [7, 6, 5, 4, 3, 2, 1, 0] : vector<8xi8>, vector<8xi8>
+// CHECK: vector.deinterleave
+// CHECK: vector.interleave
+fn mirror(from: ConstPtr<Generic>, to: Ptr<Generic>) {
+    let bytes = ptr::load<Simd<[u8; 8]>>(from);
+    let reversed = simd::shuffle(bytes, bytes, [7, 6, 5, 4, 3, 2, 1, 0]);
+    let swapped = simd::interleave(
+        simd::deinterleave_odd(reversed), simd::deinterleave_even(reversed));
+    ptr::store(to, swapped)
+}
+extern "C" trampoline "shape_mirror" = mirror;

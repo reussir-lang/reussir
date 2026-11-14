@@ -3079,6 +3079,53 @@ def ReussirPtrMaskOp
   }];
 }
 
+def ReussirPtrExpandLoadOp
+    : ReussirPtrOp<"expand_load", [AllTypesMatch<["passthrough", "result"]>]> {
+  let summary = "Load consecutive elements into the set lanes of a vector";
+  let description = [{
+    `reussir.ptr.expand_load` reads as many consecutive elements from `ptr`
+    as `mask` has set lanes and places them, in order, in those lanes, as
+    `llvm.masked.expandload` does. The other lanes are those of
+    `passthrough`.
+
+    Example:
+
+    ```mlir
+    %v = reussir.ptr.expand_load %p, %mask, %pass : !ptr.ptr<#ptr.generic_space>, vector<8xi1>, vector<8xi32>
+    ```
+  }];
+  let arguments = (ins Arg<Ptr_PtrType, "pointer", [MemRead]>:$ptr,
+      Arg<VectorOfNonZeroRankOf<[I1]>, "mask">:$mask,
+      Arg<AnyVectorOfNonZeroRank, "pass-through">:$passthrough);
+  let results = (outs Res<AnyVectorOfNonZeroRank, "loaded vector">:$result);
+  let assemblyFormat = [{
+    $ptr `,` $mask `,` $passthrough `:` qualified(type($ptr)) `,` type($mask)
+    `,` type($passthrough) attr-dict
+  }];
+}
+
+def ReussirPtrCompressStoreOp : ReussirPtrOp<"compress_store", []> {
+  let summary = "Store the set lanes of a vector consecutively";
+  let description = [{
+    `reussir.ptr.compress_store` writes the lanes of `value` whose `mask` bit
+    is set to consecutive elements at `ptr`, in order, as
+    `llvm.masked.compressstore` does.
+
+    Example:
+
+    ```mlir
+    reussir.ptr.compress_store %v, %p, %mask : vector<8xi32>, !ptr.ptr<#ptr.generic_space>, vector<8xi1>
+    ```
+  }];
+  let arguments = (ins Arg<AnyVectorOfNonZeroRank, "vector">:$value,
+      Arg<Ptr_PtrType, "pointer", [MemWrite]>:$ptr,
+      Arg<VectorOfNonZeroRankOf<[I1]>, "mask">:$mask);
+  let assemblyFormat = [{
+    $value `,` $ptr `,` $mask `:` type($value) `,` qualified(type($ptr)) `,`
+    type($mask) attr-dict
+  }];
+}
+
 def ReussirPtrLaunderInvariantGroupOp
     : ReussirPtrOp<"launder_invariant_group",
                    [AllTypesMatch<["ptr", "result"]>]> {

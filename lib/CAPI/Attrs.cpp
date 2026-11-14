@@ -21,6 +21,7 @@
 #include <mlir/Bytecode/BytecodeImplementation.h>
 #include <mlir/CAPI/IR.h>
 #include <mlir/Dialect/Ptr/IR/PtrOps.h>
+#include <mlir/Dialect/Vector/IR/VectorOps.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/Operation.h>
 
@@ -129,6 +130,21 @@ bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
     set(store);
     return !isInvariant;
   }
+  // A masked access has an alignment and none of the flags.
+  auto align = [&](auto access) {
+    access.setAlignment(alignment == 0
+                            ? std::nullopt
+                            : std::optional(static_cast<int64_t>(alignment)));
+    return !isVolatile && !isNonTemporal && !isInvariant && !isInvariantGroup;
+  };
+  if (auto load = llvm::dyn_cast<mlir::ptr::MaskedLoadOp>(unwrap(op)))
+    return align(load);
+  if (auto store = llvm::dyn_cast<mlir::ptr::MaskedStoreOp>(unwrap(op)))
+    return align(store);
+  if (auto gather = llvm::dyn_cast<mlir::ptr::GatherOp>(unwrap(op)))
+    return align(gather);
+  if (auto scatter = llvm::dyn_cast<mlir::ptr::ScatterOp>(unwrap(op)))
+    return align(scatter);
   return false;
 }
 
@@ -151,4 +167,12 @@ bool reussirPtrAddSetFlags(MlirOperation op, ReussirPtrAddFlags flags) {
     return true;
   }
   return false;
+}
+
+MlirAttribute
+reussirVectorCombiningKindAttrGet(MlirContext context,
+                                  ReussirVectorCombiningKind kind) {
+  // The C enumeration has the values of `mlir::vector::CombiningKind`.
+  return wrap(mlir::vector::CombiningKindAttr::get(
+      unwrap(context), static_cast<mlir::vector::CombiningKind>(kind)));
 }

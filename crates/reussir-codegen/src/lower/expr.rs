@@ -977,6 +977,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .lower_bigint_intrinsic(block, env, e, *func, args)
                     .map(Some),
                 IntrinsicOp::Cell { func } => self.lower_cell_intrinsic(block, env, e, *func, args),
+                IntrinsicOp::Simd { func } => self.lower_simd_intrinsic(block, env, e, *func, args),
                 IntrinsicOp::Ptr {
                     func,
                     access,
@@ -1040,6 +1041,49 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                             self.tys.mlir_ty(e.ty)?,
                             loc,
                         ),
+                        // A vector is read at the alignment of one lane, and a
+                        // mask as a byte per lane.
+                        PtrFn::Load if matches!(e.ty.kind(), TyKind::Simd { .. }) => {
+                            let (memory, align, mask) = self.simd_memory(e.ty)?;
+                            let access = builders::PtrAccess {
+                                align: if access.align == 0 {
+                                    align
+                                } else {
+                                    access.align
+                                },
+                                ..access
+                            };
+                            let loaded = builders::ptr_load(operands[0], memory, access, loc);
+                            if !mask {
+                                loaded
+                            } else {
+                                let bytes = self.append(block, loaded);
+                                let zero = self.simd_bytes_zero(block, memory);
+                                arith::cmpi(self.context, CmpiPredicate::Ne, bytes, zero, loc)
+                            }
+                        }
+                        PtrFn::Store if matches!(args[1].ty.kind(), TyKind::Simd { .. }) => {
+                            let (memory, align, mask) = self.simd_memory(args[1].ty)?;
+                            let access = builders::PtrAccess {
+                                align: if access.align == 0 {
+                                    align
+                                } else {
+                                    access.align
+                                },
+                                ..access
+                            };
+                            let value = match mask {
+                                true => self.append(block, arith::extui(operands[1], memory, loc)),
+                                false => operands[1],
+                            };
+                            block.append_operation(builders::ptr_store(
+                                value,
+                                operands[0],
+                                access,
+                                loc,
+                            ));
+                            return Ok(None);
+                        }
                         // A `bool` occupies a byte in memory, where it is 0 or 1.
                         PtrFn::Load if matches!(e.ty.kind(), TyKind::Bool) => {
                             let byte = self.append(
@@ -1163,7 +1207,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             Cmp(l, op, r) => self.cmp(block, env, l, *op, r).map(Some),
             Cast(x, t) => self.cast(block, env, x, *t),
             TypeOffset(t) => {
-                let element = self.tys.mlir_ty(*t)?;
+                let element = match t.kind() {
+                    TyKind::Simd { .. } => self.simd_memory(*t)?.0,
+                    _ => self.tys.mlir_ty(*t)?,
+                };
                 let result = self.tys.mlir_ty(e.ty)?;
                 Ok(Some(self.append(
                     block,
@@ -4265,6 +4312,569 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 .build()
                 .expect("valid device extent"),
         )
+    }
+
+    /// How a vector lies in memory: the type that is loaded and stored, the
+    /// alignment of one lane in bytes, and whether the vector is a mask. A
+    /// mask is a byte per lane; any other vector is itself.
+    fn simd_memory(&self, ty: Ty<'tcx>) -> Result<(Type<'c>, u64, bool)> {
+        let TyKind::Simd {
+            elem,
+            dims,
+            scalable,
+        } = *ty.kind()
+        else {
+            return err("vector memory layout requested for a non-vector type");
+        };
+        let extents: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+        match *elem.kind() {
+            TyKind::Bool => {
+                let byte = IntegerType::new(self.context, 8).into();
+                let bytes = reussir_backend::dialect::ty::vector(byte, &extents, scalable);
+                Ok((bytes, 1, true))
+            }
+            TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) => {
+                Ok((self.tys.mlir_ty(ty)?, u64::from(w).div_ceil(8), false))
+            }
+            TyKind::Fp(reussir_core::semi::ty::FpTy::Ieee(w)) => {
+                Ok((self.tys.mlir_ty(ty)?, u64::from(w) / 8, false))
+            }
+            _ => err("vector lane type has no memory layout"),
+        }
+    }
+
+    /// The vector of byte lanes `bytes` with every lane zero.
+    fn simd_bytes_zero<'b>(&self, block: &'b Block<'c>, bytes: Type<'c>) -> Value<'c, 'b> {
+        let loc = self.loc();
+        let byte = IntegerType::new(self.context, 8).into();
+        let zero = self.append(
+            block,
+            arith::constant(self.context, IntegerAttribute::new(byte, 0).into(), loc),
+        );
+        self.append(block, builders::vector_broadcast(zero, bytes, loc))
+    }
+
+    /// A `core::simd` operation, as the `vector` dialect operation of the
+    /// same meaning.
+    /// The values of a constant sequence of integers given as an operand.
+    fn simd_const_seq(e: &Expr<'tcx>) -> Result<Vec<i64>> {
+        use reussir_core::semi::const_eval::{ConstScalar, ConstValue};
+        let ExprKind::ConstSeq(elems) = e.kind else {
+            return err("a vector shape operation takes a constant sequence");
+        };
+        elems
+            .iter()
+            .map(|v| match v {
+                ConstValue::Scalar(ConstScalar::Int(n)) => i64::try_from(n)
+                    .map_err(|_| LoweringError("vector position is out of range".into())),
+                _ => err("vector positions are integers"),
+            })
+            .collect()
+    }
+
+    /// The `core::simd` operations that change the shape of vectors. Their
+    /// positions are constant operands, read here and never evaluated.
+    fn lower_simd_shape<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        e: &Expr<'tcx>,
+        func: reussir_core::intrinsic::SimdFn,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Value<'c, 'b>> {
+        use builders::{dense_i64_array, i64_array, i64_attribute, vector_operation};
+        use reussir_core::intrinsic::SimdFn;
+        let loc = self.loc();
+        let context = self.context;
+        let result = self.tys.mlir_ty(e.ty)?;
+        let mut vector = |a: &'tcx Expr<'tcx>| {
+            self.expr(block, env, a)?
+                .ok_or_else(|| LoweringError("vector operand produced no value".into()))
+        };
+        let ones = |n: usize| vec![1i64; n];
+        let built = match func {
+            SimdFn::ShapeCast => builders::vector_shape_cast(vector(&args[0])?, result, loc),
+            SimdFn::Bitcast => {
+                vector_operation("vector.bitcast", &[vector(&args[0])?], &[result], &[], loc)
+            }
+            SimdFn::Broadcast => builders::vector_broadcast(vector(&args[0])?, result, loc),
+            SimdFn::Transpose => {
+                let order = dense_i64_array(context, &Self::simd_const_seq(&args[1])?);
+                vector_operation(
+                    "vector.transpose",
+                    &[vector(&args[0])?],
+                    &[result],
+                    &[("permutation", order)],
+                    loc,
+                )
+            }
+            SimdFn::Shuffle => {
+                let picks = dense_i64_array(context, &Self::simd_const_seq(&args[2])?);
+                let operands = [vector(&args[0])?, vector(&args[1])?];
+                vector_operation(
+                    "vector.shuffle",
+                    &operands,
+                    &[result],
+                    &[("mask", picks)],
+                    loc,
+                )
+            }
+            SimdFn::Interleave => {
+                let operands = [vector(&args[0])?, vector(&args[1])?];
+                vector_operation("vector.interleave", &operands, &[result], &[], loc)
+            }
+            SimdFn::DeinterleaveEven | SimdFn::DeinterleaveOdd => {
+                let halves = block.append_operation(vector_operation(
+                    "vector.deinterleave",
+                    &[vector(&args[0])?],
+                    &[result, result],
+                    &[],
+                    loc,
+                ));
+                let half = usize::from(func == SimdFn::DeinterleaveOdd);
+                return Ok(halves.result(half).expect("deinterleave result").into());
+            }
+            SimdFn::Slice => {
+                let offsets = Self::simd_const_seq(&args[1])?;
+                let sizes = Self::simd_const_seq(&args[2])?;
+                let strides = ones(offsets.len());
+                vector_operation(
+                    "vector.extract_strided_slice",
+                    &[vector(&args[0])?],
+                    &[result],
+                    &[
+                        ("offsets", i64_array(context, &offsets)),
+                        ("sizes", i64_array(context, &sizes)),
+                        ("strides", i64_array(context, &strides)),
+                    ],
+                    loc,
+                )
+            }
+            SimdFn::InsertSlice => {
+                let offsets = Self::simd_const_seq(&args[2])?;
+                let rank = match args[1].ty.kind() {
+                    TyKind::Simd { dims, .. } => dims.len(),
+                    _ => return err("an inserted slice is a vector"),
+                };
+                let operands = [vector(&args[1])?, vector(&args[0])?];
+                vector_operation(
+                    "vector.insert_strided_slice",
+                    &operands,
+                    &[result],
+                    &[
+                        ("offsets", i64_array(context, &offsets)),
+                        ("strides", i64_array(context, &ones(rank))),
+                    ],
+                    loc,
+                )
+            }
+            SimdFn::ScalableExtract | SimdFn::ScalableInsert => {
+                let insert = func == SimdFn::ScalableInsert;
+                let ExprKind::ConstInt(pos) = args[1 + usize::from(insert)].kind else {
+                    return err("a scalable sub-vector position is a literal");
+                };
+                let pos = i64::try_from(pos)
+                    .map_err(|_| LoweringError("vector position is out of range".into()))?;
+                let pos = [("pos", i64_attribute(context, pos))];
+                match insert {
+                    false => vector_operation(
+                        "vector.scalable.extract",
+                        &[vector(&args[0])?],
+                        &[result],
+                        &pos,
+                        loc,
+                    ),
+                    true => {
+                        let operands = [vector(&args[1])?, vector(&args[0])?];
+                        vector_operation("vector.scalable.insert", &operands, &[result], &pos, loc)
+                    }
+                }
+            }
+            SimdFn::Outer => {
+                let operands = [vector(&args[0])?, vector(&args[1])?];
+                vector_operation("vector.outerproduct", &operands, &[result], &[], loc)
+            }
+            _ => return err("not a vector shape operation"),
+        };
+        Ok(self.append(block, built))
+    }
+
+    fn lower_simd_intrinsic<'b>(
+        &self,
+        block: &'b Block<'c>,
+        env: &mut Env<'c, 'b, 'tcx>,
+        e: &Expr<'tcx>,
+        func: reussir_core::intrinsic::SimdFn,
+        args: &'tcx [Expr<'tcx>],
+    ) -> Result<Option<Value<'c, 'b>>> {
+        use builders::VectorPosition;
+        use reussir_core::intrinsic::SimdFn;
+        let loc = self.loc();
+        if func.is_shape() {
+            return self.lower_simd_shape(block, env, e, func, args).map(Some);
+        }
+        let mut values = Vec::with_capacity(args.len());
+        for a in args.iter() {
+            values.push(
+                self.expr(block, env, a)?
+                    .ok_or_else(|| LoweringError("vector operand produced no value".into()))?,
+            );
+        }
+        // The pointers of the lanes of a gather or a scatter: `base` moved by
+        // each index, counted in elements of the vector `ty`.
+        let lane_pointers = |ty: Ty<'tcx>, index: &Expr<'tcx>, indices: Value<'c, 'b>| {
+            let (TyKind::Simd { dims, scalable, .. }, (_, size, _)) =
+                (*ty.kind(), self.simd_memory(ty)?)
+            else {
+                return err("a gather or scatter takes a vector");
+            };
+            let extents: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+            let i64_ty: Type = IntegerType::new(self.context, 64).into();
+            let wide = reussir_backend::dialect::ty::vector(i64_ty, &extents, scalable);
+            // Indices are widened by their own signedness.
+            let indices = match *index.ty.kind() {
+                TyKind::Simd { elem, .. } => match *elem.kind() {
+                    TyKind::Int(IntTy::Signed(w)) if w < 64 => {
+                        self.append(block, arith::extsi(indices, wide, loc))
+                    }
+                    TyKind::Int(IntTy::Unsigned(w)) if w < 64 => {
+                        self.append(block, arith::extui(indices, wide, loc))
+                    }
+                    _ => indices,
+                },
+                _ => return err("a gather or scatter index is a vector"),
+            };
+            let size = self.append(
+                block,
+                arith::constant(
+                    self.context,
+                    IntegerAttribute::new(i64_ty, size as i64).into(),
+                    loc,
+                ),
+            );
+            let sizes = self.append(block, builders::vector_broadcast(size, wide, loc));
+            let offsets = self.append(block, arith::muli(indices, sizes, loc));
+            let pointer = reussir_backend::dialect::ty::generic_ptr(self.context);
+            let pointers = reussir_backend::dialect::ty::vector(pointer, &extents, scalable);
+            let bases = self.append(block, builders::vector_broadcast(values[0], pointers, loc));
+            Ok(self.append(
+                block,
+                builders::ptr_add(bases, offsets, builders::PtrAddFlags::None, loc),
+            ))
+        };
+        // The writes have no result; lanes are aligned as one lane is.
+        match func {
+            SimdFn::Store => {
+                let (_, align, _) = self.simd_memory(args[1].ty)?;
+                block.append_operation(builders::ptr_masked_store(
+                    values[1], values[0], values[2], align, loc,
+                ));
+                return Ok(None);
+            }
+            SimdFn::StoreCompress => {
+                block.append_operation(builders::ptr_compress_store(
+                    values[1], values[0], values[2], loc,
+                ));
+                return Ok(None);
+            }
+            SimdFn::Scatter => {
+                let (_, align, _) = self.simd_memory(args[2].ty)?;
+                let pointers = lane_pointers(args[2].ty, &args[1], values[1])?;
+                block.append_operation(builders::ptr_scatter(
+                    values[2], pointers, values[3], align, loc,
+                ));
+                return Ok(None);
+            }
+            _ => {}
+        }
+        let result = self.tys.mlir_ty(e.ty)?;
+        // The indices of `extract` and `insert`, from operand `first` on: a
+        // literal is a static position, anything else an `index` value.
+        let positions = |first: usize| {
+            args[first..]
+                .iter()
+                .zip(&values[first..])
+                .map(|(index, &value)| match index.kind {
+                    ExprKind::ConstInt(n) => i64::try_from(n)
+                        .map(VectorPosition::Static)
+                        .map_err(|_| LoweringError("vector index is out of range".into())),
+                    _ => {
+                        let index_ty = Type::index(self.context);
+                        Ok(VectorPosition::Dynamic(
+                            self.append(block, arith::index_castui(value, index_ty, loc)),
+                        ))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let built = match func {
+            SimdFn::Splat => builders::vector_broadcast(values[0], result, loc),
+            SimdFn::Step => builders::vector_step(result, loc),
+            SimdFn::Vscale => {
+                let vscale = self.append(block, builders::vector_vscale(self.context, loc));
+                arith::index_castui(vscale, result, loc)
+            }
+            SimdFn::FromElements => builders::vector_from_elements(&values, result, loc),
+            SimdFn::Extract => {
+                builders::vector_extract(self.context, values[0], &positions(1)?, result, loc)
+            }
+            SimdFn::Insert => {
+                builders::vector_insert(self.context, values[1], values[0], &positions(2)?, loc)
+            }
+            SimdFn::Select => arith::select(values[0], values[1], values[2], loc),
+            SimdFn::Load => {
+                let (_, align, _) = self.simd_memory(e.ty)?;
+                builders::ptr_masked_load(values[0], values[1], values[2], align, loc)
+            }
+            SimdFn::LoadExpand => builders::ptr_expand_load(values[0], values[1], values[2], loc),
+            SimdFn::Gather => {
+                let (_, align, _) = self.simd_memory(e.ty)?;
+                let pointers = lane_pointers(e.ty, &args[1], values[1])?;
+                builders::ptr_gather(pointers, values[2], values[3], align, loc)
+            }
+            SimdFn::Store | SimdFn::StoreCompress | SimdFn::Scatter => {
+                unreachable!("lowered above")
+            }
+            SimdFn::MaskFirst => {
+                let index_ty = Type::index(self.context);
+                let counts: Vec<_> = values
+                    .iter()
+                    .map(|&n| self.append(block, arith::index_castui(n, index_ty, loc)))
+                    .collect();
+                builders::vector_create_mask(&counts, result, loc)
+            }
+            SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => {
+                use builders::VectorCombiningKind as Kind;
+                let TyKind::Simd { dims, scalable, .. } = *args[0].ty.kind() else {
+                    return err("a mask operation takes a mask");
+                };
+                // A reduction reads one dimension, so several are flattened.
+                let lanes = dims.iter().product::<u64>() as i64;
+                let i1 = IntegerType::new(self.context, 1).into();
+                let i32_ty: Type = IntegerType::new(self.context, 32).into();
+                let flat_ty = reussir_backend::dialect::ty::vector(i1, &[lanes], scalable);
+                let counters = reussir_backend::dialect::ty::vector(i32_ty, &[lanes], scalable);
+                let mask = match dims.len() {
+                    1 => values[0],
+                    _ => self.append(block, builders::vector_shape_cast(values[0], flat_ty, loc)),
+                };
+                let reduce = |kind, vector, ty| {
+                    builders::vector_reduction(self.context, kind, vector, ty, None, loc)
+                };
+                match func {
+                    SimdFn::Any => reduce(Kind::Or, mask, i1),
+                    SimdFn::All => reduce(Kind::And, mask, i1),
+                    SimdFn::Count => {
+                        let ones = self.append(block, arith::extui(mask, counters, loc));
+                        let total = self.append(block, reduce(Kind::Add, ones, i32_ty));
+                        arith::extui(total, result, loc)
+                    }
+                    _ => {
+                        // The smallest index among the set lanes; a clear
+                        // lane counts as the number of lanes.
+                        let fixed = self.append(
+                            block,
+                            arith::constant(
+                                self.context,
+                                IntegerAttribute::new(i32_ty, lanes).into(),
+                                loc,
+                            ),
+                        );
+                        let count = match scalable {
+                            false => fixed,
+                            true => {
+                                let vscale =
+                                    self.append(block, builders::vector_vscale(self.context, loc));
+                                let vscale =
+                                    self.append(block, arith::index_castui(vscale, i32_ty, loc));
+                                self.append(block, arith::muli(vscale, fixed, loc))
+                            }
+                        };
+                        let none =
+                            self.append(block, builders::vector_broadcast(count, counters, loc));
+                        let indices = self.append(block, builders::vector_step(counters, loc));
+                        let live = self.append(block, arith::select(mask, indices, none, loc));
+                        let first = self.append(block, reduce(Kind::MinUI, live, i32_ty));
+                        arith::extui(first, result, loc)
+                    }
+                }
+            }
+            SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
+            _ if func.reduction().is_some() => {
+                use builders::VectorCombiningKind as Kind;
+                use reussir_backend::melior::ir::attribute::FloatAttribute;
+                let TyKind::Simd {
+                    elem,
+                    dims,
+                    scalable,
+                } = *args[0].ty.kind()
+                else {
+                    return err("a reduction takes a vector");
+                };
+                let lane = self.tys.mlir_ty(elem)?;
+                let width = match elem.kind() {
+                    TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) => u32::from(*w),
+                    _ => 1,
+                };
+                let float = matches!(elem.kind(), TyKind::Fp(_));
+                let signed = matches!(elem.kind(), TyKind::Int(IntTy::Signed(_)));
+                // A reduction reads one dimension, so several are flattened.
+                let lanes = dims.iter().product::<u64>() as i64;
+                let flat = reussir_backend::dialect::ty::vector(lane, &[lanes], scalable);
+                let flatten = |value, ty| match dims.len() {
+                    1 => value,
+                    _ => self.append(block, builders::vector_shape_cast(value, ty, loc)),
+                };
+                // The kind, and the value a lane contributes when it is
+                // masked off: the identity of the combination.
+                let int_min = if width >= 64 {
+                    i64::MIN
+                } else {
+                    -(1i64 << (width - 1))
+                };
+                let (kind, identity, float_identity) = match (func, float, signed) {
+                    (SimdFn::ReduceAdd | SimdFn::ReduceAddReassoc, ..) => (Kind::Add, 0, -0.0),
+                    (SimdFn::ReduceMul | SimdFn::ReduceMulReassoc, ..) => (Kind::Mul, 1, 1.0),
+                    (SimdFn::ReduceMin, true, _) => (Kind::MinNumF, 0, f64::INFINITY),
+                    (SimdFn::ReduceMin, false, true) => (Kind::MinSI, !int_min, 0.0),
+                    (SimdFn::ReduceMin, false, false) => (Kind::MinUI, -1, 0.0),
+                    (SimdFn::ReduceMax, true, _) => (Kind::MaxNumF, 0, f64::NEG_INFINITY),
+                    (SimdFn::ReduceMax, false, true) => (Kind::MaxSI, int_min, 0.0),
+                    (SimdFn::ReduceMax, false, false) => (Kind::MaxUI, 0, 0.0),
+                    (SimdFn::ReduceAnd, ..) => (Kind::And, -1, 0.0),
+                    (SimdFn::ReduceOr, ..) => (Kind::Or, 0, 0.0),
+                    _ => (Kind::Xor, 0, 0.0),
+                };
+                let mut vector = flatten(values[0], flat);
+                if let Some(&mask) = values.get(1) {
+                    let i1 = IntegerType::new(self.context, 1).into();
+                    let mask_ty = reussir_backend::dialect::ty::vector(i1, &[lanes], scalable);
+                    let mask = flatten(mask, mask_ty);
+                    let attribute: Attribute = match float {
+                        true => FloatAttribute::new(self.context, lane, float_identity).into(),
+                        false => IntegerAttribute::new(lane, identity).into(),
+                    };
+                    let scalar = self.append(block, arith::constant(self.context, attribute, loc));
+                    let spread = self.append(block, builders::vector_broadcast(scalar, flat, loc));
+                    vector = self.append(block, arith::select(mask, vector, spread, loc));
+                }
+                let reassoc = matches!(func, SimdFn::ReduceAddReassoc | SimdFn::ReduceMulReassoc);
+                let fastmath = reassoc.then(|| {
+                    Attribute::parse(self.context, "#arith.fastmath<reassoc>")
+                        .expect("valid fastmath attribute")
+                });
+                builders::vector_reduction(self.context, kind, vector, lane, fastmath, loc)
+            }
+            _ => {
+                // The lanewise operations: the lane type of the operands
+                // picks the integer, unsigned or floating-point form.
+                let TyKind::Simd { elem, .. } = *args[0].ty.kind() else {
+                    return err("a lanewise vector operation takes vectors");
+                };
+                let operands = self.tys.mlir_ty(args[0].ty)?;
+                let lane = self.tys.mlir_ty(elem)?;
+                let float = matches!(elem.kind(), TyKind::Fp(_));
+                let signed = matches!(elem.kind(), TyKind::Int(IntTy::Signed(_)));
+                let Some((arity, _, compares)) = func.lanewise() else {
+                    return err("vector operation reached lowering unelaborated");
+                };
+                // One operand more than the operation needs is its mask.
+                let mask = values.get(arity).copied();
+                let a = values[0];
+                let b = if arity >= 2 { values[1] } else { a };
+                // Every lane set to an integer constant, for `neg` and `not`.
+                let all = |n: i64| {
+                    let constant = self.append(
+                        block,
+                        arith::constant(self.context, IntegerAttribute::new(lane, n).into(), loc),
+                    );
+                    self.append(block, builders::vector_broadcast(constant, operands, loc))
+                };
+                let unary = |name: &str| {
+                    OperationBuilder::new(name, loc)
+                        .add_operands(&[a])
+                        .add_results(&[operands])
+                        .build()
+                        .map_err(|_| LoweringError("invalid lanewise vector operation".into()))
+                };
+                let cmp = |int: [CmpiPredicate; 2], fp: CmpfPredicate| match float {
+                    true => arith::cmpf(self.context, fp, a, b, loc),
+                    false => arith::cmpi(self.context, int[usize::from(signed)], a, b, loc),
+                };
+                // A masked lane must not trap: its integer divisor becomes one.
+                let b = match mask {
+                    Some(mask) if !float && matches!(func, SimdFn::Div | SimdFn::Rem) => {
+                        self.append(block, arith::select(mask, b, all(1), loc))
+                    }
+                    _ => b,
+                };
+                use CmpfPredicate as F;
+                use CmpiPredicate as I;
+                let unmasked = match (func, float, signed) {
+                    (SimdFn::Add, false, _) => arith::addi(a, b, loc),
+                    (SimdFn::Add, true, _) => arith::addf(a, b, loc),
+                    (SimdFn::Sub, false, _) => arith::subi(a, b, loc),
+                    (SimdFn::Sub, true, _) => arith::subf(a, b, loc),
+                    (SimdFn::Mul, false, _) => arith::muli(a, b, loc),
+                    (SimdFn::Mul, true, _) => arith::mulf(a, b, loc),
+                    (SimdFn::Div, true, _) => arith::divf(a, b, loc),
+                    (SimdFn::Div, false, true) => arith::divsi(a, b, loc),
+                    (SimdFn::Div, false, false) => arith::divui(a, b, loc),
+                    (SimdFn::Rem, true, _) => arith::remf(a, b, loc),
+                    (SimdFn::Rem, false, true) => arith::remsi(a, b, loc),
+                    (SimdFn::Rem, false, false) => arith::remui(a, b, loc),
+                    // `melior` has no builder for `arith.minnumf`.
+                    (SimdFn::Min, true, _) => OperationBuilder::new("arith.minnumf", loc)
+                        .add_operands(&[a, b])
+                        .add_results(&[operands])
+                        .build()
+                        .map_err(|_| LoweringError("invalid `arith.minnumf`".into()))?,
+                    (SimdFn::Min, false, true) => arith::minsi(a, b, loc),
+                    (SimdFn::Min, false, false) => arith::minui(a, b, loc),
+                    (SimdFn::Max, true, _) => arith::maxnumf(a, b, loc),
+                    (SimdFn::Max, false, true) => arith::maxsi(a, b, loc),
+                    (SimdFn::Max, false, false) => arith::maxui(a, b, loc),
+                    (SimdFn::Neg, true, _) => arith::negf(a, loc),
+                    (SimdFn::Neg, false, _) => arith::subi(all(0), a, loc),
+                    (SimdFn::Abs, true, _) => unary("math.absf")?,
+                    (SimdFn::Abs, false, true) => unary("math.absi")?,
+                    // An unsigned lane is its own magnitude.
+                    (SimdFn::Abs, false, false) => return Ok(Some(a)),
+                    (SimdFn::And, ..) => arith::andi(a, b, loc),
+                    (SimdFn::Or, ..) => arith::ori(a, b, loc),
+                    (SimdFn::Xor, ..) => arith::xori(a, b, loc),
+                    (SimdFn::Not, ..) => arith::xori(a, all(-1), loc),
+                    (SimdFn::Shl, ..) => arith::shli(a, b, loc),
+                    (SimdFn::Shr, _, true) => arith::shrsi(a, b, loc),
+                    (SimdFn::Shr, _, false) => arith::shrui(a, b, loc),
+                    (SimdFn::Fma, ..) => OperationBuilder::new("math.fma", loc)
+                        .add_operands(&[a, b, values[2]])
+                        .add_results(&[operands])
+                        .build()
+                        .map_err(|_| LoweringError("invalid `math.fma`".into()))?,
+                    (SimdFn::Eq, ..) => cmp([I::Eq, I::Eq], F::Oeq),
+                    (SimdFn::Ne, ..) => cmp([I::Ne, I::Ne], F::Une),
+                    (SimdFn::Lt, ..) => cmp([I::Ult, I::Slt], F::Olt),
+                    (SimdFn::Le, ..) => cmp([I::Ule, I::Sle], F::Ole),
+                    (SimdFn::Gt, ..) => cmp([I::Ugt, I::Sgt], F::Ogt),
+                    (SimdFn::Ge, ..) => cmp([I::Uge, I::Sge], F::Oge),
+                    _ => return err("vector operation reached lowering unelaborated"),
+                };
+                match mask {
+                    None => unmasked,
+                    Some(mask) => {
+                        let value = self.append(block, unmasked);
+                        // A masked lane is false in a comparison and keeps
+                        // the first operand otherwise.
+                        match compares {
+                            true => arith::andi(value, mask, loc),
+                            false => arith::select(mask, value, a, loc),
+                        }
+                    }
+                }
+            }
+        };
+        Ok(Some(self.append(block, built)))
     }
 
     /// The pointer to the first element of an array: its memref view, moved

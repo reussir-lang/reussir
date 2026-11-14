@@ -354,7 +354,7 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
             // A constant sequence views immutable static data, like `str`.
             TyKind::ConstSeq(_) => false,
             // An opaque pointer owns nothing.
-            TyKind::Ptr { .. } | TyKind::GenericAddrSpace => false,
+            TyKind::Ptr { .. } | TyKind::GenericAddrSpace | TyKind::Simd { .. } => false,
             // A cell is always one shared rc-managed box, independent of its
             // element type (which the cell's drop recursively releases).
             TyKind::Cell { .. } => true,
@@ -846,7 +846,8 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                 | crate::intrinsic::IntrinsicOp::ConstSeq { .. }
                 | crate::intrinsic::IntrinsicOp::Panic => self.place_args(args, live_after),
                 // Pointers and the values accessed through them own nothing.
-                crate::intrinsic::IntrinsicOp::Ptr { .. } => self.place_args(args, live_after),
+                crate::intrinsic::IntrinsicOp::Ptr { .. }
+                | crate::intrinsic::IntrinsicOp::Simd { .. } => self.place_args(args, live_after),
             },
             ExprKind::NullableCall(opt) => {
                 if let Some(x) = opt {

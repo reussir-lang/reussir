@@ -493,6 +493,10 @@ pub enum IntrinsicOp {
     BigInt {
         func: BigIntFn,
     },
+    /// `core::simd::<func>`, an operation on vectors.
+    Simd {
+        func: SimdFn,
+    },
     /// `core::ptr::<func>`. A load or store carries how it accesses memory,
     /// and an offset what it assumes of the arithmetic.
     Ptr {
@@ -500,6 +504,363 @@ pub enum IntrinsicOp {
         access: PtrAccess,
         arith: PtrArithFlag,
     },
+}
+
+/// Operations on vectors (`Simd<...>`). `V` is a vector type.
+///
+/// A lanewise operation may take one more operand than its table entry
+/// says: a mask of the shape of its vectors. A lane whose mask bit is clear
+/// keeps the lane of the first operand, or is false in a comparison, and
+/// never traps.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum SimdFn {
+    /// `splat<V>(x)`: every lane is `x`.
+    Splat,
+    /// `step<V>()`: lanes 0, 1, 2, ... of a one-dimensional integer vector.
+    Step,
+    /// `vscale() -> u64`: the factor of scalable extents on this machine.
+    Vscale,
+    /// `lanes<V>() -> u64`: the number of lanes of `V`; elaborates to a
+    /// constant, times `vscale()` for a scalable `V`.
+    Lanes,
+    /// `from_elements<V>(x...)`: one argument per lane, in row-major order;
+    /// `V` is fixed.
+    FromElements,
+    /// `extract(v, i...)`: the lane at the indices, or the sub-vector when
+    /// fewer indices than dimensions are given. Only an index into the last
+    /// dimension may be a run-time value.
+    Extract,
+    /// `insert(v, x, i...)`: `v` with that lane or sub-vector replaced.
+    Insert,
+    /// `add sub mul div rem min max`: lanewise arithmetic on two vectors of
+    /// one numeric type; signedness comes from the lane type.
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Min,
+    Max,
+    /// `neg abs`: lanewise on one numeric vector.
+    Neg,
+    Abs,
+    /// `and or xor not`: lanewise on integer vectors and on masks.
+    And,
+    Or,
+    Xor,
+    Not,
+    /// `shl shr`: lanewise shifts of integer vectors; `shr` is arithmetic
+    /// for signed lanes.
+    Shl,
+    Shr,
+    /// `fma(a, b, c)`: lanewise `a * b + c` on floating-point vectors.
+    Fma,
+    /// `eq ne lt le gt ge`: lanewise comparison; the result is a mask of
+    /// the same shape. `eq` and `ne` also compare masks.
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    /// `select(m, a, b)`: `a` where the mask is set, else `b`.
+    Select,
+    /// `mask_first<M>(n...)`: the mask whose leading `n` lanes are set, with
+    /// one count per dimension.
+    MaskFirst,
+    /// `any(m)`, `all(m)`: whether some or every lane of a mask is set.
+    Any,
+    All,
+    /// `count(m) -> u64`: the number of set lanes.
+    Count,
+    /// `first_set(m) -> u64`: the index of the first set lane of a
+    /// one-dimensional mask, or its number of lanes when none is set.
+    FirstSet,
+    /// `reduce_<kind>(v)`: all lanes combined into one value. With a mask
+    /// as a second operand, only the set lanes take part.
+    ReduceAdd,
+    ReduceMul,
+    ReduceMin,
+    ReduceMax,
+    ReduceAnd,
+    ReduceOr,
+    ReduceXor,
+    /// `load<V>(p, m, passthrough)`: the lanes of a one-dimensional vector
+    /// whose mask bit is set are read from `p`; the others are not touched
+    /// and take `passthrough`.
+    Load,
+    /// `store(p, v, m)`: the lanes whose mask bit is set are written.
+    Store,
+    /// `gather<V>(base, index, m, passthrough)`: lane `i` reads the element
+    /// `index[i]` after `base`; masked lanes take `passthrough`.
+    Gather,
+    /// `scatter(base, index, v, m)`: lane `i` writes there.
+    Scatter,
+    /// `load_expand<V>(p, m, passthrough)`: consecutive elements at `p` go
+    /// to the set lanes, in order.
+    LoadExpand,
+    /// `store_compress(p, v, m)`: the set lanes are written consecutively.
+    StoreCompress,
+    /// `shape_cast<V>(v)`: the same lanes, in row-major order, in the shape
+    /// of `V`.
+    ShapeCast,
+    /// `bitcast<V>(v)`: the same bits as other lanes; only the last extent
+    /// changes.
+    Bitcast,
+    /// `broadcast<V>(v)`: `v` repeated along the leading extents of `V`.
+    Broadcast,
+    /// `transpose(v, p)`: extent `i` of the result is extent `p[i]` of `v`;
+    /// `p` is a constant sequence.
+    Transpose,
+    /// `shuffle(a, b, i)`: lane `k` is lane `i[k]` of `a` followed by `b`;
+    /// `i` is a constant sequence and the vectors are fixed.
+    Shuffle,
+    /// `interleave(a, b)`: the lanes of the last extent alternate.
+    Interleave,
+    /// `deinterleave_even(v)`, `deinterleave_odd(v)`: every other lane of
+    /// the last extent.
+    DeinterleaveEven,
+    DeinterleaveOdd,
+    /// `slice(v, offsets, sizes)`: a sub-vector of a fixed vector, from
+    /// constant positions.
+    Slice,
+    /// `insert_slice(v, w, offsets)`: `v` with `w` written at constant
+    /// positions.
+    InsertSlice,
+    /// `scalable_extract<V>(v, pos)`: the sub-vector `V` of a scalable
+    /// vector at the constant lane `pos`.
+    ScalableExtract,
+    /// `scalable_insert(v, w, pos)`: `v` with the sub-vector `w` at `pos`.
+    ScalableInsert,
+    /// `outer(a, b)`: the product of each lane of `a` with each lane of `b`.
+    Outer,
+    /// `reduce_add_reassoc`, `reduce_mul_reassoc`: the floating-point sum
+    /// and product in any order, which lets the target reduce in parallel.
+    /// `reduce_add` and `reduce_mul` combine in lane order.
+    ReduceAddReassoc,
+    ReduceMulReassoc,
+}
+
+/// The lanes a lanewise vector operation works on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SimdLanes {
+    /// Integers and floating-point numbers.
+    Numeric,
+    /// Integers.
+    Integer,
+    /// Integers and `bool`.
+    Bits,
+    /// Floating-point numbers.
+    Float,
+    /// Any lane type.
+    Any,
+}
+
+impl SimdLanes {
+    pub fn describe(self) -> &'static str {
+        match self {
+            SimdLanes::Numeric => "integer or floating-point",
+            SimdLanes::Integer => "integer",
+            SimdLanes::Bits => "integer or `bool`",
+            SimdLanes::Float => "floating-point",
+            SimdLanes::Any => "any",
+        }
+    }
+}
+
+impl SimdFn {
+    pub const ALL: &'static [SimdFn] = &[
+        SimdFn::Splat,
+        SimdFn::Step,
+        SimdFn::Vscale,
+        SimdFn::Lanes,
+        SimdFn::FromElements,
+        SimdFn::Extract,
+        SimdFn::Insert,
+        SimdFn::Add,
+        SimdFn::Sub,
+        SimdFn::Mul,
+        SimdFn::Div,
+        SimdFn::Rem,
+        SimdFn::Neg,
+        SimdFn::Min,
+        SimdFn::Max,
+        SimdFn::Abs,
+        SimdFn::And,
+        SimdFn::Or,
+        SimdFn::Xor,
+        SimdFn::Not,
+        SimdFn::Shl,
+        SimdFn::Shr,
+        SimdFn::Fma,
+        SimdFn::Eq,
+        SimdFn::Ne,
+        SimdFn::Lt,
+        SimdFn::Le,
+        SimdFn::Gt,
+        SimdFn::Ge,
+        SimdFn::Select,
+        SimdFn::MaskFirst,
+        SimdFn::Any,
+        SimdFn::All,
+        SimdFn::Count,
+        SimdFn::FirstSet,
+        SimdFn::Load,
+        SimdFn::Store,
+        SimdFn::Gather,
+        SimdFn::Scatter,
+        SimdFn::LoadExpand,
+        SimdFn::StoreCompress,
+        SimdFn::ShapeCast,
+        SimdFn::Bitcast,
+        SimdFn::Broadcast,
+        SimdFn::Transpose,
+        SimdFn::Shuffle,
+        SimdFn::Interleave,
+        SimdFn::DeinterleaveEven,
+        SimdFn::DeinterleaveOdd,
+        SimdFn::Slice,
+        SimdFn::InsertSlice,
+        SimdFn::ScalableExtract,
+        SimdFn::ScalableInsert,
+        SimdFn::Outer,
+        SimdFn::ReduceAdd,
+        SimdFn::ReduceMul,
+        SimdFn::ReduceMin,
+        SimdFn::ReduceMax,
+        SimdFn::ReduceAnd,
+        SimdFn::ReduceOr,
+        SimdFn::ReduceXor,
+        SimdFn::ReduceAddReassoc,
+        SimdFn::ReduceMulReassoc,
+    ];
+
+    pub fn parse(name: &str) -> Option<SimdFn> {
+        SimdFn::ALL.iter().copied().find(|f| f.as_str() == name)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SimdFn::Splat => "splat",
+            SimdFn::Step => "step",
+            SimdFn::Vscale => "vscale",
+            SimdFn::Lanes => "lanes",
+            SimdFn::FromElements => "from_elements",
+            SimdFn::Extract => "extract",
+            SimdFn::Insert => "insert",
+            SimdFn::Add => "add",
+            SimdFn::Sub => "sub",
+            SimdFn::Mul => "mul",
+            SimdFn::Div => "div",
+            SimdFn::Rem => "rem",
+            SimdFn::Neg => "neg",
+            SimdFn::Min => "min",
+            SimdFn::Max => "max",
+            SimdFn::Abs => "abs",
+            SimdFn::And => "and",
+            SimdFn::Or => "or",
+            SimdFn::Xor => "xor",
+            SimdFn::Not => "not",
+            SimdFn::Shl => "shl",
+            SimdFn::Shr => "shr",
+            SimdFn::Fma => "fma",
+            SimdFn::Eq => "eq",
+            SimdFn::Ne => "ne",
+            SimdFn::Lt => "lt",
+            SimdFn::Le => "le",
+            SimdFn::Gt => "gt",
+            SimdFn::Ge => "ge",
+            SimdFn::Select => "select",
+            SimdFn::MaskFirst => "mask_first",
+            SimdFn::Any => "any",
+            SimdFn::All => "all",
+            SimdFn::Count => "count",
+            SimdFn::FirstSet => "first_set",
+            SimdFn::Load => "load",
+            SimdFn::Store => "store",
+            SimdFn::Gather => "gather",
+            SimdFn::Scatter => "scatter",
+            SimdFn::LoadExpand => "load_expand",
+            SimdFn::StoreCompress => "store_compress",
+            SimdFn::ShapeCast => "shape_cast",
+            SimdFn::Bitcast => "bitcast",
+            SimdFn::Broadcast => "broadcast",
+            SimdFn::Transpose => "transpose",
+            SimdFn::Shuffle => "shuffle",
+            SimdFn::Interleave => "interleave",
+            SimdFn::DeinterleaveEven => "deinterleave_even",
+            SimdFn::DeinterleaveOdd => "deinterleave_odd",
+            SimdFn::Slice => "slice",
+            SimdFn::InsertSlice => "insert_slice",
+            SimdFn::ScalableExtract => "scalable_extract",
+            SimdFn::ScalableInsert => "scalable_insert",
+            SimdFn::Outer => "outer",
+            SimdFn::ReduceAdd => "reduce_add",
+            SimdFn::ReduceMul => "reduce_mul",
+            SimdFn::ReduceMin => "reduce_min",
+            SimdFn::ReduceMax => "reduce_max",
+            SimdFn::ReduceAnd => "reduce_and",
+            SimdFn::ReduceOr => "reduce_or",
+            SimdFn::ReduceXor => "reduce_xor",
+            SimdFn::ReduceAddReassoc => "reduce_add_reassoc",
+            SimdFn::ReduceMulReassoc => "reduce_mul_reassoc",
+        }
+    }
+
+    /// Whether the operation changes the shape of vectors.
+    pub fn is_shape(self) -> bool {
+        use SimdFn::*;
+        matches!(
+            self,
+            ShapeCast
+                | Bitcast
+                | Broadcast
+                | Transpose
+                | Shuffle
+                | Interleave
+                | DeinterleaveEven
+                | DeinterleaveOdd
+                | Slice
+                | InsertSlice
+                | ScalableExtract
+                | ScalableInsert
+                | Outer
+        )
+    }
+
+    /// For a reduction: the lanes it accepts.
+    pub fn reduction(self) -> Option<SimdLanes> {
+        use SimdFn::*;
+        Some(match self {
+            ReduceAdd | ReduceMul | ReduceMin | ReduceMax => SimdLanes::Numeric,
+            ReduceAnd | ReduceOr | ReduceXor => SimdLanes::Bits,
+            ReduceAddReassoc | ReduceMulReassoc => SimdLanes::Float,
+            _ => return None,
+        })
+    }
+
+    /// For an operation applied lane by lane to vectors of one type: the
+    /// number of operands, the lanes it accepts, and whether it yields a
+    /// mask and not a vector of that type.
+    pub fn lanewise(self) -> Option<(usize, SimdLanes, bool)> {
+        use SimdFn::*;
+        Some(match self {
+            Add | Sub | Mul | Div | Rem | Min | Max => (2, SimdLanes::Numeric, false),
+            Neg | Abs => (1, SimdLanes::Numeric, false),
+            And | Or | Xor => (2, SimdLanes::Bits, false),
+            Not => (1, SimdLanes::Bits, false),
+            Shl | Shr => (2, SimdLanes::Integer, false),
+            Fma => (3, SimdLanes::Float, false),
+            Eq | Ne => (2, SimdLanes::Any, true),
+            Lt | Le | Gt | Ge => (2, SimdLanes::Numeric, true),
+            _ => return None,
+        })
+    }
+
+    /// Whether the function survives elaboration; `lanes` does not.
+    pub fn is_lowered(self) -> bool {
+        self != SimdFn::Lanes
+    }
 }
 
 /// Operations on opaque pointers. `Ptr<A>` and `ConstPtr<A>` share them,
@@ -923,6 +1284,7 @@ impl IntrinsicOp {
             IntrinsicOp::Pjrt { .. } => "pjrt",
             IntrinsicOp::BigInt { .. } => "bigint",
             IntrinsicOp::Ptr { .. } => "ptr",
+            IntrinsicOp::Simd { .. } => "simd",
         }
     }
 
@@ -938,6 +1300,7 @@ impl IntrinsicOp {
             IntrinsicOp::Pjrt { func } => func.as_str(),
             IntrinsicOp::BigInt { func } => func.as_str(),
             IntrinsicOp::Ptr { func, .. } => func.as_str(),
+            IntrinsicOp::Simd { func } => func.as_str(),
         }
     }
 
@@ -958,6 +1321,7 @@ impl IntrinsicOp {
                 ..
             } => arith.bits(),
             IntrinsicOp::Ptr { access, .. } => access.bits(),
+            IntrinsicOp::Simd { .. } => 0,
         }
     }
 
@@ -988,6 +1352,10 @@ impl IntrinsicOp {
             "bigint" if imm == 0 => Some(IntrinsicOp::BigInt {
                 func: BigIntFn::parse(name)?,
             }),
+            "simd" if imm == 0 => {
+                let func = SimdFn::parse(name)?;
+                func.is_lowered().then_some(IntrinsicOp::Simd { func })
+            }
             "ptr" => {
                 let func = PtrFn::parse(name)?;
                 let plain = PtrAccess::default();
@@ -1203,6 +1571,14 @@ mod tests {
             );
         }
         assert_eq!(IntrinsicOp::parse("ptr", "offset", 4), None);
+        for &func in SimdFn::ALL {
+            let op = IntrinsicOp::Simd { func };
+            assert_eq!(
+                IntrinsicOp::parse(op.family(), op.name(), op.imm()),
+                func.is_lowered().then_some(op)
+            );
+        }
+        assert_eq!(IntrinsicOp::parse("simd", "splat", 1), None);
         assert_eq!(IntrinsicOp::parse("ptr", "as_const", 1), None);
         assert_eq!(IntrinsicOp::parse("ptr", "load", load.imm()), Some(load));
         assert_eq!(IntrinsicOp::parse("ptr", "store", load.imm()), None);

@@ -1,0 +1,56 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name vectors --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --package-name vectors --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --package-name vectors --extern core=%t.core.rri --emit llvm-ir -O aggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+// RUN: %rrc %S/Inputs/simd_ptr_scalable.rr --package-name vectors --extern core=%t.core.rri --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit llvm-ir -O aggressive -o %t.sve.ll
+// RUN: %FileCheck %S/Inputs/simd_ptr_scalable.rr < %t.sve.ll
+
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import core::simd;
+
+// A vector is read at the alignment of one lane, not of the whole vector.
+// CHECK-LABEL: func.func @{{.*}}sum
+// CHECK: ptr.load %arg0 alignment = 4 : !ptr.ptr<#ptr.generic_space> -> vector<8xf32>
+// LLVM-LABEL: define {{.*}}float @{{.*}}sum
+// LLVM: load <8 x float>, ptr %0, align 4
+pub fn sum(p: ConstPtr<Generic>) -> f32 { simd::reduce_add(ptr::load<Simd<[f32; 8]>>(p)) }
+
+// A mask is a byte per lane in memory.
+// CHECK-LABEL: func.func @{{.*}}mask
+// CHECK: %[[BYTES:.*]] = ptr.load %arg0 alignment = 1 : !ptr.ptr<#ptr.generic_space> -> vector<8xi8>
+// CHECK: %[[SET:.*]] = arith.cmpi ne, %[[BYTES]], %{{.*}} : vector<8xi8>
+// CHECK: %[[OUT:.*]] = arith.extui %[[SET]] : vector<8xi1> to vector<8xi8>
+// CHECK: ptr.store %[[OUT]], %arg1 alignment = 1 : vector<8xi8>, !ptr.ptr<#ptr.generic_space>
+pub fn mask(from: ConstPtr<Generic>, to: Ptr<Generic>) {
+    ptr::store(to, ptr::load<Simd<[bool; 8]>>(from))
+}
+
+// `advance` steps one vector ahead; an explicit alignment is kept.
+// CHECK-LABEL: func.func @{{.*}}next
+// CHECK: ptr.type_offset vector<4xi64> : i64
+// CHECK: ptr.load %{{.*}} alignment = 32 : !ptr.ptr<#ptr.generic_space> -> vector<4xi64>
+// LLVM-LABEL: define {{.*}}<4 x i64> @{{.*}}next
+// LLVM: getelementptr inbounds{{.*}} i8, ptr %0, i64 32
+// LLVM: load <4 x i64>, ptr %{{.*}}, align 32
+pub fn next(p: ConstPtr<Generic>) -> Simd<[i64; 4]> {
+    let q = ptr::advance<Simd<[i64; 4]>>(p, 1, PtrArithFlag::Inbounds);
+    ptr::load_extended<Simd<[i64; 4]>>(q, false, false, false, false, 32)
+}
+
+// CHECK-LABEL: func.func @{{.*}}write
+// CHECK: ptr.store %arg1, %arg0 alignment = 2 : vector<2x4xi16>, !ptr.ptr<#ptr.generic_space>
+pub fn write(p: Ptr<Generic>, v: Simd<[i16; 2, 4]>) { ptr::store(p, v) }
+
+// The size of a mask is its number of lanes.
+// CHECK-LABEL: func.func @{{.*}}mask_size
+// CHECK: ptr.type_offset vector<16xi8> : i64
+// LLVM-LABEL: define {{.*}}i64 @{{.*}}mask_size
+// LLVM: ret i64 16
+pub fn mask_size() -> u64 { ptr::type_offset<Simd<[bool; 16]>>() }

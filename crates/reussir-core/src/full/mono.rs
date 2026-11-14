@@ -896,6 +896,25 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         });
     }
 
+    // A vector's calling convention depends on the target features of both
+    // sides, so it does not cross a trampoline.
+    for t in input.trampolines {
+        let crosses_vector = input
+            .elaborated
+            .iter()
+            .find(|f| f.def == t.target)
+            .is_some_and(|f| {
+                f.params
+                    .iter()
+                    .map(|&(_, _, ty)| ty)
+                    .chain([f.return_ty])
+                    .any(|ty| matches!(ty.kind(), TyKind::Simd { .. }))
+            });
+        if crosses_vector {
+            driver.error(t.span, "a vector cannot cross the FFI boundary");
+        }
+    }
+
     let mut trampolines: Vec<mir::Trampoline> = input
         .trampolines
         .iter()
@@ -1063,6 +1082,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         TyKind::Token
         | TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -2121,6 +2141,11 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// report every such `Arc`, once per type per function instance (see
     /// [`reported_arcs`](Self::reported_arcs)).
     fn check_arc_inners(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
+        if let Some(reason) = crate::semi::ty::scalable_storage_rejection(ty)
+            && self.reported_arcs.insert(ty)
+        {
+            self.error(span, reason);
+        }
         match *ty.kind() {
             TyKind::Tuple(fields) => {
                 if !self.inside_kernel {

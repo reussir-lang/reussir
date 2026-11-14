@@ -48,6 +48,26 @@ pub enum ReussirPtrAddFlags {
     Inbounds = 3,
 }
 
+/// How a `vector.reduction` combines lanes. Mirrors
+/// `mlir::vector::CombiningKind`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReussirVectorCombiningKind {
+    Add = 0,
+    Mul = 1,
+    MinUI = 2,
+    MinSI = 3,
+    MinNumF = 4,
+    MaxUI = 5,
+    MaxSI = 6,
+    MaxNumF = 7,
+    And = 8,
+    Or = 9,
+    Xor = 10,
+    MinimumF = 11,
+    MaximumF = 12,
+}
+
 /// Reference-count atomicity. Mirrors `reussir::AtomicKind`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -260,6 +280,9 @@ unsafe extern "C" {
     pub fn reussirCreateConvertRCGMPToSCFPass() -> MlirPass;
     pub fn reussirCreateExpandStridedMetadataPass() -> MlirPass;
     pub fn reussirCreateLowerAffinePass() -> MlirPass;
+    pub fn reussirCreateConvertVectorToLLVMPass(arm_sve: bool) -> MlirPass;
+    pub fn reussirCreateFixVectorScalePass() -> MlirPass;
+    pub fn reussirCreateArmSVELegalizeVectorStoragePass() -> MlirPass;
     pub fn reussirCreateConvertToLLVMPass() -> MlirPass;
     pub fn reussirCreateReconcileUnrealizedCastsPass() -> MlirPass;
 
@@ -421,6 +444,12 @@ unsafe extern "C" {
     pub fn reussirRawPtrTypeGet(element_type: MlirType) -> MlirType;
     pub fn reussirGenericPtrTypeGet(context: MlirContext) -> MlirType;
     pub fn reussirMemRefTypeInGenericSpace(memref: MlirType) -> MlirType;
+    pub fn reussirVectorTypeGet(
+        element: MlirType,
+        rank: isize,
+        extents: *const i64,
+        scalable: bool,
+    ) -> MlirType;
     pub fn reussirStablehloTokenTypeGet(context: MlirContext) -> MlirType;
     pub fn reussirRcgmpMpzTypeGet(context: MlirContext, atomic: bool) -> MlirType;
     pub fn reussirStablehloFutureTypeGet(
@@ -577,6 +606,12 @@ unsafe extern "C" {
         is_invariant_group: bool,
         alignment: u64,
     ) -> bool;
+
+    /// `#vector.kind<...>`, the `kind` attribute of a `vector.reduction`.
+    pub fn reussirVectorCombiningKindAttrGet(
+        context: mlir_sys::MlirContext,
+        kind: ReussirVectorCombiningKind,
+    ) -> mlir_sys::MlirAttribute;
 
     /// Set the flags of a `ptr.ptr_add`, an operation property. Returns
     /// false if the operation is not a `ptr.ptr_add`.

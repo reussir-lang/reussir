@@ -77,6 +77,15 @@ MlirType reussirGenericPtrTypeGet(MlirContext context) {
   return wrap(mlir::ptr::PtrType::get(mlir::ptr::GenericSpaceAttr::get(ctx)));
 }
 
+MlirType reussirVectorTypeGet(MlirType element, intptr_t rank,
+                              const int64_t *extents, bool scalable) {
+  llvm::ArrayRef<int64_t> shape(extents, static_cast<size_t>(rank));
+  llvm::SmallVector<bool> scalableDims(shape.size(), false);
+  if (scalable && !scalableDims.empty())
+    scalableDims.back() = true;
+  return wrap(mlir::VectorType::get(shape, unwrap(element), scalableDims));
+}
+
 MlirType reussirMemRefTypeInGenericSpace(MlirType memref) {
   auto type = llvm::cast<mlir::MemRefType>(unwrap(memref));
   auto *ctx = type.getContext();

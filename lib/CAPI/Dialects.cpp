@@ -28,8 +28,10 @@
 #include <mlir/Conversion/MathToLLVM/MathToLLVM.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
 #include <mlir/Conversion/UBToLLVM/UBToLLVM.h>
+#include <mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
+#include <mlir/Dialect/ArmSVE/IR/ArmSVEDialect.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/Extensions/InlinerExtension.h>
@@ -44,8 +46,10 @@
 #include <mlir/Dialect/SCF/TransformOps/SCFTransformOps.h>
 #include <mlir/Dialect/Transform/IR/TransformDialect.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
+#include <mlir/Dialect/Vector/IR/VectorOps.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/Target/LLVMIR/Dialect/ArmSVE/ArmSVEToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 
@@ -85,7 +89,8 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
                   mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
                   mlir::math::MathDialect, mlir::ub::UBDialect,
                   mlir::func::FuncDialect, mlir::cf::ControlFlowDialect,
-                  mlir::ptr::PtrDialect, mlir::sync::SyncDialect>();
+                  mlir::ptr::PtrDialect, mlir::sync::SyncDialect,
+                  mlir::vector::VectorDialect, mlir::arm_sve::ArmSVEDialect>();
 #ifdef REUSSIR_ENABLE_RCGMP
   registry.insert<mlir::rcgmp::RCGMPDialect>();
   reussir::registerRCGMPExternalModels(registry);
@@ -126,10 +131,13 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
   mlir::registerConvertMathToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
   mlir::ub::registerConvertUBToLLVMInterface(registry);
+  mlir::vector::registerConvertVectorToLLVMInterface(registry);
 
   // Translations needed to lower the LLVM dialect to LLVM IR.
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerBuiltinDialectTranslation(registry);
+  // The SVE vector lowering leaves `arm_sve` intrinsic operations.
+  mlir::registerArmSVEDialectTranslation(registry);
 }
 } // namespace
 

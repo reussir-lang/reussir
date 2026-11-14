@@ -1,0 +1,75 @@
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name gather --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --package-name gather --extern core=%t.core.rri --emit hir --no-source-locations -o %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --package-name gather --extern core=%t.core.rri -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/simd_gather_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s --package-name gather --extern core=%t.core.rri -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/simd_gather_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+// RUN: %not %rrc %S/Inputs/simd_gather_errors.rr --package-name gather --extern core=%t.core.rri --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_gather_errors.rr --check-prefix=ERR
+
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import core::simd;
+
+// Keep the positive elements of `from`, packed, in `to`; return how many.
+// CHECK-LABEL: func.func {{.*}}@{{.*}}keep
+// CHECK: reussir.ptr.compress_store
+fn keep(from: ConstPtr<Generic>, to: Ptr<Generic>, len: u64) -> u64 {
+    let zero = simd::splat<Simd<[i32; 8]>>(0);
+    let (end, kept) = while [i = 0, kept = 0 as u64] (i < len) {
+        let live = simd::mask_first<Simd<[bool; 8]>>(len - i);
+        let chunk = simd::load<Simd<[i32; 8]>>(
+            ptr::advance<i32>(from, i as i64, PtrArithFlag::Inbounds), live, zero);
+        let positive = simd::gt(chunk, zero, live);
+        simd::store_compress(
+            ptr::advance<i32>(to, kept as i64, PtrArithFlag::Inbounds), chunk, positive);
+        (i + 8, kept + simd::count(positive))
+    };
+    kept
+}
+extern "C" trampoline "simd_keep" = keep;
+
+// Replace each of the `len` keys in `data` by its entry in a table of 32-bit
+// values; returns `len`.
+// CHECK-LABEL: func.func {{.*}}@{{.*}}lookup
+// CHECK: %[[WIDE:.*]] = arith.extsi %{{.*}} : vector<8xi32> to vector<8xi64>
+// CHECK: %[[OFFSETS:.*]] = arith.muli %[[WIDE]], %{{.*}} : vector<8xi64>
+// CHECK: %[[PTRS:.*]] = ptr.ptr_add %{{.*}}, %[[OFFSETS]] : vector<8x!ptr.ptr<#ptr.generic_space>>, vector<8xi64>
+// CHECK: ptr.gather %[[PTRS]], %{{.*}}, %{{.*}} alignment = 4
+fn lookup(table: ConstPtr<Generic>, data: Ptr<Generic>, len: u64) -> u64 {
+    let none = simd::splat<Simd<[i32; 8]>>(0);
+    let end = while [i = 0] (i < len) {
+        let live = simd::mask_first<Simd<[bool; 8]>>(len - i);
+        let at = ptr::advance<i32>(data, i as i64, PtrArithFlag::Inbounds);
+        let keys = simd::load<Simd<[i32; 8]>>(at, live, none);
+        simd::store(at, simd::gather<Simd<[i32; 8]>>(table, keys, live, none), live);
+        i + 8
+    };
+    len
+}
+extern "C" trampoline "simd_lookup" = lookup;
+
+// Add one to the counter of each of the eight keys; the keys are distinct.
+fn bump(counters: Ptr<Generic>, keys: ConstPtr<Generic>) {
+    let all = simd::mask_first<Simd<[bool; 8]>>(8);
+    let index = ptr::load<Simd<[u32; 8]>>(keys);
+    let zero = simd::splat<Simd<[i64; 8]>>(0);
+    let old = simd::gather<Simd<[i64; 8]>>(ptr::as_const(counters), index, all, zero);
+    simd::scatter(counters, index, old + simd::splat<Simd<[i64; 8]>>(1), all);
+}
+extern "C" trampoline "simd_bump" = bump;
+
+// Spread the first elements of `from` over the lanes where `mask` is set.
+fn spread(from: ConstPtr<Generic>, mask: ConstPtr<Generic>, to: Ptr<Generic>) {
+    let set = ptr::load<Simd<[bool; 8]>>(mask);
+    let filler = simd::splat<Simd<[i32; 8]>>(-1);
+    ptr::store(to, simd::load_expand<Simd<[i32; 8]>>(from, set, filler));
+}
+extern "C" trampoline "simd_spread" = spread;

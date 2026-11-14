@@ -44,6 +44,10 @@ module;
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
+#include <mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h>
+#include <mlir/Dialect/ArmSVE/IR/ArmSVEDialect.h>
+#include <mlir/Dialect/ArmSVE/Transforms/Passes.h>
+#include <mlir/Dialect/Vector/IR/VectorOps.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
@@ -67,6 +71,7 @@ module;
 #include <mlir/Pass/PassManager.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/LogicalResult.h>
+#include <mlir/Target/LLVMIR/Dialect/ArmSVE/ArmSVEToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMIRToLLVMTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
@@ -164,7 +169,9 @@ void createLoweringPipeline(mlir::PassManager &pm,
                             ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
                             bool reuseTokenAcrossCall = false,
                             bool enableInvariantAnalysis = false,
-                            llvm::StringRef dropOrder = "") {
+                            llvm::StringRef dropOrder = "",
+                            bool armSVE = false,
+                            bool scalableVectors = false) {
   // Keep optional device optimization out of unoptimized/fast compilation.
   // Packaging and explicit donation contracts remain mandatory at every level.
   const bool optimizeDeviceKernels =
@@ -242,7 +249,16 @@ void createLoweringPipeline(mlir::PassManager &pm,
 #else
   pm.addPass(createConvertSCFToCFPass());
 #endif
+  // A target without scalable vectors takes a scale of one.
+  if (!scalableVectors)
+    pm.addPass(reussir::createReussirFixVectorScalePass());
   pm.addPass(createReussirBasicOpsLoweringPass());
+  if (armSVE)
+    pm.addNestedPass<mlir::func::FuncOp>(
+        mlir::arm_sve::createLegalizeVectorStoragePass());
+  mlir::ConvertVectorToLLVMPassOptions vectorOptions;
+  vectorOptions.armSVE = armSVE;
+  pm.addPass(mlir::createConvertVectorToLLVMPass(vectorOptions));
   pm.addPass(createReussirConvertToLLVMPass());
   pm.addPass(createReconcileUnrealizedCastsPass());
   pm.addPass(createCSEPass());
@@ -389,7 +405,8 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 #endif
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
-                  ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
+                  ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect,
+                  vector::VectorDialect, arm_sve::ArmSVEDialect>();
 #ifdef REUSSIR_ENABLE_RCGMP
   registry.insert<mlir::rcgmp::RCGMPDialect>();
   reussir::registerRCGMPExternalModels(registry);
@@ -400,6 +417,7 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   registerLLVMDialectTranslation(registry);
   registerBuiltinDialectTranslation(registry);
+  registerArmSVEDialectTranslation(registry);
   auto context = std::make_unique<mlir::MLIRContext>(registry);
   context->loadAllAvailableDialects();
   return context;
@@ -408,10 +426,12 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 std::unique_ptr<mlir::PassManager> buildPassManager(
     mlir::MLIRContext &context, ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
     bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false,
-    llvm::StringRef dropOrder = "") {
+    llvm::StringRef dropOrder = "", bool armSVE = false,
+    bool scalableVectors = false) {
   auto pm = std::make_unique<mlir::PassManager>(&context);
   createLoweringPipeline(*pm, opt, reuseTokenAcrossCall,
-                         enableInvariantAnalysis, dropOrder);
+                         enableInvariantAnalysis, dropOrder, armSVE,
+                         scalableVectors);
   return pm;
 }
 
@@ -577,8 +597,15 @@ void reussir_bridge_compile_for_target(
   spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
+  const llvm::SubtargetFeatures features(target_features);
+  const bool armSVE = llvm::Triple(triple).isAArch64() &&
+                      llvm::is_contained(features.getFeatures(), "+sve");
+  const bool scalableVectors =
+      armSVE || (llvm::Triple(triple).isRISCV() &&
+                 llvm::is_contained(features.getFeatures(), "+v"));
   auto pm = buildPassManager(*context, opt, reuse_token_across_call,
-                             enable_invariant_analysis != 0);
+                             enable_invariant_analysis != 0, "", armSVE,
+                             scalableVectors);
 
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;

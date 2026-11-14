@@ -89,11 +89,34 @@ void reussirOperationSetLocation(MlirOperation op, MlirLocation location);
 
 // Set the access flags of a `ptr.load` or `ptr.store`. They are operation
 // properties, which the generic operation builder cannot set. `alignment` is
-// in bytes; zero leaves it unset. Returns false if `op` is neither operation,
-// or is a store asked to be `invariant`, which only a load can be.
+// in bytes; zero leaves it unset. A `ptr.masked_load`, `ptr.masked_store`,
+// `ptr.gather` or `ptr.scatter` takes the alignment only. Returns false if `op`
+// is none of these, or is asked for a flag it does not have.
 bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
                               bool isNonTemporal, bool isInvariant,
                               bool isInvariantGroup, uint64_t alignment);
+
+// How `vector.reduction` combines lanes, as `mlir::vector::CombiningKind`.
+typedef enum ReussirVectorCombiningKind {
+  ReussirVectorCombiningKindAdd = 0,
+  ReussirVectorCombiningKindMul = 1,
+  ReussirVectorCombiningKindMinUI = 2,
+  ReussirVectorCombiningKindMinSI = 3,
+  ReussirVectorCombiningKindMinNumF = 4,
+  ReussirVectorCombiningKindMaxUI = 5,
+  ReussirVectorCombiningKindMaxSI = 6,
+  ReussirVectorCombiningKindMaxNumF = 7,
+  ReussirVectorCombiningKindAnd = 8,
+  ReussirVectorCombiningKindOr = 9,
+  ReussirVectorCombiningKindXor = 10,
+  ReussirVectorCombiningKindMinimumF = 11,
+  ReussirVectorCombiningKindMaximumF = 12,
+} ReussirVectorCombiningKind;
+
+// `#vector.kind<...>`, the `kind` attribute of a `vector.reduction`.
+MlirAttribute
+reussirVectorCombiningKindAttrGet(MlirContext context,
+                                  ReussirVectorCombiningKind kind);
 
 // The flags of a `ptr.ptr_add`, as `mlir::ptr::PtrAddFlags`.
 typedef enum ReussirPtrAddFlags {

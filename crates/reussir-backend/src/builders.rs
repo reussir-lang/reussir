@@ -922,6 +922,119 @@ pub fn ptr_store<'c>(
 
 pub use sys::ReussirPtrAddFlags as PtrAddFlags;
 
+/// `ptr.masked_load %ptr, %mask, %passthrough : <ptr> -> <vector>`: the
+/// lanes whose mask bit is set are read; the others take `passthrough`.
+pub fn ptr_masked_load<'c>(
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    passthrough: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.masked_load", location)
+        .add_operands(&[ptr, mask, passthrough])
+        .add_results(&[passthrough.r#type()])
+        .build()
+        .expect("valid ptr.masked_load");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.masked_store %value, %ptr, %mask : <vector>, <ptr>`: the lanes
+/// whose mask bit is set are written.
+pub fn ptr_masked_store<'c>(
+    value: Value<'c, '_>,
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.masked_store", location)
+        .add_operands(&[value, ptr, mask])
+        .build()
+        .expect("valid ptr.masked_store");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.gather %ptrs, %mask, %passthrough : <ptrs> -> <vector>`: each set
+/// lane is read through its own pointer.
+pub fn ptr_gather<'c>(
+    ptrs: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    passthrough: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.gather", location)
+        .add_operands(&[ptrs, mask, passthrough])
+        .add_results(&[passthrough.r#type()])
+        .build()
+        .expect("valid ptr.gather");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `ptr.scatter %value, %ptrs, %mask : <vector>, <ptrs>`: each set lane is
+/// written through its own pointer.
+pub fn ptr_scatter<'c>(
+    value: Value<'c, '_>,
+    ptrs: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    align: u64,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("ptr.scatter", location)
+        .add_operands(&[value, ptrs, mask])
+        .build()
+        .expect("valid ptr.scatter");
+    let access = PtrAccess {
+        align,
+        ..PtrAccess::default()
+    };
+    set_ptr_access(&operation, access);
+    operation
+}
+
+/// `reussir.ptr.expand_load %ptr, %mask, %passthrough`.
+pub fn ptr_expand_load<'c>(
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    passthrough: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.expand_load", location)
+        .add_operands(&[ptr, mask, passthrough])
+        .add_results(&[passthrough.r#type()])
+        .build()
+        .expect("valid reussir.ptr.expand_load")
+}
+
+/// `reussir.ptr.compress_store %value, %ptr, %mask`.
+pub fn ptr_compress_store<'c>(
+    value: Value<'c, '_>,
+    ptr: Value<'c, '_>,
+    mask: Value<'c, '_>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.ptr.compress_store", location)
+        .add_operands(&[value, ptr, mask])
+        .build()
+        .expect("valid reussir.ptr.compress_store")
+}
+
 /// `ptr.ptr_add <flags> %base, %offset : <ptr>, <offset>`: `base` moved by
 /// `offset` bytes.
 pub fn ptr_add<'c>(
@@ -1056,6 +1169,235 @@ pub fn ptr_from_addr<'c>(
         .add_results(&[ptr_type])
         .build()
         .expect("valid reussir.ptr.from_addr")
+}
+
+/// `vector.broadcast %value : <scalar or vector> to <vector_type>`.
+pub fn vector_broadcast<'c>(
+    value: Value<'c, '_>,
+    vector_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.broadcast", location)
+        .add_operands(&[value])
+        .add_results(&[vector_type])
+        .build()
+        .expect("valid vector.broadcast")
+}
+
+/// `vector.step : <vector_type>`: the lanes 0, 1, 2, ....
+pub fn vector_step<'c>(vector_type: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("vector.step", location)
+        .add_results(&[vector_type])
+        .build()
+        .expect("valid vector.step")
+}
+
+/// `vector.vscale`: the scalable factor, as an `index`.
+pub fn vector_vscale<'c>(context: &'c Context, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("vector.vscale", location)
+        .add_results(&[Type::index(context)])
+        .build()
+        .expect("valid vector.vscale")
+}
+
+/// `vector.from_elements %elements... : <vector_type>`.
+pub fn vector_from_elements<'c>(
+    elements: &[Value<'c, '_>],
+    vector_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.from_elements", location)
+        .add_operands(elements)
+        .add_results(&[vector_type])
+        .build()
+        .expect("valid vector.from_elements")
+}
+
+/// A position of `vector.extract` or `vector.insert`: a constant, or an
+/// `index` value.
+#[derive(Clone, Copy)]
+pub enum VectorPosition<'c, 'a> {
+    Static(i64),
+    Dynamic(Value<'c, 'a>),
+}
+
+/// Set an inherent attribute that the operation keeps in its properties,
+/// which the generic operation builder does not fill.
+fn set_inherent_attribute(operation: &Operation<'_>, name: &str, value: Attribute<'_>) {
+    use melior::ir::attribute::AttributeLike;
+    let name = melior::StringRef::new(name);
+    unsafe {
+        mlir_sys::mlirOperationSetInherentAttributeByName(
+            operation.to_raw(),
+            name.to_raw(),
+            value.to_raw(),
+        );
+    }
+}
+
+pub use sys::ReussirVectorCombiningKind as VectorCombiningKind;
+
+/// `vector.reduction <kind>, %vector : <vector> into <result_type>`: the
+/// lanes of a one-dimensional vector combined into a scalar. `fastmath` is
+/// an `#arith.fastmath` attribute.
+pub fn vector_reduction<'c>(
+    context: &'c Context,
+    kind: VectorCombiningKind,
+    vector: Value<'c, '_>,
+    result_type: Type<'c>,
+    fastmath: Option<Attribute<'c>>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("vector.reduction", location)
+        .add_operands(&[vector])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.reduction");
+    let kind = unsafe {
+        Attribute::from_raw(sys::reussirVectorCombiningKindAttrGet(
+            context.to_raw(),
+            kind,
+        ))
+    };
+    set_inherent_attribute(&operation, "kind", kind);
+    if let Some(fastmath) = fastmath {
+        set_inherent_attribute(&operation, "fastmath", fastmath);
+    }
+    operation
+}
+
+/// A `vector` dialect operation with the given operands, result types and
+/// inherent attributes; the attributes are set after construction, because
+/// the operations keep them in their properties.
+pub fn vector_operation<'c>(
+    name: &str,
+    operands: &[Value<'c, '_>],
+    results: &[Type<'c>],
+    attributes: &[(&str, Attribute<'c>)],
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new(name, location)
+        .add_operands(operands)
+        .add_results(results)
+        .build()
+        .expect("valid vector operation");
+    for &(name, value) in attributes {
+        set_inherent_attribute(&operation, name, value);
+    }
+    operation
+}
+
+/// `array<i64: values...>`, the positions of several `vector` operations.
+pub fn dense_i64_array<'c>(context: &'c Context, values: &[i64]) -> Attribute<'c> {
+    DenseI64ArrayAttribute::new(context, values).into()
+}
+
+/// `[values...]` as an array of `i64` attributes.
+pub fn i64_array<'c>(context: &'c Context, values: &[i64]) -> Attribute<'c> {
+    let i64_ty = IntegerType::new(context, 64).into();
+    let elements: Vec<Attribute<'c>> = values
+        .iter()
+        .map(|&v| IntegerAttribute::new(i64_ty, v).into())
+        .collect();
+    ArrayAttribute::new(context, &elements).into()
+}
+
+/// `value : i64` as an attribute.
+pub fn i64_attribute<'c>(context: &'c Context, value: i64) -> Attribute<'c> {
+    IntegerAttribute::new(IntegerType::new(context, 64).into(), value).into()
+}
+
+/// `vector.create_mask %counts... : <mask_type>`: in each dimension the
+/// leading `count` lanes are set. The counts are `index` values.
+pub fn vector_create_mask<'c>(
+    counts: &[Value<'c, '_>],
+    mask_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.create_mask", location)
+        .add_operands(counts)
+        .add_results(&[mask_type])
+        .build()
+        .expect("valid vector.create_mask")
+}
+
+/// `vector.shape_cast %vector : <vector> to <result_type>`.
+pub fn vector_shape_cast<'c>(
+    vector: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.shape_cast", location)
+        .add_operands(&[vector])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.shape_cast")
+}
+
+fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
+    set_inherent_attribute(operation, "static_position", positions);
+}
+
+fn vector_positions<'c, 'a>(
+    context: &'c Context,
+    positions: &[VectorPosition<'c, 'a>],
+) -> (Vec<Value<'c, 'a>>, Attribute<'c>) {
+    // The sentinel `vector.extract` and `vector.insert` use for a dynamic
+    // position in `static_position`.
+    const DYNAMIC: i64 = i64::MIN;
+    let dynamic = positions
+        .iter()
+        .filter_map(|p| match *p {
+            VectorPosition::Dynamic(value) => Some(value),
+            VectorPosition::Static(_) => None,
+        })
+        .collect();
+    let fixed: Vec<i64> = positions
+        .iter()
+        .map(|p| match *p {
+            VectorPosition::Static(n) => n,
+            VectorPosition::Dynamic(_) => DYNAMIC,
+        })
+        .collect();
+    (dynamic, DenseI64ArrayAttribute::new(context, &fixed).into())
+}
+
+/// `vector.extract %source[positions] : <result_type> from <vector>`.
+pub fn vector_extract<'c, 'a>(
+    context: &'c Context,
+    source: Value<'c, 'a>,
+    positions: &[VectorPosition<'c, 'a>],
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let (dynamic, fixed) = vector_positions(context, positions);
+    let operation = OperationBuilder::new("vector.extract", location)
+        .add_operands(&[source])
+        .add_operands(&dynamic)
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.extract");
+    set_static_position(&operation, fixed);
+    operation
+}
+
+/// `vector.insert %value, %dest[positions] : <value> into <vector>`.
+pub fn vector_insert<'c, 'a>(
+    context: &'c Context,
+    value: Value<'c, 'a>,
+    dest: Value<'c, 'a>,
+    positions: &[VectorPosition<'c, 'a>],
+    location: Location<'c>,
+) -> Operation<'c> {
+    let (dynamic, fixed) = vector_positions(context, positions);
+    let operation = OperationBuilder::new("vector.insert", location)
+        .add_operands(&[value, dest])
+        .add_operands(&dynamic)
+        .add_results(&[dest.r#type()])
+        .build()
+        .expect("valid vector.insert");
+    set_static_position(&operation, fixed);
+    operation
 }
 
 /// `reussir.ptr.mask %ptr, %mask : <ptr>, <mask>`.

@@ -4366,7 +4366,8 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirConstSeqLiteralOp, ReussirConstSeqLenOp,
         ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp,
         ReussirPtrAddrOp, ReussirPtrExposeAddrOp, ReussirPtrFromAddrOp,
-        ReussirPtrMaskOp, ReussirPtrLaunderInvariantGroupOp,
+        ReussirPtrMaskOp, ReussirPtrExpandLoadOp, ReussirPtrCompressStoreOp,
+        ReussirPtrLaunderInvariantGroupOp,
         ReussirPtrStripInvariantGroupOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable

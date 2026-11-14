@@ -1,0 +1,36 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+// RUN: %not %rrc %S/Inputs/simd_types_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_types_errors.rr --check-prefix=ERR
+// RUN: %not %rrc %S/Inputs/simd_types_ffi_error.rr --emit mlir -o - 2>&1 | %FileCheck %S/Inputs/simd_types_ffi_error.rr --check-prefix=FFI
+
+// A vector is a plain value: it is passed, returned and kept in a record.
+pub struct [value] Pair { low: Simd<[u8; 16]>, high: core::simd::Simd<[u8; 16]> }
+
+// HIR-DAG: fn #bytes(v0 (v): Simd<[u8; 16]>) -> Simd<[u8; 16]>
+// MIR-DAG: (v0 (v): Simd<[u8; 16]>) -> Simd<[u8; 16]>
+// CHECK-LABEL: func.func @{{.*}}bytes(%arg0: vector<16xi8>) -> vector<16xi8>
+// LLVM-LABEL: define {{.*}}<16 x i8> @{{.*}}bytes(<16 x i8>
+pub fn bytes(v: Simd<[u8; 16]>) -> Simd<[u8; 16]> { v }
+
+// A mask is a vector of `bool`.
+// HIR-DAG: fn #flags(v0 (m): Simd<[bool; 8]>) -> Simd<[bool; 8]>
+// CHECK-LABEL: func.func @{{.*}}flags(%arg0: vector<8xi1>) -> vector<8xi1>
+pub fn flags(m: Simd<[bool; 8]>) -> Simd<[bool; 8]> { m }
+
+// Several extents make a multi-dimensional vector.
+// HIR-DAG: fn #matrix(v0 (m): Simd<[f32; 4, 4]>) -> Simd<[f32; 4, 4]>
+// CHECK-LABEL: func.func @{{.*}}matrix(%arg0: vector<4x4xf32>) -> vector<4x4xf32>
+// LLVM-LABEL: define {{.*}}[4 x <4 x float>] @{{.*}}matrix(
+pub fn matrix(m: Simd<[f32; 4, 4]>) -> Simd<[f32; 4, 4]> { m }
+
+// CHECK-LABEL: func.func @{{.*}}swapped
+// CHECK: vector<16xi8>
+pub fn swapped(p: Pair) -> Pair { Pair { low: p.high, high: p.low } }

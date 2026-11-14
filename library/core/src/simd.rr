@@ -1,0 +1,305 @@
+//! Vectors of lanes.
+//!
+//! `Simd<[T; d...]>` is a vector whose lanes are integers, `f32`, `f64` or
+//! `bool`; a vector of `bool` is a mask. It may have several extents, and
+//! the last may be scalable, written `[n]`: `n` times a factor of the
+//! machine that is known only when the program runs. A fixed vector is a
+//! value like any other. A scalable one is only a parameter, a result or a
+//! local.
+
+// Declaration sites of the vector operations. `V` is a vector type, written
+// at the call; the argument and result types below that mention its lanes
+// are spelled with placeholders, because they depend on `V`.
+
+/// The vector whose every lane is `x`.
+#[lang("core::simd::splat")]
+pub fn splat<V, T>(x: T) -> V;
+
+/// The one-dimensional integer vector with the lanes 0, 1, 2, ....
+#[lang("core::simd::step")]
+pub fn step<V>() -> V;
+
+/// The factor of scalable extents on this machine: at least 1.
+#[lang("core::simd::vscale")]
+pub fn vscale() -> u64;
+
+/// The number of lanes of `V`.
+#[lang("core::simd::lanes")]
+pub fn lanes<V>() -> u64;
+
+/// The fixed vector with the given lanes, in row-major order. A call passes
+/// one argument per lane.
+#[lang("core::simd::from_elements")]
+pub fn from_elements<V, T>(x: T) -> V;
+
+/// The lane of `v` at the indices, one per dimension, or the sub-vector when
+/// fewer are given. An index into the last dimension may be computed; the
+/// others are literals. An index outside the vector yields an unspecified
+/// lane.
+#[lang("core::simd::extract")]
+pub fn extract<V, T>(v: V, index: u64) -> T;
+
+/// `v` with the lane or sub-vector at the indices replaced by `x`.
+#[lang("core::simd::insert")]
+pub fn insert<V, T>(v: V, x: T, index: u64) -> V;
+
+// The lanewise operations take vectors of one type `V` and apply to each
+// lane. Signedness follows the lane type.
+//
+// Each of them, and each comparison, also accepts a mask as a last argument.
+// A lane whose mask bit is clear keeps the lane of the first operand, or is
+// false in a comparison, and never traps.
+
+/// Lanewise `a + b`. Integer lanes wrap.
+#[lang("core::simd::add")]
+pub fn add<V>(a: V, b: V) -> V;
+
+/// Lanewise `a - b`.
+#[lang("core::simd::sub")]
+pub fn sub<V>(a: V, b: V) -> V;
+
+/// Lanewise `a * b`.
+#[lang("core::simd::mul")]
+pub fn mul<V>(a: V, b: V) -> V;
+
+/// Lanewise `a / b`. An integer lane divided by zero is undefined.
+#[lang("core::simd::div")]
+pub fn div<V>(a: V, b: V) -> V;
+
+/// Lanewise remainder of `a / b`.
+#[lang("core::simd::rem")]
+pub fn rem<V>(a: V, b: V) -> V;
+
+/// Lanewise minimum. A floating-point lane ignores a NaN operand.
+#[lang("core::simd::min")]
+pub fn min<V>(a: V, b: V) -> V;
+
+/// Lanewise maximum. A floating-point lane ignores a NaN operand.
+#[lang("core::simd::max")]
+pub fn max<V>(a: V, b: V) -> V;
+
+/// Lanewise negation.
+#[lang("core::simd::neg")]
+pub fn neg<V>(a: V) -> V;
+
+/// Lanewise absolute value.
+#[lang("core::simd::abs")]
+pub fn abs<V>(a: V) -> V;
+
+/// Lanewise bitwise and, on integer vectors and on masks.
+#[lang("core::simd::and")]
+pub fn and<V>(a: V, b: V) -> V;
+
+/// Lanewise bitwise or.
+#[lang("core::simd::or")]
+pub fn or<V>(a: V, b: V) -> V;
+
+/// Lanewise bitwise exclusive or.
+#[lang("core::simd::xor")]
+pub fn xor<V>(a: V, b: V) -> V;
+
+/// Lanewise complement.
+#[lang("core::simd::not")]
+pub fn not<V>(a: V) -> V;
+
+/// Lanewise shift left by the lanes of `b`.
+#[lang("core::simd::shl")]
+pub fn shl<V>(a: V, b: V) -> V;
+
+/// Lanewise shift right by the lanes of `b`: arithmetic for signed lanes.
+#[lang("core::simd::shr")]
+pub fn shr<V>(a: V, b: V) -> V;
+
+/// Lanewise `a * b + c` on floating-point vectors, rounded once.
+#[lang("core::simd::fma")]
+pub fn fma<V>(a: V, b: V, c: V) -> V;
+
+// The comparisons yield a mask `M`: a vector of `bool` of the shape of `V`.
+
+/// Lanewise `a == b`.
+#[lang("core::simd::eq")]
+pub fn eq<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a != b`. A NaN lane differs from everything.
+#[lang("core::simd::ne")]
+pub fn ne<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a < b`.
+#[lang("core::simd::lt")]
+pub fn lt<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a <= b`.
+#[lang("core::simd::le")]
+pub fn le<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a > b`.
+#[lang("core::simd::gt")]
+pub fn gt<V, M>(a: V, b: V) -> M;
+
+/// Lanewise `a >= b`.
+#[lang("core::simd::ge")]
+pub fn ge<V, M>(a: V, b: V) -> M;
+
+/// The lanes of `a` where the mask is set and of `b` elsewhere.
+#[lang("core::simd::select")]
+pub fn select<V, M>(mask: M, a: V, b: V) -> V;
+
+// Masks. `M` is a mask type.
+
+/// The mask whose leading `n` lanes are set. A call passes one count per
+/// dimension. A count past the extent sets every lane, which makes
+/// `mask_first(len - i)` the mask of the lanes left in a loop over `len`.
+#[lang("core::simd::mask_first")]
+pub fn mask_first<M>(n: u64) -> M;
+
+/// Whether some lane of the mask is set.
+#[lang("core::simd::any")]
+pub fn any<M>(mask: M) -> bool;
+
+/// Whether every lane of the mask is set.
+#[lang("core::simd::all")]
+pub fn all<M>(mask: M) -> bool;
+
+/// The number of set lanes.
+#[lang("core::simd::count")]
+pub fn count<M>(mask: M) -> u64;
+
+/// The index of the first set lane of a one-dimensional mask, or its number
+/// of lanes when none is set.
+#[lang("core::simd::first_set")]
+pub fn first_set<M>(mask: M) -> u64;
+
+// Reductions combine every lane of a vector `V` into one value of its lane
+// type `T`. With a mask as a second argument only the set lanes take part,
+// and no set lane gives the identity of the combination.
+
+/// The sum of the lanes. Floating-point lanes are added in lane order.
+#[lang("core::simd::reduce_add")]
+pub fn reduce_add<V, T>(v: V) -> T;
+
+/// The product of the lanes, in lane order for floating-point lanes.
+#[lang("core::simd::reduce_mul")]
+pub fn reduce_mul<V, T>(v: V) -> T;
+
+/// The smallest lane. A NaN lane is ignored.
+#[lang("core::simd::reduce_min")]
+pub fn reduce_min<V, T>(v: V) -> T;
+
+/// The largest lane. A NaN lane is ignored.
+#[lang("core::simd::reduce_max")]
+pub fn reduce_max<V, T>(v: V) -> T;
+
+/// The bitwise and of the lanes, of an integer vector or a mask.
+#[lang("core::simd::reduce_and")]
+pub fn reduce_and<V, T>(v: V) -> T;
+
+/// The bitwise or of the lanes.
+#[lang("core::simd::reduce_or")]
+pub fn reduce_or<V, T>(v: V) -> T;
+
+/// The bitwise exclusive or of the lanes.
+#[lang("core::simd::reduce_xor")]
+pub fn reduce_xor<V, T>(v: V) -> T;
+
+/// The floating-point sum of the lanes in any order. The result may differ
+/// from `reduce_add` in the last bits; the target may add in parallel.
+#[lang("core::simd::reduce_add_reassoc")]
+pub fn reduce_add_reassoc<V, T>(v: V) -> T;
+
+/// The floating-point product of the lanes in any order.
+#[lang("core::simd::reduce_mul_reassoc")]
+pub fn reduce_mul_reassoc<V, T>(v: V) -> T;
+
+// Memory. A masked lane is neither read nor written, so a mask may cover
+// only part of a vector that reaches past the end of a buffer.
+
+/// Reads the lanes of the one-dimensional vector `V` at `ptr` whose mask bit
+/// is set. The other lanes are those of `passthrough`.
+#[lang("core::simd::load")]
+pub fn load<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
+
+/// Writes the lanes of `v` whose mask bit is set to `ptr`, which is a `Ptr`.
+#[lang("core::simd::store")]
+pub fn store<V, P, M>(ptr: P, v: V, mask: M);
+
+/// Reads lane `i` of the one-dimensional vector `V` from the element
+/// `index[i]` after `base`, for the lanes whose mask bit is set; `index` is a
+/// vector of integers of the same shape. The other lanes are those of
+/// `passthrough`.
+#[lang("core::simd::gather")]
+pub fn gather<V, P, I, M>(base: P, index: I, mask: M, passthrough: V) -> V;
+
+/// Writes lane `i` of `v` to the element `index[i]` after `base`, for the
+/// lanes whose mask bit is set. Two lanes with one index write in lane order.
+#[lang("core::simd::scatter")]
+pub fn scatter<V, P, I, M>(base: P, index: I, v: V, mask: M);
+
+/// Reads as many consecutive elements at `ptr` as the mask has set lanes and
+/// places them, in order, in those lanes. The other lanes are those of
+/// `passthrough`.
+#[lang("core::simd::load_expand")]
+pub fn load_expand<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
+
+/// Writes the lanes of `v` whose mask bit is set to consecutive elements at
+/// `ptr`, in order: the lanes a filter keeps, packed.
+#[lang("core::simd::store_compress")]
+pub fn store_compress<V, P, M>(ptr: P, v: V, mask: M);
+
+// Shape. Positions are constants: a `ConstSeq<i64>` written as `[1, 0]`, or a
+// literal.
+
+/// The lanes of `v`, in row-major order, in the shape of `V`.
+#[lang("core::simd::shape_cast")]
+pub fn shape_cast<V, W>(v: W) -> V;
+
+/// The bits of `v` as the lanes of `V`; only the last extent may differ.
+#[lang("core::simd::bitcast")]
+pub fn bitcast<V, W>(v: W) -> V;
+
+/// `v` repeated along the leading extents of `V`.
+#[lang("core::simd::broadcast")]
+pub fn broadcast<V, W>(v: W) -> V;
+
+/// `v` with its extents reordered: extent `i` of the result is extent
+/// `order[i]` of `v`. A scalable extent stays last.
+#[lang("core::simd::transpose")]
+pub fn transpose<V, W>(v: W, order: ConstSeq<i64>) -> V;
+
+/// The fixed vector whose lane `k` is lane `picks[k]` of `a` followed by `b`.
+#[lang("core::simd::shuffle")]
+pub fn shuffle<V, W>(a: W, b: W, picks: ConstSeq<i64>) -> V;
+
+/// The lanes of `a` and `b` alternating along the last extent.
+#[lang("core::simd::interleave")]
+pub fn interleave<V, W>(a: W, b: W) -> V;
+
+/// The lanes 0, 2, 4, ... of the last extent.
+#[lang("core::simd::deinterleave_even")]
+pub fn deinterleave_even<V, W>(v: W) -> V;
+
+/// The lanes 1, 3, 5, ... of the last extent.
+#[lang("core::simd::deinterleave_odd")]
+pub fn deinterleave_odd<V, W>(v: W) -> V;
+
+/// The part of the fixed vector `v` that starts at `offsets` and has `sizes`
+/// lanes in each of the leading extents the two sequences name.
+#[lang("core::simd::slice")]
+pub fn slice<V, W>(v: W, offsets: ConstSeq<i64>, sizes: ConstSeq<i64>) -> V;
+
+/// The fixed vector `v` with `part` written at `offsets`, one per extent of
+/// `v`.
+#[lang("core::simd::insert_slice")]
+pub fn insert_slice<V, W>(v: V, part: W, offsets: ConstSeq<i64>) -> V;
+
+/// The sub-vector `V` of the scalable vector `v` that starts at lane `pos`, a
+/// literal multiple of the length of `V`.
+#[lang("core::simd::scalable_extract")]
+pub fn scalable_extract<V, W>(v: W, pos: u64) -> V;
+
+/// The scalable vector `v` with `part` written from lane `pos` on.
+#[lang("core::simd::scalable_insert")]
+pub fn scalable_insert<V, W>(v: V, part: W, pos: u64) -> V;
+
+/// The product of each lane of the fixed vector `a` with each lane of `b`.
+#[lang("core::simd::outer")]
+pub fn outer<V, A, B>(a: A, b: B) -> V;

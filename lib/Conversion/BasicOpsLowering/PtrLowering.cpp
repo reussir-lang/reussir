@@ -112,6 +112,165 @@ struct PtrStoreConversion : ConvertOpToLLVMPattern<ptr::StoreOp> {
   }
 };
 
+/// The alignment of a masked access as the LLVM intrinsic takes it. An
+/// unstated alignment is one byte: the intrinsic has no default.
+std::optional<uint32_t>
+convertMaskedAlignment(std::optional<int64_t> alignment) {
+  if (!alignment)
+    return 1;
+  if (!llvm::isUInt<32>(*alignment) || *alignment == 0)
+    return std::nullopt;
+  return static_cast<uint32_t>(*alignment);
+}
+
+struct PtrMaskedLoadConversion : ConvertOpToLLVMPattern<ptr::MaskedLoadOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::MaskedLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getResult().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the loaded type");
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    std::optional<uint32_t> alignment =
+        convertMaskedAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "unsupported alignment");
+    rewriter.replaceOpWithNewOp<LLVM::MaskedLoadOp>(
+        op, type, adaptor.getPtr(), adaptor.getMask(), adaptor.getPassthrough(),
+        *alignment);
+    return success();
+  }
+};
+
+struct PtrMaskedStoreConversion : ConvertOpToLLVMPattern<ptr::MaskedStoreOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::MaskedStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    std::optional<uint32_t> alignment =
+        convertMaskedAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "unsupported alignment");
+    rewriter.replaceOpWithNewOp<LLVM::MaskedStoreOp>(
+        op, adaptor.getValue(), adaptor.getPtr(), adaptor.getMask(),
+        *alignment);
+    return success();
+  }
+};
+
+// The upstream conversion of `ptr.ptr_add` takes scalar pointers only in
+// this LLVM release; later releases also take vectors of pointers.
+struct PtrVectorAddConversion : ConvertOpToLLVMPattern<ptr::PtrAddOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::PtrAddOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::isa<VectorType>(op.getResult().getType()))
+      return rewriter.notifyMatchFailure(op, "expected a vector of pointers");
+    Type type = getTypeConverter()->convertType(op.getResult().getType());
+    if (!type || !llvm::isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(type)))
+      return rewriter.notifyMatchFailure(op, "incompatible result type");
+    LLVM::GEPNoWrapFlags flags = LLVM::GEPNoWrapFlags::none;
+    switch (op.getFlags()) {
+    case ptr::PtrAddFlags::none:
+      break;
+    case ptr::PtrAddFlags::nusw:
+      flags = LLVM::GEPNoWrapFlags::nusw;
+      break;
+    case ptr::PtrAddFlags::nuw:
+      flags = LLVM::GEPNoWrapFlags::nuw;
+      break;
+    case ptr::PtrAddFlags::inbounds:
+      flags = LLVM::GEPNoWrapFlags::inbounds;
+      break;
+    }
+    // The offset is in bytes.
+    rewriter.replaceOpWithNewOp<LLVM::GEPOp>(
+        op, type, rewriter.getI8Type(), adaptor.getBase(),
+        ValueRange{adaptor.getOffset()}, flags);
+    return success();
+  }
+};
+
+struct PtrGatherConversion : ConvertOpToLLVMPattern<ptr::GatherOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::GatherOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getResult().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the loaded type");
+    std::optional<uint32_t> alignment =
+        convertMaskedAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "unsupported alignment");
+    rewriter.replaceOpWithNewOp<LLVM::masked_gather>(
+        op, type, adaptor.getPtrs(), adaptor.getMask(),
+        ValueRange{adaptor.getPassthrough()},
+        rewriter.getI32IntegerAttr(*alignment));
+    return success();
+  }
+};
+
+struct PtrScatterConversion : ConvertOpToLLVMPattern<ptr::ScatterOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ptr::ScatterOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    std::optional<uint32_t> alignment =
+        convertMaskedAlignment(op.getAlignment());
+    if (!alignment)
+      return rewriter.notifyMatchFailure(op, "unsupported alignment");
+    rewriter.replaceOpWithNewOp<LLVM::masked_scatter>(
+        op, adaptor.getValue(), adaptor.getPtrs(), adaptor.getMask(),
+        rewriter.getI32IntegerAttr(*alignment));
+    return success();
+  }
+};
+
+struct PtrExpandLoadConversion
+    : ConvertOpToLLVMPattern<ReussirPtrExpandLoadOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ReussirPtrExpandLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type type = getTypeConverter()->convertType(op.getResult().getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "cannot convert the loaded type");
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    rewriter.replaceOpWithNewOp<LLVM::masked_expandload>(
+        op, TypeRange{type}, adaptor.getPtr(), adaptor.getMask(),
+        adaptor.getPassthrough());
+    return success();
+  }
+};
+
+struct PtrCompressStoreConversion
+    : ConvertOpToLLVMPattern<ReussirPtrCompressStoreOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ReussirPtrCompressStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::isa<LLVM::LLVMPointerType>(adaptor.getPtr().getType()))
+      return rewriter.notifyMatchFailure(op, "incompatible pointer type");
+    rewriter.replaceOpWithNewOp<LLVM::masked_compressstore>(
+        op, adaptor.getValue(), adaptor.getPtr(), adaptor.getMask());
+    return success();
+  }
+};
+
 struct PtrDiffConversion : ConvertOpToLLVMPattern<ptr::PtrDiffOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
@@ -231,12 +390,15 @@ struct PtrMaskConversion : ConvertOpToLLVMPattern<ReussirPtrMaskOp> {
 
 void populatePtrLoweringPatterns(mlir::LLVMTypeConverter &converter,
                                  mlir::RewritePatternSet &patterns) {
-  patterns.add<PtrLoadConversion, PtrStoreConversion, PtrDiffConversion,
-               PtrAddrConversion, PtrExposeAddrConversion,
-               PtrFromAddrConversion, PtrMaskConversion,
-               PtrIntrinsicConversion<ReussirPtrLaunderInvariantGroupOp,
-                                      LLVM::LaunderInvariantGroupOp>,
-               PtrIntrinsicConversion<ReussirPtrStripInvariantGroupOp,
-                                      LLVM::StripInvariantGroupOp>>(converter);
+  patterns
+      .add<PtrLoadConversion, PtrStoreConversion, PtrMaskedLoadConversion,
+           PtrMaskedStoreConversion, PtrVectorAddConversion,
+           PtrGatherConversion, PtrScatterConversion, PtrExpandLoadConversion,
+           PtrCompressStoreConversion, PtrDiffConversion, PtrAddrConversion,
+           PtrExposeAddrConversion, PtrFromAddrConversion, PtrMaskConversion,
+           PtrIntrinsicConversion<ReussirPtrLaunderInvariantGroupOp,
+                                  LLVM::LaunderInvariantGroupOp>,
+           PtrIntrinsicConversion<ReussirPtrStripInvariantGroupOp,
+                                  LLVM::StripInvariantGroupOp>>(converter);
 }
 } // namespace reussir

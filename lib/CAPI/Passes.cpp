@@ -42,6 +42,8 @@
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
+#include <mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h>
+#include <mlir/Dialect/ArmSVE/Transforms/Passes.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -252,6 +254,17 @@ MlirPass reussirCreateExpandStridedMetadataPass(void) {
 }
 MlirPass reussirCreateLowerAffinePass(void) {
   return wrapOwned(mlir::createLowerAffinePass());
+}
+MlirPass reussirCreateConvertVectorToLLVMPass(bool armSVE) {
+  mlir::ConvertVectorToLLVMPassOptions options;
+  options.armSVE = armSVE;
+  return wrapOwned(mlir::createConvertVectorToLLVMPass(options));
+}
+MlirPass reussirCreateFixVectorScalePass(void) {
+  return wrapOwned(reussir::createReussirFixVectorScalePass());
+}
+MlirPass reussirCreateArmSVELegalizeVectorStoragePass(void) {
+  return wrapOwned(mlir::arm_sve::createLegalizeVectorStoragePass());
 }
 MlirPass reussirCreateConvertToLLVMPass(void) {
   return wrapOwned(reussir::createReussirConvertToLLVMPass());

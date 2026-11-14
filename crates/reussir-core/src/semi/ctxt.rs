@@ -266,6 +266,7 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -324,6 +325,7 @@ fn collect_private_records<'tcx>(
         | TyKind::ConstSeq(_)
         | TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)
@@ -919,6 +921,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     self.push_ty_display(out, p);
                 }
                 out.push('>');
+            }
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                out.push_str("Simd<[");
+                self.push_ty_display(out, elem);
+                let _ = write!(
+                    out,
+                    "; {}]>",
+                    crate::semi::ty::simd_extents_text(dims, scalable)
+                );
             }
             TyKind::Tensor { elem, dims } => {
                 out.push_str("Tensor<");
@@ -4701,6 +4716,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// the member type spells its own atomic link (§3.3).
     /// Kernel SSA values have no host record storage representation.
     fn reject_tensor_member(&mut self, fty: Ty<'tcx>, span: Option<Span>) {
+        if crate::semi::ty::mentions_scalable_simd(fty) {
+            self.error(
+                span,
+                "a record member cannot contain a scalable vector, which has no fixed size",
+            );
+        }
         if contains_kernel_value(fty) {
             self.error(
                 span,

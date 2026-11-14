@@ -904,6 +904,18 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
             ReussirCapability::Value,
             false,
         )),
+        TyKind::Simd {
+            elem,
+            dims,
+            scalable,
+        } => {
+            let extents: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+            Ok(reussir_backend::dialect::ty::vector(
+                scalar_ty(context, elem)?,
+                &extents,
+                scalable,
+            ))
+        }
         // Constness is a frontend distinction; both kinds are one MLIR type.
         TyKind::Ptr { space, .. } => match space.kind() {
             TyKind::GenericAddrSpace => Ok(reussir_backend::dialect::ty::generic_ptr(context)),
