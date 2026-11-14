@@ -1,0 +1,11 @@
+import core::simd;
+
+// One step of a predicated sum: load under a tail mask is added later; here
+// the lanes past `n` contribute nothing.
+// CHECK-LABEL: define {{.*}}float @{{.*}}partial
+// CHECK: call <vscale x 4 x i1> @llvm.aarch64.sve.whilelt.nxv4i1.i64
+// CHECK: select <vscale x 4 x i1>
+// CHECK: call float @llvm.vector.reduce.fadd.nxv4f32
+pub fn partial(v: Simd<[f32; [4]]>, n: u64) -> f32 {
+    simd::reduce_add(v, simd::mask_first<Simd<[bool; [4]]>>(n))
+}

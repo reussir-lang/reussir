@@ -1,0 +1,61 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+// RUN: %rrc %S/Inputs/simd_reductions_scalable.rr --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit llvm-ir -O aggressive -o %t.sve.ll
+// RUN: %FileCheck %S/Inputs/simd_reductions_scalable.rr < %t.sve.ll
+// RUN: %not %rrc %S/Inputs/simd_reductions_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_reductions_errors.rr --check-prefix=ERR
+
+import core::simd;
+
+// HIR-DAG: intrinsic#simd#reduce_add#0(v0 : Simd<[f32; 8]>) : f32
+// CHECK-LABEL: func.func @{{.*}}sum
+// CHECK: vector.reduction <add>, %arg0 : vector<8xf32> into f32
+// LLVM-LABEL: define {{.*}}float @{{.*}}sum
+// LLVM: call float @llvm.vector.reduce.fadd.v8f32
+pub fn sum(v: Simd<[f32; 8]>) -> f32 { simd::reduce_add(v) }
+
+// The reassociated sum carries the fast-math flag.
+// CHECK-LABEL: func.func @{{.*}}fast
+// CHECK: vector.reduction <add>, %arg0 fastmath<reassoc> : vector<8xf32> into f32
+// LLVM-LABEL: define {{.*}}float @{{.*}}fast
+// LLVM: call reassoc float @llvm.vector.reduce.fadd.v8f32
+pub fn fast(v: Simd<[f32; 8]>) -> f32 { simd::reduce_add_reassoc(v) }
+
+// Several dimensions are flattened first.
+// CHECK-LABEL: func.func @{{.*}}total
+// CHECK: %[[FLAT:.*]] = vector.shape_cast %arg0 : vector<2x4xi32> to vector<8xi32>
+// CHECK: vector.reduction <add>, %[[FLAT]] : vector<8xi32> into i32
+pub fn total(v: Simd<[i32; 2, 4]>) -> i32 { simd::reduce_add(v) }
+
+// CHECK-LABEL: func.func @{{.*}}bounds
+// CHECK: vector.reduction <minsi>
+// CHECK: vector.reduction <maxsi>
+pub fn bounds(v: Simd<[i16; 8]>) -> i16 { simd::reduce_min(v) + simd::reduce_max(v) }
+
+// A masked lane contributes the identity of the combination.
+// HIR-DAG: intrinsic#simd#reduce_min#0(v0 : Simd<[u8; 16]>, v1 : Simd<[bool; 16]>) : u8
+// CHECK-LABEL: func.func @{{.*}}lowest
+// CHECK: %[[ALL:.*]] = arith.constant -1 : i8
+// CHECK: %[[IDENTITY:.*]] = vector.broadcast %[[ALL]] : i8 to vector<16xi8>
+// CHECK: %[[LIVE:.*]] = arith.select %arg1, %arg0, %[[IDENTITY]]
+// CHECK: vector.reduction <minui>, %[[LIVE]] : vector<16xi8> into i8
+pub fn lowest(v: Simd<[u8; 16]>, m: Simd<[bool; 16]>) -> u8 { simd::reduce_min(v, m) }
+
+// CHECK-LABEL: func.func @{{.*}}product
+// CHECK: arith.constant 1.000000e+00 : f64
+// CHECK: vector.reduction <mul>
+pub fn product(v: Simd<[f64; 4]>, m: Simd<[bool; 4]>) -> f64 { simd::reduce_mul(v, m) }
+
+// CHECK-LABEL: func.func @{{.*}}combined
+// CHECK: vector.reduction <and>
+// CHECK: vector.reduction <or>
+// CHECK: vector.reduction <xor>
+pub fn combined(v: Simd<[u32; 4]>) -> u32 {
+    simd::reduce_and(v) + simd::reduce_or(v) + simd::reduce_xor(v)
+}
