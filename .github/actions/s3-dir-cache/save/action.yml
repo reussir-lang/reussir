@@ -1,6 +1,6 @@
 name: Save directory cache to S3
 description: >-
-  Snapshot directories into the Contabo bucket under `key`. Skip it when the
+  Snapshot directories into the shared R2 bucket under `key`. Skip it when the
   restore step hit; keys describe their content and are never rewritten.
 
 inputs:
