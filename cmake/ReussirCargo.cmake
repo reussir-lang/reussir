@@ -42,3 +42,15 @@ if(REUSSIR_CARGO_BUILD_TARGET)
   endif()
   message(STATUS "Cargo components cross-compile for ${REUSSIR_CARGO_BUILD_TARGET} (driver: ${REUSSIR_CARGO})")
 endif()
+
+# The compiler crates are built and tested by one cargo invocation per
+# package, all in ${CMAKE_BINARY_DIR}/target. Cargo resolves features for the
+# selected package alone, so a shared dependency came out with a different
+# feature set from one invocation to the next and everything above it was
+# compiled again: 775 library builds for 467 crates over the build and test
+# targets. Resolving features for the whole workspace gives every invocation
+# the same set, 530 builds. The runtime's own builds (crates/reussir-rt) and
+# the wasm component keep their per-package resolution.
+set(REUSSIR_CARGO_FEATURE_ENV
+  CARGO_UNSTABLE_FEATURE_UNIFICATION=true
+  CARGO_RESOLVER_FEATURE_UNIFICATION=workspace)
