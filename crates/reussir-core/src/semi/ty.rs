@@ -332,6 +332,16 @@ pub enum TyKind<'tcx> {
         elem: Ty<'tcx>,
         dims: &'tcx [u64],
     },
+    /// A vector of lanes (`Simd<[f32; 4]>`, `Simd<[i8; 2, [16]]>`), lowered
+    /// to the MLIR `vector` type. Elements are fixed-width integers, `f32`,
+    /// `f64` or `bool`; a vector of `bool` is a mask. There is at least one
+    /// extent and every extent is positive. With `scalable`, the last extent
+    /// counts multiples of the target's `vscale`.
+    Simd {
+        elem: Ty<'tcx>,
+        dims: &'tcx [u64],
+        scalable: bool,
+    },
     /// StableHLO async results: a nonempty, ordered list of ranked tensor types.
     /// This is a kernel SSA value, not an RC-managed host future. Payload type
     /// parameters remain symbolic until monomorphization.
@@ -505,6 +515,34 @@ pub struct TyCtxt<'tcx> {
     intern: RefCell<FxHashMap<TyKind<'tcx>, Ty<'tcx>>>,
 }
 
+/// The largest number of fixed lanes a vector type may have.
+pub const MAX_SIMD_LANES: u64 = 4096;
+
+/// The extents of a vector type as written inside `Simd<[T; ...]>`: comma
+/// separated, the last one in brackets when it is scalable.
+pub fn simd_extents_text(dims: &[u64], scalable: bool) -> String {
+    let last = dims.len().saturating_sub(1);
+    dims.iter()
+        .enumerate()
+        .map(|(i, d)| match scalable && i == last {
+            true => format!("[{d}]"),
+            false => d.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Why `ty` cannot be the element of a vector, if it cannot: lanes are
+/// fixed-width integers up to 64 bits, `f32`, `f64` or `bool`.
+pub fn simd_elem_rejection(ty: Ty<'_>) -> Option<&'static str> {
+    match *ty.kind() {
+        TyKind::Bool | TyKind::Bottom => None,
+        TyKind::Int(IntTy::Signed(w) | IntTy::Unsigned(w)) if w <= 64 => None,
+        TyKind::Fp(FpTy::Ieee(32 | 64)) => None,
+        _ => Some("a lane is an integer of at most 64 bits, `f32`, `f64` or `bool`"),
+    }
+}
+
 impl<'tcx> TyCtxt<'tcx> {
     pub fn new(arena: &'tcx ArenaRef<'tcx>) -> Self {
         TyCtxt {
@@ -639,6 +677,15 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_nullable(&self, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.mk(TyKind::Nullable(inner))
+    }
+
+    pub fn mk_simd(&self, elem: Ty<'tcx>, dims: &[u64], scalable: bool) -> Ty<'tcx> {
+        let dims = self.alloc_slice(dims);
+        self.mk(TyKind::Simd {
+            elem,
+            dims,
+            scalable,
+        })
     }
 
     pub fn mk_ptr(&self, space: Ty<'tcx>, kind: PtrKind) -> Ty<'tcx> {

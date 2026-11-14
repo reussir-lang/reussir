@@ -219,6 +219,17 @@ impl<'a> Mangler<'a> {
             TyKind::Ptr { space, kind } => {
                 self.path_with_args_segs(out, &["core", "ptr", kind.surface_name()], &[space])
             }
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                let mut name = shaped_name("Simd", dims);
+                if scalable {
+                    name.push('v');
+                }
+                self.path_with_args_segs(out, &["core", "simd", &name], &[elem]);
+            }
             TyKind::Future(ps) => {
                 self.path_with_args_segs(out, &["core", "intrinsic", "tensor", "Future"], ps)
             }

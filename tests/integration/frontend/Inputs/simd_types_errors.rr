@@ -1,0 +1,14 @@
+struct [shared] Box { value: i64 }
+
+// ERR-DAG: `Box` cannot be a vector lane (a lane is an integer of at most 64 bits, `f32`, `f64` or `bool`)
+fn lane(v: Simd<[Box; 4]>) {}
+// ERR-DAG: `i128` cannot be a vector lane
+fn wide(v: Simd<[i128; 4]>) {}
+// ERR-DAG: a vector extent is between 1 and 4096
+fn empty(v: Simd<[u8; 0]>) {}
+// ERR-DAG: a vector has at most 4096 lanes
+fn huge(v: Simd<[u8; 128, 128]>) {}
+// ERR-DAG: `Simd` takes the element type and the extents: `Simd<[f32; 4]>`
+fn scalar(v: Simd<f32>) {}
+// ERR-DAG: a vector extent is a positive constant
+fn dynamic(v: Simd<[f32; ?]>) {}

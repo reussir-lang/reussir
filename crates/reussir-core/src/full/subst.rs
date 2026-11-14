@@ -105,6 +105,7 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
         TyKind::Tensor { elem, dims } => tcx.mk_tensor(subst_ty(tcx, elem, subst), dims),
         TyKind::DefaultPlacement
         | TyKind::GenericAddrSpace
+        | TyKind::Simd { .. }
         | TyKind::Int(_)
         | TyKind::BigInt(_)
         | TyKind::Fp(_)

@@ -52,6 +52,7 @@ pub enum HeadKey {
     Arc,
     ConstSeq,
     Ptr(PtrKind),
+    Simd,
     GenericAddrSpace,
 }
 
@@ -81,6 +82,7 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
         TyKind::ConstSeq(_) => HeadKey::ConstSeq,
         TyKind::Ptr { kind, .. } => HeadKey::Ptr(kind),
         TyKind::GenericAddrSpace => HeadKey::GenericAddrSpace,
+        TyKind::Simd { .. } => HeadKey::Simd,
         TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => return None,
     })
 }
