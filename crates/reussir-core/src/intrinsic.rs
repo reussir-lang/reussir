@@ -585,6 +585,12 @@ pub enum SimdFn {
     ReduceAnd,
     ReduceOr,
     ReduceXor,
+    /// `load<V>(p, m, passthrough)`: the lanes of a one-dimensional vector
+    /// whose mask bit is set are read from `p`; the others are not touched
+    /// and take `passthrough`.
+    Load,
+    /// `store(p, v, m)`: the lanes whose mask bit is set are written.
+    Store,
     /// `reduce_add_reassoc`, `reduce_mul_reassoc`: the floating-point sum
     /// and product in any order, which lets the target reduce in parallel.
     /// `reduce_add` and `reduce_mul` combine in lane order.
@@ -656,6 +662,8 @@ impl SimdFn {
         SimdFn::All,
         SimdFn::Count,
         SimdFn::FirstSet,
+        SimdFn::Load,
+        SimdFn::Store,
         SimdFn::ReduceAdd,
         SimdFn::ReduceMul,
         SimdFn::ReduceMin,
@@ -708,6 +716,8 @@ impl SimdFn {
             SimdFn::All => "all",
             SimdFn::Count => "count",
             SimdFn::FirstSet => "first_set",
+            SimdFn::Load => "load",
+            SimdFn::Store => "store",
             SimdFn::ReduceAdd => "reduce_add",
             SimdFn::ReduceMul => "reduce_mul",
             SimdFn::ReduceMin => "reduce_min",

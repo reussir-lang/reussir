@@ -4154,7 +4154,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         let takes_type = matches!(
             func,
-            SimdFn::Splat | SimdFn::Step | SimdFn::Lanes | SimdFn::FromElements | SimdFn::MaskFirst
+            SimdFn::Splat
+                | SimdFn::Step
+                | SimdFn::Lanes
+                | SimdFn::FromElements
+                | SimdFn::MaskFirst
+                | SimdFn::Load
         );
         if let Some((arity, lanes, compares)) = func.lanewise() {
             return self.infer_simd_lanewise(fc, func, arity, lanes, compares, &shown, span);
@@ -4169,7 +4174,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let arity = match func {
             SimdFn::Splat => Some(1),
             SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale => Some(0),
-            SimdFn::Select => Some(3),
+            SimdFn::Select | SimdFn::Load | SimdFn::Store => Some(3),
             SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => Some(1),
             _ => None,
         };
@@ -4243,6 +4248,66 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 let values = fc.args.iter().map(|a| self.check_expr(a, elem)).collect();
                 mk(self, func, values, ty)
+            }
+            SimdFn::Load => {
+                let Some((ty, elem, dims, scalable)) = self.simd_type_arg(fc, &shown, span) else {
+                    return self.poison(span);
+                };
+                if dims.len() != 1 || matches!(elem.kind(), TyKind::Bool) {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} reads a one-dimensional vector of numbers, not a `{}`",
+                            self.ty_display(ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                let mask_ty = self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable);
+                let mask = self.check_expr(&fc.args[1], mask_ty);
+                let passthrough = self.check_expr(&fc.args[2], ty);
+                mk(self, func, vec![ptr, mask, passthrough], ty)
+            }
+            SimdFn::Store => {
+                let Some((ptr, _)) = self.infer_ptr_operand(&fc.args[0], &shown) else {
+                    return self.poison(span);
+                };
+                if let TyKind::Ptr {
+                    kind: crate::semi::ty::PtrKind::Const,
+                    ..
+                } = self.infer.resolve(ptr.ty).kind()
+                {
+                    self.error(
+                        ptr.span,
+                        format!(
+                            "{shown} cannot write through a `{}`",
+                            self.ty_display(ptr.ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let Some((value, elem, dims, scalable)) =
+                    self.infer_simd_operand(&fc.args[1], &shown)
+                else {
+                    return self.poison(span);
+                };
+                if dims.len() != 1 || matches!(elem.kind(), TyKind::Bool) {
+                    self.error(
+                        value.span,
+                        format!(
+                            "{shown} writes a one-dimensional vector of numbers, not a `{}`",
+                            self.ty_display(value.ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let mask_ty = self.tcx.mk_simd(self.tcx.mk_bool(), dims, scalable);
+                let mask = self.check_expr(&fc.args[2], mask_ty);
+                let unit = self.tcx.mk_unit();
+                mk(self, func, vec![ptr, value, mask], unit)
             }
             SimdFn::MaskFirst => {
                 let Some((ty, elem, dims, _)) = self.simd_type_arg(fc, &shown, span) else {

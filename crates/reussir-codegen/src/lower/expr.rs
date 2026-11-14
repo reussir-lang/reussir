@@ -4367,7 +4367,6 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         use builders::VectorPosition;
         use reussir_core::intrinsic::SimdFn;
         let loc = self.loc();
-        let result = self.tys.mlir_ty(e.ty)?;
         let mut values = Vec::with_capacity(args.len());
         for a in args.iter() {
             values.push(
@@ -4375,6 +4374,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     .ok_or_else(|| LoweringError("vector operand produced no value".into()))?,
             );
         }
+        // A masked store has no result; its lanes are aligned as one lane is.
+        if func == SimdFn::Store {
+            let (_, align, _) = self.simd_memory(args[1].ty)?;
+            block.append_operation(builders::ptr_masked_store(
+                values[1], values[0], values[2], align, loc,
+            ));
+            return Ok(None);
+        }
+        let result = self.tys.mlir_ty(e.ty)?;
         // The indices of `extract` and `insert`, from operand `first` on: a
         // literal is a static position, anything else an `index` value.
         let positions = |first: usize| {
@@ -4409,6 +4417,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 builders::vector_insert(self.context, values[1], values[0], &positions(2)?, loc)
             }
             SimdFn::Select => arith::select(values[0], values[1], values[2], loc),
+            SimdFn::Load => {
+                let (_, align, _) = self.simd_memory(e.ty)?;
+                builders::ptr_masked_load(values[0], values[1], values[2], align, loc)
+            }
+            SimdFn::Store => unreachable!("lowered above"),
             SimdFn::MaskFirst => {
                 let index_ty = Type::index(self.context);
                 let counts: Vec<_> = values

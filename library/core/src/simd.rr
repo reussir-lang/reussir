@@ -209,3 +209,15 @@ pub fn reduce_add_reassoc<V, T>(v: V) -> T;
 /// The floating-point product of the lanes in any order.
 #[lang("core::simd::reduce_mul_reassoc")]
 pub fn reduce_mul_reassoc<V, T>(v: V) -> T;
+
+// Memory. A masked lane is neither read nor written, so a mask may cover
+// only part of a vector that reaches past the end of a buffer.
+
+/// Reads the lanes of the one-dimensional vector `V` at `ptr` whose mask bit
+/// is set. The other lanes are those of `passthrough`.
+#[lang("core::simd::load")]
+pub fn load<V, P, M>(ptr: P, mask: M, passthrough: V) -> V;
+
+/// Writes the lanes of `v` whose mask bit is set to `ptr`, which is a `Ptr`.
+#[lang("core::simd::store")]
+pub fn store<V, P, M>(ptr: P, v: V, mask: M);
