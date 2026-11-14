@@ -503,48 +503,6 @@ fn check_rcgmp_runtime(cli: &Cli) -> Result<(), String> {
     ))
 }
 
-/// Reject a program that uses a scalable vector when the target has none,
-/// at the first such use.
-fn check_scalable_vectors(
-    cli: &Cli,
-    sources: Option<&SourceCache>,
-    program: &mir::Program<'_>,
-) -> Result<(), String> {
-    let Some((span, file)) = program.scalable_vector_use() else {
-        return Ok(());
-    };
-    let spec = crate::TargetSpec {
-        triple: cli.target_triple.clone(),
-        cpu: cli.target_cpu.clone(),
-        features: cli.target_features.clone(),
-    };
-    let machine = crate::TargetMachine::new(
-        &spec,
-        reussir_backend::pipeline::OptLevel::Default,
-        Default::default(),
-    )?;
-    if machine.has_scalable_vectors() {
-        return Ok(());
-    }
-    let message = format!(
-        "the target `{}` does not support scalable vectors; they need AArch64 with SVE or RISC-V with the vector extension",
-        machine.triple()
-    );
-    match sources {
-        Some(cache) => {
-            let report = Report {
-                severity: reussir_core::semi::Severity::Error,
-                message,
-                span,
-                file,
-            };
-            render_reports(cli, cache, &[report]);
-            Err(String::new())
-        }
-        None => Err(message),
-    }
-}
-
 /// Finish the front leg from a ground MIR program: a `mir` dump, or lowering to
 /// an MLIR module for `mlir` and beyond.
 #[allow(clippy::too_many_arguments)]
@@ -571,7 +529,6 @@ pub(crate) fn finish_mir<'c, 'tcx>(
     if target.is_linked() && program.uses_bigint() {
         check_rcgmp_runtime(cli)?;
     }
-    check_scalable_vectors(cli, sources, program)?;
     // Names feed variable/function debug info; only meaningful with `-g`.
     let names = cli.debug.then_some(resolver);
     // The link step's view of the program: its exported trampolines — the

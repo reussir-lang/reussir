@@ -174,6 +174,7 @@ pub(crate) fn backend_module<'c>(
         pack_record_members: !cli.no_pack_record_members,
         closure_wpd,
         arm_sve: machine.has_arm_sve(),
+        scalable_vectors: machine.has_scalable_vectors(),
         transform_scripts: parse_transform_scripts(&cli.transform_script)?,
         ..LoweringOptions::default()
     };
