@@ -1,0 +1,9 @@
+// ERR-DAG: `+` works on integer or floating-point lanes, found `Simd<[bool; 4]>`
+fn masks(a: Simd<[bool; 4]>) -> Simd<[bool; 4]> { a + a }
+// ERR-DAG: `<<` works on integer lanes, found `Simd<[f32; 4]>`
+fn shift(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { a << a }
+// ERR-DAG: `!` works on integer or `bool` lanes, found `Simd<[f32; 4]>`
+fn complement(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { !a }
+// The other operand has the vector type; a scalar is spread with `splat`.
+// ERR-DAG: expected `Simd<[f32; 4]>`
+fn spread(a: Simd<[f32; 4]>, x: f32) -> Simd<[f32; 4]> { a * x }
