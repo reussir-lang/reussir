@@ -59,7 +59,7 @@ jobs:
           ~/.cargo/registry/cache
           ~/.cargo/git/db
           target
-        key: cargo-miri-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+        key: cargo-miri-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
         restore-keys: |
           cargo-miri-${{ runner.os }}-${{ runner.arch }}-
 
@@ -89,4 +89,4 @@ jobs:
           ~/.cargo/registry/cache
           ~/.cargo/git/db
           target
-        key: cargo-miri-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+        key: cargo-miri-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}

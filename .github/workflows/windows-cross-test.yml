@@ -64,7 +64,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-windows-cross-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: cargo-windows-cross-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             cargo-windows-cross-test-${{ runner.os }}-${{ runner.arch }}-
 
@@ -111,7 +111,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-windows-cross-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: cargo-windows-cross-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: Save xwin CRT/SDK cache
         if: steps.cache-xwin-crt-sdk.outputs.cache-hit != 'true'
@@ -182,7 +182,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-windows-cross-lit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: cargo-windows-cross-lit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             cargo-windows-cross-lit-${{ runner.os }}-${{ runner.arch }}-
 
@@ -296,7 +296,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-windows-cross-lit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: cargo-windows-cross-lit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: Save xwin CRT/SDK cache
         if: steps.cache-xwin-crt-sdk.outputs.cache-hit != 'true'
