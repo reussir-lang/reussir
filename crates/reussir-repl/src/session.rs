@@ -819,6 +819,29 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                     format!("Tensor<[{elem}; {}]>", Self::render_dims(dims))
                 }
             }
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                let last = dims.len() - 1;
+                let dims: Vec<String> = dims
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        if scalable && i == last {
+                            format!("[{d}]")
+                        } else {
+                            d.to_string()
+                        }
+                    })
+                    .collect();
+                format!(
+                    "Simd<[{}; {}]>",
+                    Self::render_ty_with(elab, elem),
+                    dims.join(", ")
+                )
+            }
             TyKind::Record { def, args, .. } => {
                 let mut out = elab.defs.path(def).display(elab.resolver);
                 if !args.is_empty() {
