@@ -124,13 +124,19 @@ jobs:
 
       # A clean Cargo home and target directory prove the extracted bundle
       # supplies every Cargo dependency. LLVM/StableHLO remain native inputs.
+      #
+      # sccache is named with --config here and in the other rene steps, not
+      # through RUSTC_WRAPPER: the tests run cargo themselves in temporary
+      # directories, and an inherited wrapper would store those builds under
+      # keys that no later run can hit.
       - name: Build vendored PJRT runtime offline
         run: |
           nix develop --command bash -c '
             REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
             REUSSIR_STABLEHLO_LIB_DIR="$PWD/build/lib" \
             REUSSIR_TEST_BUNDLED_PJRT=1 \
-            cargo test --locked -p rene --lib bundled_runtime_builds_locked_offline_with_an_empty_cargo_home -- --ignored
+            cargo --config "build.rustc-wrapper=\"sccache\"" \
+              test --locked -p rene --lib bundled_runtime_builds_locked_offline_with_an_empty_cargo_home -- --ignored
           '
 
       # PJRT execution tests run against the pinned prebuilt CPU plugin and
@@ -142,10 +148,13 @@ jobs:
           scripts/ci/fetch-pjrt-cpu-plugin.sh "$RUNNER_TEMP/pjrt-cpu"
           echo "REUSSIR_PJRT_PLUGIN=$RUNNER_TEMP/pjrt-cpu/libpjrt_cpu.so" >> "$GITHUB_ENV"
 
+      # RUSTFLAGS as in the CMake build of this target directory
+      # (crates/reussir-rt/CMakeLists.txt), so the tests link the runtime
+      # dependencies that build produced instead of compiling them again.
       - name: Run PJRT runtime tests
         run: |
           nix develop --command bash -c '
-            env RUSTC_WRAPPER=sccache \
+            env RUSTC_WRAPPER=sccache RUSTFLAGS=-Awarnings \
             CARGO_TARGET_DIR="$PWD/build/target-rt-pjrt" \
             REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
             cargo test --locked --release -p reussir-rt --features pjrt -- --include-ignored
@@ -189,15 +198,16 @@ jobs:
         run: |
           nix develop --command bash -c '
             export REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src"
-            cargo clippy -p rene --lib
-            cargo clippy -p rene --all-targets -- -D warnings
-            cargo test -p rene
+            cached=(--config "build.rustc-wrapper=\"sccache\"")
+            cargo "${cached[@]}" clippy -p rene --lib
+            cargo "${cached[@]}" clippy -p rene --all-targets -- -D warnings
+            cargo "${cached[@]}" test -p rene
           '
 
       # The real thing, ignored by default because it compiles the runtime:
       # unpack the bundled sources and bake with the host toolchain offline.
       - name: Run rene host-toolchain bake test
-        run: nix develop --command cargo test -p rene --test cli -- --ignored
+        run: nix develop --command cargo --config 'build.rustc-wrapper="sccache"' test -p rene --test cli -- --ignored
 
       - name: Build and Test reussir-backend
         run: nix develop --command cmake --build build --target reussir-backend-test
