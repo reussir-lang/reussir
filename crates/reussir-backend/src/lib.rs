@@ -68,6 +68,8 @@ pub fn context() -> Context {
     context.get_or_load_dialect("cf");
     // The array ops (issue #344) build `memref` views/loads/stores directly.
     context.get_or_load_dialect("memref");
+    // The `core::simd` operations build `vector` operations directly.
+    context.get_or_load_dialect("vector");
     // `Nat` and `Int` lower to the optional arbitrary-precision integers.
     if features::enabled("rcgmp") {
         context.get_or_load_dialect("rcgmp");
