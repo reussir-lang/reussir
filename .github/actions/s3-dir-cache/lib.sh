@@ -1,14 +1,16 @@
 # Shared by the restore and save actions in this directory. Sourced, not run.
 
-S3_DIR_CACHE_REMOTE="s3:sccache/dir-cache"
+S3_DIR_CACHE_REMOTE="s3:${S3_CACHE_BUCKET:-}/dir-cache"
 
 # rclone talks to the bucket through an environment-defined remote so no
 # config file with credentials ever touches the disk.
 export RCLONE_CONFIG_S3_TYPE=s3
-export RCLONE_CONFIG_S3_PROVIDER=Other
-export RCLONE_CONFIG_S3_ENDPOINT=https://usc1.contabostorage.com
-export RCLONE_CONFIG_S3_REGION=default
-export RCLONE_CONFIG_S3_FORCE_PATH_STYLE=true
+export RCLONE_CONFIG_S3_PROVIDER=Cloudflare
+export RCLONE_CONFIG_S3_ENDPOINT="${S3_CACHE_ENDPOINT:-}"
+export RCLONE_CONFIG_S3_REGION=auto
+# A token scoped to the bucket cannot list or create buckets, which rclone
+# otherwise tries before an upload.
+export RCLONE_CONFIG_S3_NO_CHECK_BUCKET=true
 export RCLONE_CONFIG_S3_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
 export RCLONE_CONFIG_S3_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
 

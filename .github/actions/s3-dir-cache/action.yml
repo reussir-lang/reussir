@@ -1,6 +1,6 @@
 name: Restore directory cache from S3
 description: >-
-  actions/cache stand-in backed by the Contabo bucket: restores the newest
+  actions/cache stand-in backed by the shared R2 bucket: restores the newest
   snapshot for `key` (or the newest one matching a `restore-keys` prefix)
   into place. Pair with ./.github/actions/s3-dir-cache/save.
 
