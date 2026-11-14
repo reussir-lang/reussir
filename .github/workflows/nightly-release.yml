@@ -54,6 +54,7 @@ jobs:
         with:
           access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          bucket-url: ${{ secrets.CLOUDFLARE_R2_API }}
           sccache-key-prefix: ${{ matrix.os }}
 
       - name: Install Nix
@@ -194,6 +195,7 @@ jobs:
         with:
           access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          bucket-url: ${{ secrets.CLOUDFLARE_R2_API }}
           sccache-key-prefix: macos-15
 
       - name: Install Nix
@@ -373,6 +375,7 @@ jobs:
         with:
           access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          bucket-url: ${{ secrets.CLOUDFLARE_R2_API }}
           sccache-key-prefix: windows-cross
 
       - name: Install Nix
