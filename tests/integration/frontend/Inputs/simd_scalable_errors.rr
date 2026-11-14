@@ -1,0 +1,20 @@
+struct [value] Holder<T> { item: T }
+
+// ERR-DAG: only the last extent of a vector may be scalable
+fn leading(v: Simd<[u8; [16], 8]>) {}
+// ERR-DAG: a scalable extent holds one constant: `[4]`
+fn pair(v: Simd<[u8; [4, 4]]>) {}
+// ERR-DAG: a record member cannot contain a scalable vector, which has no fixed size
+struct [value] Kept { lanes: Simd<[u8; [16]]> }
+// ERR-DAG: a scalable vector has no fixed size, so only a parameter, a result or a local may be one
+fn array(a: [Simd<[u8; [16]]>; 4]) {}
+// ERR-DAG: a scalable vector has no fixed size
+fn boxed(h: Holder<Simd<[u8; [16]]>>) {}
+// ERR-DAG: a scalable vector has no fixed size
+fn inferred(v: Simd<[u8; [16]]>) -> u64 { let h = Holder { item: v }; 0 }
+// Loop state is one tuple value, so a scalable vector cannot be carried.
+// ERR-DAG: a scalable vector has no fixed size
+fn carried(v: Simd<[f32; [4]]>, n: u64) -> u64 {
+    let (i, acc) = while [i = 0, acc = v] (i < n) { (i + 1, acc) };
+    i
+}
