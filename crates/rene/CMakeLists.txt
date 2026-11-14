@@ -35,6 +35,7 @@ endif()
 
 set(RENE_CARGO_ENV
     CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target
+    ${REUSSIR_CARGO_FEATURE_ENV}
     "RUSTFLAGS=${RENE_RUSTFLAGS}")
 if(REUSSIR_ENABLE_OPENXLA)
     FetchContent_GetProperties(xla)

@@ -13,6 +13,7 @@ set(cache_native_libs "${CMAKE_CURRENT_BINARY_DIR}/native-libs.rsp")
 add_custom_target(reussir-polyffi-cache-build
   COMMAND ${CMAKE_COMMAND} -E env
     CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target
+    ${REUSSIR_CARGO_FEATURE_ENV}
     RUSTFLAGS=-Awarnings
     ${REUSSIR_CARGO_CXX_ENV}
     ${CMAKE_COMMAND}

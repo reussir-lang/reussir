@@ -14,6 +14,7 @@ set(REUSSIR_SYNTAX_BIN reussir-syntax${CMAKE_EXECUTABLE_SUFFIX})
 add_custom_target(reussir-syntax-build ALL
     COMMAND ${CMAKE_COMMAND} -E env
         CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target
+        ${REUSSIR_CARGO_FEATURE_ENV}
         RUSTFLAGS=-Awarnings
         ${REUSSIR_CARGO} build ${REUSSIR_CARGO_TARGET_ARGS} --locked --profile ${REUSSIR_SYNTAX_CARGO_PROFILE} --package reussir-syntax --quiet
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -36,6 +37,7 @@ add_custom_target(reussir-syntax DEPENDS reussir-syntax-build reussir-syntax-ins
 add_custom_target(reussir-syntax-test
     COMMAND ${CMAKE_COMMAND} -E env
         CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target
+        ${REUSSIR_CARGO_FEATURE_ENV}
         RUSTFLAGS=-Awarnings
         ${REUSSIR_CARGO} test ${REUSSIR_CARGO_TARGET_ARGS} --locked --profile ${REUSSIR_SYNTAX_CARGO_PROFILE}
         --package reussir-syntax

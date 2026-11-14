@@ -13,6 +13,7 @@ endif()
 add_custom_target(reussir-core-test
     COMMAND ${CMAKE_COMMAND} -E env
         CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/target
+        ${REUSSIR_CARGO_FEATURE_ENV}
         RUSTFLAGS=-Awarnings
         ${REUSSIR_CARGO} test ${REUSSIR_CARGO_TARGET_ARGS} --locked --profile ${REUSSIR_CORE_CARGO_PROFILE}
         --package reussir-core

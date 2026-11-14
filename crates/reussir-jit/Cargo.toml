@@ -22,8 +22,10 @@ reussir-backend-sys = { path = "../reussir-backend-sys" }
 # The Reussir runtime, linked directly into the JIT so its `__reussir_*` symbols
 # are resolvable in-process (see `OrcJit::define_runtime_symbols`) without
 # locating and loading the runtime shared library from disk. `default-features =
-# false` keeps the lean system allocator and avoids overriding the global
-# allocator of anything that links the JIT.
+# false` leaves the allocator to the build: alone, this package links the
+# runtime with the lean system allocator. The CMake build resolves features
+# for the whole workspace (cmake/ReussirCargo.cmake), which selects the
+# runtime's default mimalloc backend here as well.
 reussir-rt = { path = "../reussir-rt", default-features = false }
 tracing.workspace = true
 
