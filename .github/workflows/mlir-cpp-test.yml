@@ -124,6 +124,22 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           '
 
+      # Bazel builds the IFRT support archives (cmake/ifrt). Its output tree
+      # holds the fetched dependencies and the result of every action, so with
+      # the tree of an earlier run in place Bazel finds the build up to date
+      # instead of running some 6,000 actions again. Bazel validates what it
+      # finds against the inputs, so a snapshot taken from older inputs is
+      # still correct, only less complete; the key names the inputs so that a
+      # change to them stores a new snapshot.
+      - name: Restore IFRT Bazel output
+        id: ifrt-bazel
+        uses: ./.github/actions/s3-dir-cache
+        with:
+          path: build/cmake/ifrt/cache
+          key: ifrt-bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/ifrt/**', 'cmake/stablehlo/**', 'flake.lock') }}
+          restore-keys: |
+            ifrt-bazel-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Build
         # Also build the sanitized runtime variants here: the `check` target
         # does not depend on them, and lit decides the asan/lsan/msan/tsan
@@ -135,6 +151,22 @@ jobs:
             env RUSTC_WRAPPER=sccache \
             cmake --build build --parallel --target all reussir-rt-sanitizers
           '
+
+      # The server would otherwise still own files in the tree being saved.
+      - name: Stop the Bazel server
+        if: steps.ifrt-bazel.outputs.cache-hit != 'true'
+        run: |
+          nix develop --command bash -c '
+            cd build/cmake/ifrt/workspace
+            bazel --output_user_root="$PWD/../cache" shutdown
+          '
+
+      - name: Save IFRT Bazel output
+        if: steps.ifrt-bazel.outputs.cache-hit != 'true'
+        uses: ./.github/actions/s3-dir-cache/save
+        with:
+          path: build/cmake/ifrt/cache
+          key: ifrt-bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/ifrt/**', 'cmake/stablehlo/**', 'flake.lock') }}
 
       # A clean Cargo home and target directory prove the extracted bundle
       # supplies every Cargo dependency. LLVM/StableHLO remain native inputs.
