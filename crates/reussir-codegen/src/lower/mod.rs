@@ -1328,7 +1328,7 @@ transform [{
 
     #[test]
     fn external_opaque_hooks_are_not_policy_qualified() {
-        let text = r#"record @_RC8External : shared ffi External { "::foreign::External", @external_cleanup };"#;
+        let text = r#"record @_RC8External : shared ffi #External { "::foreign::External", @external_cleanup };"#;
         let context = crate::testing::context();
         in_arena(|tcx| {
             let parsed = parse_program(tcx, text).unwrap();
@@ -1416,15 +1416,15 @@ transform [{
             ("_RC3Key_ffi_cmp", "_RC12semantic_cmp", "i8"),
         ];
         let text = concat!(
-            "record @_RC3Key : shared struct Key { \"value\": i64 };\n\n",
-            "fn @_RC11semantic_eq(v0 (lhs): Key, v1 (rhs): Key) -> u8 {\n",
+            "record @_RC3Key : shared struct #Key { \"value\": i64 };\n\n",
+            "fn @_RC11semantic_eq(v0 (lhs): #Key, v1 (rhs): #Key) -> u8 {\n",
             "    1 : u8\n",
             "}\n\n",
-            "fn @_RC12semantic_cmp(v0 (lhs): Key, v1 (rhs): Key) -> i8 {\n",
+            "fn @_RC12semantic_cmp(v0 (lhs): #Key, v1 (rhs): #Key) -> i8 {\n",
             "    0 : i8\n",
             "}\n\n",
-            "ffi trait glue @_RC3Key_ffi_eq = @_RC11semantic_eq : Key => u8;\n\n",
-            "ffi trait glue @_RC3Key_ffi_cmp = @_RC12semantic_cmp : Key => i8;\n",
+            "ffi trait glue @_RC3Key_ffi_eq = @_RC11semantic_eq : #Key => u8;\n\n",
+            "ffi trait glue @_RC3Key_ffi_cmp = @_RC12semantic_cmp : #Key => i8;\n",
         );
         let context = crate::testing::context();
 
