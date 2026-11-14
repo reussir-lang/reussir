@@ -1,0 +1,41 @@
+name: Merge queue result
+
+# The merge queue tests an entry as the very commit that becomes main's head
+# when the entry merges, so the push run for that commit would repeat a run
+# that has already passed. A workflow that runs for both events calls this on
+# push and skips its jobs when `passed` is 'true'. A commit that reached main
+# without the queue has no such run and is tested by the push run as before.
+on:
+  workflow_call:
+    outputs:
+      passed:
+        description: "'true' when the calling workflow passed for this commit in the merge queue"
+        value: ${{ jobs.lookup.outputs.passed }}
+
+permissions:
+  actions: read
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.runs.outputs.passed }}
+    steps:
+      - name: Look for a passed merge-queue run of the caller
+        id: runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The github context of a called workflow is the caller's:
+          # <owner>/<repo>/.github/workflows/<file>@<ref>.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          workflow=${WORKFLOW_REF%@*}
+          workflow=${workflow##*/}
+          # A failed query counts as no run: the caller then tests the commit.
+          count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${GITHUB_SHA}&event=merge_group&status=success" --jq .total_count) || count=0
+          echo "passed merge-queue runs of ${workflow} for ${GITHUB_SHA}: ${count}"
+          if [ "${count}" -gt 0 ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi

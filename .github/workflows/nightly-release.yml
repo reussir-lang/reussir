@@ -29,6 +29,12 @@ jobs:
   # libstdc++ of the pinned nixpkgs, which are newer than the runner's, so
   # they are inspected but not run.
   build-linux:
+    # A newer push to the same ref supersedes this build. Only the builds are
+    # cancelled: publish-release has a group of its own, so a release that is
+    # being replaced is never abandoned halfway.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-linux-${{ matrix.os }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +176,9 @@ jobs:
           [ -f "$SCCACHE_ERROR_LOG" ] && cat "$SCCACHE_ERROR_LOG" || true
 
   build-macos:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-macos
+      cancel-in-progress: true
     runs-on: macos-15
 
     steps:
@@ -351,6 +360,9 @@ jobs:
   # Rust side, and Wine smoke-runs every shipped binary from its packaged
   # directory. See scripts/build-windows-cross.sh.
   build-windows:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-windows
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -525,6 +537,9 @@ jobs:
 
   publish-release:
     needs: [build-linux, build-macos, build-windows]
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-publish
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
