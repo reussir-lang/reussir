@@ -23,6 +23,7 @@
 // CHECK-NEXT: string/unicode: unit
 // CHECK-NEXT: string/ranges and raw roundtrip: unit
 // CHECK-NEXT: string/data pointers: unit
+// CHECK-NEXT: string/vector scans: unit
 // CHECK-NEXT: string/cow operations & byte-list model (fuzz):
 // CHECK-NEXT: string/utf8 char roundtrip & scalar boundaries (fuzz):
 // CHECK-NEXT: string/concatenation monoid & range algebra (fuzz):
@@ -151,6 +152,145 @@ fn test_data_ptr() -> Outcome {
         .and_then(|| should_be(text_len, 6))
         .and_then(|| should_be(vec_byte, 11))
         .and_then(|| should_be(vec_len, 3))
+}
+
+// The scans below pin their container with `unsafe_inc`, read it through
+// its data pointer sixteen or eight lanes at a time, and release it. The
+// last chunk is read under a tail mask, so nothing past the end is touched.
+
+// The index of the first `needle` in `s`, or the length of `s`.
+fn find_byte(s : String, needle : u8) -> u64 {
+    let len = s.len();
+    core::object::unsafe_inc(s);
+    let base = s.unsafe_data_ptr();
+    let wanted = core::simd::splat<Simd<[u8; 16]>>(needle);
+    let zero = core::simd::splat<Simd<[u8; 16]>>(0);
+    let (at, hit) = while [i = 0, hit = len] (i < len && hit == len) {
+        let live = core::simd::mask_first<Simd<[bool; 16]>>(len - i);
+        let chunk = core::simd::load<Simd<[u8; 16]>>(
+            core::ptr::offset(base, i as i64, core::ptr::PtrArithFlag::Inbounds), live, zero);
+        let found = core::simd::eq(chunk, wanted, live);
+        let here = if core::simd::any(found) { i + core::simd::first_set(found) } else { len };
+        (i + 16, here)
+    };
+    core::object::unsafe_dec(s);
+    hit
+}
+
+// The number of line feeds in `t`, which may be a literal or an owned string.
+fn count_lines(t : Text) -> u64 {
+    let len = t.len();
+    core::object::unsafe_inc(t);
+    let base = t.unsafe_data_ptr();
+    let newline = core::simd::splat<Simd<[u8; 16]>>(10);
+    let zero = core::simd::splat<Simd<[u8; 16]>>(0);
+    let (end, total) = while [i = 0, total = 0] (i < len) {
+        let live = core::simd::mask_first<Simd<[bool; 16]>>(len - i);
+        let chunk = core::simd::load<Simd<[u8; 16]>>(
+            core::ptr::offset(base, i as i64, core::ptr::PtrArithFlag::Inbounds), live, zero);
+        (i + 16, total + core::simd::count(core::simd::eq(chunk, newline, live)))
+    };
+    core::object::unsafe_dec(t);
+    total
+}
+
+// The dot product of two vectors, with a vector accumulator reduced once.
+fn dot(a : Vec<f32>, b : Vec<f32>) -> f32 {
+    let len = if a.len() < b.len() { a.len() } else { b.len() };
+    core::object::unsafe_inc(a);
+    core::object::unsafe_inc(b);
+    let pa = a.unsafe_data_ptr();
+    let pb = b.unsafe_data_ptr();
+    let zero = core::simd::splat<Simd<[f32; 8]>>(0.0);
+    let (end, acc) = while [i = 0, acc = zero] (i < len) {
+        let live = core::simd::mask_first<Simd<[bool; 8]>>(len - i);
+        let x = core::simd::load<Simd<[f32; 8]>>(
+            core::ptr::advance<f32>(pa, i as i64, core::ptr::PtrArithFlag::Inbounds), live, zero);
+        let y = core::simd::load<Simd<[f32; 8]>>(
+            core::ptr::advance<f32>(pb, i as i64, core::ptr::PtrArithFlag::Inbounds), live, zero);
+        (i + 8, core::simd::fma(x, y, acc))
+    };
+    core::object::unsafe_dec(a);
+    core::object::unsafe_dec(b);
+    core::simd::reduce_add(acc)
+}
+
+// Limit the elements of an array from above. An array nobody else holds is
+// updated in place through its data pointer; a shared one is left to the
+// copy-on-write path.
+fn clamp(a : [f32; 11], limit : f32, i : i64) -> [f32; 11] {
+    let len = core::intrinsic::array::dim(a, 0);
+    if core::object::is_unique(a) {
+        let base = core::ptr::as_mut(core::intrinsic::array::unsafe_data_ptr(a));
+        let top = core::simd::splat<Simd<[f32; 8]>>(limit);
+        let end = while [k = 0] (k < len) {
+            let live = core::simd::mask_first<Simd<[bool; 8]>>(len - k);
+            let at = core::ptr::advance<f32>(base, k as i64, core::ptr::PtrArithFlag::Inbounds);
+            let x = core::simd::load<Simd<[f32; 8]>>(at, live, top);
+            core::simd::store(at, top, core::simd::gt(x, top, live));
+            k + 8
+        };
+        a
+    } else {
+        if (i as u64) >= len { a } else {
+            if core::intrinsic::array::get(a, i) > limit {
+                clamp(core::intrinsic::array::set(a, i, limit), limit, i + 1)
+            } else { clamp(a, limit, i + 1) }
+        }
+    }
+}
+
+// A fixed vector and an array of the same shape exchange their lanes through
+// the data pointer of the array.
+fn doubled(a : [i32; 8]) -> [i32; 8] {
+    core::object::unsafe_inc(a);
+    let v = core::ptr::load<Simd<[i32; 8]>>(core::intrinsic::array::unsafe_data_ptr(a));
+    core::object::unsafe_dec(a);
+    let out = core::intrinsic::array::splat<[i32; 8]>(0);
+    core::ptr::store(core::ptr::as_mut(core::intrinsic::array::unsafe_data_ptr(out)), v + v);
+    out
+}
+
+fn test_vector_scans() -> Outcome {
+    let line = String::from_str("the quick brown fox jumps over the lazy dog");
+    let first_q = find_byte(line, 113);
+    let first_z = find_byte(line, 122);
+    let missing = find_byte(line, 33);
+    let empty = find_byte(String::new(), 113);
+
+    let literal = count_lines(Text::from_str("one\ntwo\nthree\nfour, five, six, seven\n"));
+    let owned = count_lines(Text::from_string(String::from_str("a\n\nb")));
+
+    let xs = Vec::new().push(1.0 as f32).push(2.0 as f32).push(3.0 as f32).push(4.0 as f32)
+        .push(5.0 as f32).push(6.0 as f32).push(7.0 as f32).push(8.0 as f32).push(9.0 as f32);
+    let ys = Vec::new().push(2.0 as f32).push(2.0 as f32).push(2.0 as f32).push(2.0 as f32)
+        .push(2.0 as f32).push(2.0 as f32).push(2.0 as f32).push(2.0 as f32).push(0.5 as f32)
+        .push(100.0 as f32);
+    let product = dot(xs, ys);
+
+    let unique = clamp(core::intrinsic::array::tabulate<[f32; 11]>(|k| k as f32), 4.5, 0);
+    let unique_low = core::intrinsic::array::get(unique, 4);
+    let unique_high = core::intrinsic::array::get(unique, 10);
+    let shared = core::intrinsic::array::tabulate<[f32; 11]>(|k| k as f32);
+    let limited = clamp(shared, 4.5, 0);
+    let limited_high = core::intrinsic::array::get(limited, 9);
+    let kept = core::intrinsic::array::get(shared, 9);
+
+    let twice = doubled(core::intrinsic::array::tabulate<[i32; 8]>(|k| (k as i32) - 3));
+    let twice_first = core::intrinsic::array::get(twice, 0);
+    let twice_last = core::intrinsic::array::get(twice, 7);
+
+    should_be(first_q, 4)
+        .and_then(|| should_be(first_z, 37))
+        .and_then(|| should_be(missing, 43))
+        .and_then(|| should_be(empty, 0))
+        .and_then(|| should_be(literal, 4))
+        .and_then(|| should_be(owned, 2))
+        .and_then(|| expect(product == 76.5, "dot product over nine elements"))
+        .and_then(|| expect(unique_low == 4.0 && unique_high == 4.5, "clamped in place"))
+        .and_then(|| expect(limited_high == 4.5 && kept == 9.0, "shared array left intact"))
+        .and_then(|| should_be(twice_first, -6))
+        .and_then(|| should_be(twice_last, 8))
 }
 
 // ------------------------------ Model helpers ------------------------------
@@ -644,6 +784,7 @@ fn suite() -> TestTree {
         .with_case("unicode", test_unicode)
         .with_case("ranges and raw roundtrip", test_ranges_and_raw)
         .with_case("data pointers", test_data_ptr)
+        .with_case("vector scans", test_vector_scans)
         .with_fuzz(
             "cow operations & byte-list model (fuzz)",
             tuple3(
