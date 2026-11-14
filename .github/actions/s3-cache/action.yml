@@ -50,6 +50,8 @@ runs:
         S3_BUCKET_URL=${S3_BUCKET_URL%/}
         ENDPOINT_HOST=${S3_BUCKET_URL%%/*}
         BUCKET=${S3_BUCKET_URL#*/}
+        # The secret is masked only as a whole; mask the host derived from it too.
+        echo "::add-mask::${ENDPOINT_HOST}"
         # zstd: xz is far too slow for multi-GB toolchain closures.
         # priority=50 ranks below cache.nixos.org (40), so upstream paths
         # keep coming from the CDN and this store only serves what upstream
