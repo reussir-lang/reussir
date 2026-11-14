@@ -4393,27 +4393,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                             }
                         }
                     }
-                    _ => {
-                        // The smallest index among the set lanes; a clear
-                        // lane counts as the number of lanes.
-                        let fixed = self.append(
-                            block,
-                            arith::constant(
-                                self.context,
-                                IntegerAttribute::new(i32_ty, lanes).into(),
-                                loc,
-                            ),
-                        );
-                        let vscale = self.append(block, builders::vector_vscale(self.context, loc));
-                        let vscale = self.append(block, arith::index_castui(vscale, i32_ty, loc));
-                        let count = self.append(block, arith::muli(vscale, fixed, loc));
-                        let none =
-                            self.append(block, builders::vector_broadcast(count, counters, loc));
-                        let indices = self.append(block, builders::vector_step(counters, loc));
-                        let live = self.append(block, arith::select(mask, indices, none, loc));
-                        let first = self.append(block, reduce(Kind::MinUI, live, i32_ty));
-                        arith::extui(first, result, loc)
-                    }
+                    // A scalable mask has no integer type of its width.
+                    _ => builders::vector_cttz_elts(mask, result, loc),
                 }
             }
             SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
