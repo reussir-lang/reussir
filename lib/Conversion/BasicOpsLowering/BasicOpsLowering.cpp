@@ -701,6 +701,24 @@ struct ReussirExpectConversionPattern
   }
 };
 
+struct ReussirVectorCttzEltsConversionPattern
+    : public mlir::OpConversionPattern<ReussirVectorCttzEltsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ReussirVectorCttzEltsOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // A mask with no set lane counts every lane.
+    auto zeroIsPoison = mlir::LLVM::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getI1Type(), 0);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::CallIntrinsicOp>(
+        op, op.getResult().getType(),
+        rewriter.getStringAttr("llvm.experimental.cttz.elts"),
+        mlir::ValueRange{adaptor.getMask(), zeroIsPoison});
+    return mlir::success();
+  }
+};
+
 struct ReussirTokenReallocConversionPattern
     : public mlir::OpConversionPattern<ReussirTokenReallocOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -4367,7 +4385,7 @@ struct ReussirConvertToLLVMPatternInterface
         ReussirConstSeqGetOp, ReussirTrampolineOp, ReussirTokenLaunderOp,
         ReussirPtrAddrOp, ReussirPtrExposeAddrOp, ReussirPtrFromAddrOp,
         ReussirPtrMaskOp, ReussirPtrLaunderInvariantGroupOp,
-        ReussirPtrStripInvariantGroupOp>();
+        ReussirPtrStripInvariantGroupOp, ReussirVectorCttzEltsOp>();
     // `reussir.closure.wpd_test` is created BY the dispatch conversion
     // patterns above, already in its final form (operand = the loaded vtable
     // pointer), and must survive conversion: the LLVM dialect cannot express
@@ -4543,7 +4561,8 @@ void populateBasicOpsLoweringToLLVMConversionPatterns(
   populatePtrLoweringPatterns(converter, patterns);
   populateDropStackLoweringPatterns(converter, patterns);
   patterns.add<
-      ReussirExpectConversionPattern, ReussirCctxEmptyConversionPattern,
+      ReussirExpectConversionPattern, ReussirVectorCttzEltsConversionPattern,
+      ReussirCctxEmptyConversionPattern,
       ReussirCctxExtendConversionPattern, ReussirCctxApplyConversionPattern,
       ReussirTokenAllocConversionPattern, ReussirTokenFreeConversionPattern,
       ReussirTokenReinterpretConversionPattern,

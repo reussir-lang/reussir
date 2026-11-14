@@ -14,5 +14,5 @@ pub fn masked(a: Simd<[f32; [4]]>, b: Simd<[f32; [4]]>, n: u64) -> Simd<[f32; [4
 }
 
 // CHECK-LABEL: define {{.*}}i64 @{{.*}}position
-// CHECK: call i32 @llvm.vector.reduce.umin.nxv16i32
+// CHECK: call i64 @llvm.experimental.cttz.elts.i64.nxv16i1(<vscale x 16 x i1> %0, i1 false)
 pub fn position(m: Simd<[bool; [16]]>) -> u64 { simd::first_set(m) }
