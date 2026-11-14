@@ -1175,6 +1175,19 @@ pub fn vector_shape_cast<'c>(
         .expect("valid vector.shape_cast")
 }
 
+/// `vector.bitcast %vector : <vector> to <result_type>`.
+pub fn vector_bitcast<'c>(
+    vector: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.bitcast", location)
+        .add_operands(&[vector])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.bitcast")
+}
+
 fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
     set_inherent_attribute(operation, "static_position", positions);
 }

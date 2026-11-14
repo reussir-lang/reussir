@@ -4357,6 +4357,42 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         let total = self.append(block, reduce(Kind::Add, ones, i32_ty));
                         arith::extui(total, result, loc)
                     }
+                    _ if !scalable => {
+                        use std::cmp::Ordering;
+                        // A fixed mask is one integer with a bit per lane,
+                        // so its first set lane is that integer's count of
+                        // trailing zeros, which is every bit when none is
+                        // set.
+                        let bits_ty: Type = IntegerType::new(self.context, lanes as u32).into();
+                        let word_ty = reussir_backend::dialect::ty::vector(bits_ty, &[1], false);
+                        let word = self.append(block, builders::vector_bitcast(mask, word_ty, loc));
+                        let bits = self.append(
+                            block,
+                            builders::vector_extract(
+                                self.context,
+                                word,
+                                &[VectorPosition::Static(0)],
+                                bits_ty,
+                                loc,
+                            ),
+                        );
+                        let first = super::math::math_operation(
+                            self.context,
+                            reussir_core::intrinsic::MathFn::Cttz,
+                            &[bits],
+                            bits_ty,
+                            None,
+                            loc,
+                        );
+                        // The result is a `u64`.
+                        match lanes.cmp(&64) {
+                            Ordering::Less => arith::extui(self.append(block, first), result, loc),
+                            Ordering::Equal => first,
+                            Ordering::Greater => {
+                                arith::trunci(self.append(block, first), result, loc)
+                            }
+                        }
+                    }
                     _ => {
                         // The smallest index among the set lanes; a clear
                         // lane counts as the number of lanes.
@@ -4368,16 +4404,9 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                                 loc,
                             ),
                         );
-                        let count = match scalable {
-                            false => fixed,
-                            true => {
-                                let vscale =
-                                    self.append(block, builders::vector_vscale(self.context, loc));
-                                let vscale =
-                                    self.append(block, arith::index_castui(vscale, i32_ty, loc));
-                                self.append(block, arith::muli(vscale, fixed, loc))
-                            }
-                        };
+                        let vscale = self.append(block, builders::vector_vscale(self.context, loc));
+                        let vscale = self.append(block, arith::index_castui(vscale, i32_ty, loc));
+                        let count = self.append(block, arith::muli(vscale, fixed, loc));
                         let none =
                             self.append(block, builders::vector_broadcast(count, counters, loc));
                         let indices = self.append(block, builders::vector_step(counters, loc));

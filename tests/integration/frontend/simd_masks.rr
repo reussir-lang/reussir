@@ -60,7 +60,8 @@ pub fn whole(m: Simd<[bool; 2, 8]>) -> bool { simd::all(m) }
 pub fn number(m: Simd<[bool; 8]>) -> u64 { simd::count(m) }
 
 // CHECK-LABEL: func.func @{{.*}}position
-// CHECK: %[[STEP:.*]] = vector.step : vector<8xi32>
-// CHECK: %[[LIVE:.*]] = arith.select %arg0, %[[STEP]], %{{.*}}
-// CHECK: vector.reduction <minui>, %[[LIVE]] : vector<8xi32> into i32
+// CHECK: %[[WORD:.*]] = vector.bitcast %arg0 : vector<8xi1> to vector<1xi8>
+// CHECK: %[[BITS:.*]] = vector.extract %[[WORD]][0] : i8 from vector<1xi8>
+// CHECK: %[[FIRST:.*]] = math.cttz %[[BITS]] : i8
+// CHECK: arith.extui %[[FIRST]] : i8 to i64
 pub fn position(m: Simd<[bool; 8]>) -> u64 { simd::first_set(m) }
