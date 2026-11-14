@@ -76,6 +76,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Evaluate a surface type, coloring concrete regional records as
     /// `Regional` (later refined by [`Elaborator::eval_type_flex`]).
     pub fn eval_type(&mut self, ty: &surface::Type) -> Ty<'tcx> {
+        let evaluated = self.eval_type_unchecked(ty);
+        if let Some(reason) = crate::semi::ty::scalable_storage_rejection(evaluated) {
+            self.error(Some(ty.span()), reason);
+            return self.tcx.mk(TyKind::Bottom);
+        }
+        evaluated
+    }
+
+    fn eval_type_unchecked(&mut self, ty: &surface::Type) -> Ty<'tcx> {
         let kind = ty.kind();
         match &kind {
             TypeKind::TypeIntegral(it) => self.tcx.mk_int(match it {
@@ -610,11 +619,35 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.tcx.mk(TyKind::Bottom);
         }
         let mut dims = Vec::with_capacity(extents.len());
-        for extent in extents.iter() {
+        let mut scalable = false;
+        for (i, extent) in extents.iter().enumerate() {
             let surface::ArrayExtent::Expr(expr) = extent else {
                 self.error(Some(span), "a vector extent is a positive constant");
                 return self.tcx.mk(TyKind::Bottom);
             };
+            // `[n]` is a scalable extent: `n` times the target's `vscale`.
+            let bracketed = match expr.kind() {
+                surface::ExprKind::SeqLit(inner) => match inner.as_slice() {
+                    [count] => Some(count.clone()),
+                    _ => {
+                        self.error(
+                            Some(expr.span()),
+                            "a scalable extent holds one constant: `[4]`",
+                        );
+                        return self.tcx.mk(TyKind::Bottom);
+                    }
+                },
+                _ => None,
+            };
+            if bracketed.is_some() && i + 1 != extents.len() {
+                self.error(
+                    Some(expr.span()),
+                    "only the last extent of a vector may be scalable",
+                );
+                return self.tcx.mk(TyKind::Bottom);
+            }
+            scalable = bracketed.is_some();
+            let expr = bracketed.as_ref().unwrap_or(expr);
             let dim = self.eval_extent(expr);
             if dim == 0 || dim > crate::semi::ty::MAX_SIMD_LANES {
                 self.error(
@@ -638,7 +671,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.tcx.mk(TyKind::Bottom);
         }
-        self.tcx.mk_simd(elem, &dims, false)
+        self.tcx.mk_simd(elem, &dims, scalable)
     }
 
     fn eval_extent(&mut self, e: &surface::Expr) -> u64 {

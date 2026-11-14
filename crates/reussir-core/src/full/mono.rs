@@ -2141,6 +2141,11 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// report every such `Arc`, once per type per function instance (see
     /// [`reported_arcs`](Self::reported_arcs)).
     fn check_arc_inners(&mut self, ty: Ty<'tcx>, span: Option<Span>) {
+        if let Some(reason) = crate::semi::ty::scalable_storage_rejection(ty)
+            && self.reported_arcs.insert(ty)
+        {
+            self.error(span, reason);
+        }
         match *ty.kind() {
             TyKind::Tuple(fields) => {
                 if !self.inside_kernel {

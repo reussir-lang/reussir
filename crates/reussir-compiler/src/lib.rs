@@ -296,6 +296,12 @@ impl TargetMachine {
             .unwrap_or(false)
     }
 
+    /// Whether the target has scalable vectors: AArch64 with SVE, or RISC-V
+    /// with the vector extension.
+    pub fn has_scalable_vectors(&self) -> bool {
+        self.has_arm_sve() || (self.triple().starts_with("riscv") && self.has_feature("v"))
+    }
+
     /// Whether vectors lower with the Arm SVE legalizations.
     pub fn has_arm_sve(&self) -> bool {
         self.triple().starts_with("aarch64") && self.has_feature("sve")
