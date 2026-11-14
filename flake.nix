@@ -15,38 +15,7 @@
   outputs = { self, nixpkgs, fenix, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        # On darwin the in-build LLVM test suite trips over the build
-        # environment's codesigning restrictions (dsymutil's codesign test) —
-        # one test of 77k, orthogonal to the toolchain. A member-level
-        # override cannot fix it: the package set's stdenv and compiler-rt
-        # resolve through nixpkgs' splices to the GLOBAL llvmPackages_23
-        # attribute, so only an overlay reaches every composition path.
-        # Dropping the one test from the monorepo source keeps the check
-        # phase (and the fixpoint) intact everywhere.
-        pkgs =
-          let base = nixpkgs.legacyPackages.${system};
-          in
-          if base.stdenv.hostPlatform.isDarwin then
-            import nixpkgs {
-              inherit system;
-              overlays = [
-                (final: prev: {
-                  llvmPackages_23 = prev.llvmPackages_23.override {
-                    # The full llvm-project tree (llvm.src is only the llvm/,
-                    # cmake/ and third-party/ subset the libllvm build copies
-                    # out of it; clang, compiler-rt, mlir… copy their own
-                    # subdirectories from this monorepo source).
-                    monorepoSrc = final.applyPatches {
-                      name = "llvm-project-23.1.0-no-codesign-test";
-                      src = prev.llvmPackages_23.llvm.monorepoSrc;
-                      postPatch = "rm llvm/test/tools/dsymutil/codesign.test";
-                    };
-                  };
-                })
-              ];
-            }
-          else
-            base;
+        pkgs = nixpkgs.legacyPackages.${system};
 
         # LLVM/MLIR 23 — must match FindLLVM.cmake's version check (23.x only).
         llvmPkgs = pkgs.llvmPackages_23;
