@@ -1108,19 +1108,88 @@ pub enum VectorPosition<'c, 'a> {
     Dynamic(Value<'c, 'a>),
 }
 
-/// Set the positions of a `vector.extract` or `vector.insert`. They are an
-/// inherent attribute kept in the operation's properties, which the generic
-/// operation builder does not fill.
-fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
+/// Set an inherent attribute that the operation keeps in its properties,
+/// which the generic operation builder does not fill.
+fn set_inherent_attribute(operation: &Operation<'_>, name: &str, value: Attribute<'_>) {
     use melior::ir::attribute::AttributeLike;
-    let name = melior::StringRef::new("static_position");
+    let name = melior::StringRef::new(name);
     unsafe {
         mlir_sys::mlirOperationSetInherentAttributeByName(
             operation.to_raw(),
             name.to_raw(),
-            positions.to_raw(),
+            value.to_raw(),
         );
     }
+}
+
+pub use sys::ReussirVectorCombiningKind as VectorCombiningKind;
+
+/// `vector.reduction <kind>, %vector : <vector> into <result_type>`: the
+/// lanes of a one-dimensional vector combined into a scalar.
+pub fn vector_reduction<'c>(
+    context: &'c Context,
+    kind: VectorCombiningKind,
+    vector: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let operation = OperationBuilder::new("vector.reduction", location)
+        .add_operands(&[vector])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.reduction");
+    let kind = unsafe {
+        Attribute::from_raw(sys::reussirVectorCombiningKindAttrGet(
+            context.to_raw(),
+            kind,
+        ))
+    };
+    set_inherent_attribute(&operation, "kind", kind);
+    operation
+}
+
+/// `vector.create_mask %counts... : <mask_type>`: in each dimension the
+/// leading `count` lanes are set. The counts are `index` values.
+pub fn vector_create_mask<'c>(
+    counts: &[Value<'c, '_>],
+    mask_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.create_mask", location)
+        .add_operands(counts)
+        .add_results(&[mask_type])
+        .build()
+        .expect("valid vector.create_mask")
+}
+
+/// `vector.shape_cast %vector : <vector> to <result_type>`.
+pub fn vector_shape_cast<'c>(
+    vector: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.shape_cast", location)
+        .add_operands(&[vector])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.shape_cast")
+}
+
+/// `vector.bitcast %vector : <vector> to <result_type>`.
+pub fn vector_bitcast<'c>(
+    vector: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.bitcast", location)
+        .add_operands(&[vector])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.bitcast")
+}
+
+fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
+    set_inherent_attribute(operation, "static_position", positions);
 }
 
 fn vector_positions<'c, 'a>(
