@@ -260,6 +260,8 @@ unsafe extern "C" {
     pub fn reussirCreateConvertRCGMPToSCFPass() -> MlirPass;
     pub fn reussirCreateExpandStridedMetadataPass() -> MlirPass;
     pub fn reussirCreateLowerAffinePass() -> MlirPass;
+    pub fn reussirCreateConvertVectorToLLVMPass(arm_sve: bool) -> MlirPass;
+    pub fn reussirCreateArmSVELegalizeVectorStoragePass() -> MlirPass;
     pub fn reussirCreateConvertToLLVMPass() -> MlirPass;
     pub fn reussirCreateReconcileUnrealizedCastsPass() -> MlirPass;
 

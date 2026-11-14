@@ -198,6 +198,7 @@ fn implied_target_features(triple: &str) -> &'static str {
 pub struct TargetMachine {
     machine: LLVMTargetMachineRef,
     triple: CString,
+    features: CString,
     data_layout: CString,
 }
 
@@ -274,9 +275,30 @@ impl TargetMachine {
             Ok(TargetMachine {
                 machine,
                 triple,
+                features,
                 data_layout,
             })
         }
+    }
+
+    /// Whether the target feature `name` is enabled, as the last mention of
+    /// `+name` or `-name` in the feature string decides.
+    pub fn has_feature(&self, name: &str) -> bool {
+        let features = self.features.to_str().unwrap_or_default();
+        features
+            .split(',')
+            .rev()
+            .find_map(|f| match f.split_at_checked(1) {
+                Some(("+", n)) if n == name => Some(true),
+                Some(("-", n)) if n == name => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
+    /// Whether vectors lower with the Arm SVE legalizations.
+    pub fn has_arm_sve(&self) -> bool {
+        self.triple().starts_with("aarch64") && self.has_feature("sve")
     }
 
     /// The target's data layout string — feed this to

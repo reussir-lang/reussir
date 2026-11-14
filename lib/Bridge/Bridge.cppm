@@ -44,6 +44,10 @@ module;
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
+#include <mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h>
+#include <mlir/Dialect/ArmSVE/IR/ArmSVEDialect.h>
+#include <mlir/Dialect/ArmSVE/Transforms/Passes.h>
+#include <mlir/Dialect/Vector/IR/VectorOps.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
@@ -164,7 +168,8 @@ void createLoweringPipeline(mlir::PassManager &pm,
                             ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
                             bool reuseTokenAcrossCall = false,
                             bool enableInvariantAnalysis = false,
-                            llvm::StringRef dropOrder = "") {
+                            llvm::StringRef dropOrder = "",
+                            bool armSVE = false) {
   // Keep optional device optimization out of unoptimized/fast compilation.
   // Packaging and explicit donation contracts remain mandatory at every level.
   const bool optimizeDeviceKernels =
@@ -243,6 +248,12 @@ void createLoweringPipeline(mlir::PassManager &pm,
   pm.addPass(createConvertSCFToCFPass());
 #endif
   pm.addPass(createReussirBasicOpsLoweringPass());
+  if (armSVE)
+    pm.addNestedPass<mlir::func::FuncOp>(
+        mlir::arm_sve::createLegalizeVectorStoragePass());
+  mlir::ConvertVectorToLLVMPassOptions vectorOptions;
+  vectorOptions.armSVE = armSVE;
+  pm.addPass(mlir::createConvertVectorToLLVMPass(vectorOptions));
   pm.addPass(createReussirConvertToLLVMPass());
   pm.addPass(createReconcileUnrealizedCastsPass());
   pm.addPass(createCSEPass());
@@ -389,7 +400,8 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 #endif
   registry.insert<reussir::ReussirDialect, DLTIDialect, LLVM::LLVMDialect,
                   arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect,
-                  ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect>();
+                  ub::UBDialect, func::FuncDialect, cf::ControlFlowDialect,
+                  vector::VectorDialect, arm_sve::ArmSVEDialect>();
 #ifdef REUSSIR_ENABLE_RCGMP
   registry.insert<mlir::rcgmp::RCGMPDialect>();
   reussir::registerRCGMPExternalModels(registry);
@@ -408,10 +420,10 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
 std::unique_ptr<mlir::PassManager> buildPassManager(
     mlir::MLIRContext &context, ReussirOptOption opt = REUSSIR_OPT_DEFAULT,
     bool reuseTokenAcrossCall = false, bool enableInvariantAnalysis = false,
-    llvm::StringRef dropOrder = "") {
+    llvm::StringRef dropOrder = "", bool armSVE = false) {
   auto pm = std::make_unique<mlir::PassManager>(&context);
   createLoweringPipeline(*pm, opt, reuseTokenAcrossCall,
-                         enableInvariantAnalysis, dropOrder);
+                         enableInvariantAnalysis, dropOrder, armSVE);
   return pm;
 }
 
@@ -577,8 +589,12 @@ void reussir_bridge_compile_for_target(
   spdlog::debug("CPU: {}, features: {}", cpu.str(), target_features);
   spdlog::debug("Data layout: {}", dl.getStringRepresentation());
 
+  const bool armSVE =
+      llvm::Triple(triple).isAArch64() &&
+      llvm::is_contained(
+          llvm::SubtargetFeatures(target_features).getFeatures(), "+sve");
   auto pm = buildPassManager(*context, opt, reuse_token_across_call,
-                             enable_invariant_analysis != 0);
+                             enable_invariant_analysis != 0, "", armSVE);
 
   // 4) Convert the MLIR module to LLVM IR.
   llvm::LLVMContext llvmCtx;
