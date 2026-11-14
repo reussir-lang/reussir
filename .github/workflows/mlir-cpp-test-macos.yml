@@ -57,8 +57,7 @@ jobs:
       # own timing and log section. The shellHook writes CMakeUserPresets.json
       # (the nix-dev preset used below) on every entry. `--profile` keeps the
       # shell's closure as a GC root: Determinate Nix collects garbage on its
-      # own when disk space runs low (a pull request from a fork builds the
-      # LLVM/MLIR join from source), and without a root it can delete a tool
+      # own when disk space runs low, and without a root it can delete a tool
       # that no process is using at that moment, such as wasmer before the
       # WASI tests.
       - name: Build dev shell
