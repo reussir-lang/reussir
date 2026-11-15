@@ -287,6 +287,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
+    /// Why `ty` does not satisfy the bound `trait_id`, if it is known not
+    /// to: a bound still waiting on an inference hole has no reason yet.
+    pub(super) fn bound_failure(
+        &mut self,
+        trait_id: crate::semi::traits::TraitId,
+        ty: crate::semi::ty::Ty<'tcx>,
+    ) -> Option<String> {
+        let bound = TraitRef {
+            trait_id,
+            args: vec![ty],
+        };
+        match self.discharge_trait(&bound) {
+            Discharge::Failed(reason) => Some(reason),
+            Discharge::Solved | Discharge::Defer => None,
+        }
+    }
+
     /// "`τ` does not implement `Trait`", with the bubbled inner goal named
     /// as the root cause when a where-clause on the chosen impl failed.
     /// Shared by obligation discharge and trait-method dispatch.

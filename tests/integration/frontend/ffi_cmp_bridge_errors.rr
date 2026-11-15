@@ -17,6 +17,6 @@ pub fn empty<T>() -> BTreeSet<T> [{
 
 pub fn main() -> BTreeSet<Key> { empty<Key>() }
 
-// CHECK-DAG: `cmpbridge_error::BTreeSet<T>` is ill-formed: `T` does not implement `core::cmp::Ord`
+// CHECK-DAG: `cmpbridge_error::BTreeSet<T>` is ill-formed: the bound `core::cmp::Ord` is not satisfied by this generic
 // CHECK-DAG: `cmpbridge_error::BTreeSet<cmpbridge_error::Key>` is ill-formed: `cmpbridge_error::Key` does not implement `core::cmp::Ord`
 // CHECK-NOT: OrdBridge is not implemented

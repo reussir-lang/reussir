@@ -50,7 +50,6 @@ use crate::semi::ty::{DefId, Flexivity, FpTy, GenericId, IntTy, Ty, TyKind};
 use crate::surface::{self, FpType, IntegralType, TypeKind};
 
 use super::ctxt::{DefaultCap, Elaborator, RecordFields};
-use super::fulfill::ty_has_hole;
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Evaluate an exported or reusable declaration type. Dimension holes are
@@ -815,7 +814,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     fn report_record_bounds(&mut self, ty: Ty<'tcx>, span: Option<surface::Span>) {
-        use crate::semi::traits::{Obligation, SelectCtxt, SelectError, TraitRef};
         let TyKind::Record { def, args, .. } = *ty.kind() else {
             return;
         };
@@ -833,23 +831,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             })
             .collect();
         for (trait_id, arg) in bounds {
-            if matches!(arg.kind(), TyKind::Bottom) || ty_has_hole(arg) {
+            if matches!(arg.kind(), TyKind::Bottom) {
                 continue;
             }
-            let goal = Obligation::Trait(TraitRef {
-                trait_id,
-                args: vec![arg],
-            });
-            let reason = match SelectCtxt::new(&self.traits, self.tcx, &self.generics).select(&goal)
-            {
-                Ok(_) => continue,
-                Err(SelectError::NoImpl(inner)) => self.no_impl_message(arg, trait_id, &inner),
-                Err(SelectError::DepthLimit(goal)) => self.depth_limit_message(&goal),
-            };
-            self.error(
-                span,
-                format!("`{}` is ill-formed: {reason}", self.ty_display(ty)),
-            );
+            if let Some(reason) = self.bound_failure(trait_id, arg) {
+                self.error(
+                    span,
+                    format!("`{}` is ill-formed: {reason}", self.ty_display(ty)),
+                );
+            }
         }
     }
 
