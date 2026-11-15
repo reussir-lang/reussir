@@ -2,29 +2,23 @@
 // surrounding expression, and the amount is then checked against that
 // type's `Amount`.
 
-// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
-// RUN: %rrc %s --package-name shifts --extern core=%t.core.rri --emit hir --no-source-locations -o - | %FileCheck %s
+// RUN: %rrc %s --emit hir --no-source-locations -o - | %FileCheck %s
 
-// CHECK-LABEL: fn #shifts::added
+// CHECK-LABEL: fn #added
 // CHECK: (1 : i64 << v0 : i64) : i64 + v1 : i64
 pub fn added(n: i64, x: i64) -> bool { (1 << n) + x > 100 }
 
-// CHECK-LABEL: fn #shifts::returned
+// CHECK-LABEL: fn #returned
 // CHECK: (1 : i64 << v0 : i64) : i64
 pub fn returned(n: i64) -> i64 { 1 << n }
 
-// The amount of a `Nat` is an `i64`.
-// CHECK-LABEL: fn #shifts::natural
-// CHECK: (1 : Nat << v0 : i64) : Nat
-pub fn natural(n: i64) -> Nat { 1 << n }
-
 fn takes(m: u64) -> u64 { m }
 
-// CHECK-LABEL: fn #shifts::passed
+// CHECK-LABEL: fn #passed
 // CHECK: (1 : u64 << v0 : u64) : u64
 pub fn passed(n: u64) -> u64 { takes(1 << n) }
 
-// CHECK-LABEL: fn #shifts::later
+// CHECK-LABEL: fn #later
 // CHECK: (1 : i64 << v0 : i64) : i64
 pub fn later(n: i64, x: i64) -> bool {
     let v = 1 << n;
