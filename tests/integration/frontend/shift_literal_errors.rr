@@ -1,0 +1,22 @@
+// A literal on the left of a shift that nothing else types is not given the
+// amount's type: several types can share one `Amount`. It is reported once.
+
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=COUNT
+
+// Each report prints its message twice: as the heading and at the span.
+// COUNT-COUNT-6: type annotations needed: cannot resolve a bound
+// COUNT-NOT: type annotations needed
+
+// CHECK-DAG: shift_literal_errors.rr:[[# @LINE + 1]]:35
+pub fn compared(n: i64) -> bool { 1 << n > 100 }
+
+// CHECK-DAG: shift_literal_errors.rr:[[# @LINE + 1]]:34
+pub fn summed(n: i64) -> bool { (1 << n) + 1 > 100 }
+
+// CHECK-DAG: shift_literal_errors.rr:[[# @LINE + 1]]:40
+pub fn unused(n: i32) -> i32 { let a = 1; let b = a << n; n }
+
+// Once the surrounding expression types the literal, the amount must fit.
+// CHECK-DAG: type mismatch: expected `u8`, found `i64`
+pub fn narrow(n: i64, x: u8) -> bool { let v = 1 << n; v + x > 100 }
