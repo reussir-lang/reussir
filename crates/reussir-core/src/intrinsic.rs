@@ -567,6 +567,8 @@ pub enum SimdFn {
 pub enum SimdLanes {
     /// Integers and floating-point numbers.
     Numeric,
+    /// Signed integers and floating-point numbers.
+    Signed,
     /// Integers.
     Integer,
     /// Integers and `bool`.
@@ -581,6 +583,7 @@ impl SimdLanes {
     pub fn describe(self) -> &'static str {
         match self {
             SimdLanes::Numeric => "integer or floating-point",
+            SimdLanes::Signed => "signed integer or floating-point",
             SimdLanes::Integer => "integer",
             SimdLanes::Bits => "integer or `bool`",
             SimdLanes::Float => "floating-point",
@@ -669,7 +672,7 @@ impl SimdFn {
         use SimdFn::*;
         Some(match self {
             Add | Sub | Mul | Div | Rem | Min | Max => (2, SimdLanes::Numeric, false),
-            Neg | Abs => (1, SimdLanes::Numeric, false),
+            Neg | Abs => (1, SimdLanes::Signed, false),
             And | Or | Xor => (2, SimdLanes::Bits, false),
             Not => (1, SimdLanes::Bits, false),
             Shl | Shr => (2, SimdLanes::Integer, false),

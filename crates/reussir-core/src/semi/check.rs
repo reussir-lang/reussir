@@ -3937,6 +3937,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let float = matches!(elem.kind(), TyKind::Fp(_));
         let accepted = match lanes {
             SimdLanes::Numeric => integer || float,
+            SimdLanes::Signed => float || matches!(elem.kind(), TyKind::Int(IntTy::Signed(_))),
             SimdLanes::Integer => integer,
             SimdLanes::Bits => !float,
             SimdLanes::Float => float,

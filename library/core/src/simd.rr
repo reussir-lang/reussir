@@ -74,11 +74,11 @@ pub fn min<V>(a: V, b: V) -> V;
 #[lang("core::simd::max")]
 pub fn max<V>(a: V, b: V) -> V;
 
-/// Lanewise negation.
+/// Lanewise negation, on signed integer and floating-point vectors.
 #[lang("core::simd::neg")]
 pub fn neg<V>(a: V) -> V;
 
-/// Lanewise absolute value.
+/// Lanewise absolute value, on signed integer and floating-point vectors.
 #[lang("core::simd::abs")]
 pub fn abs<V>(a: V) -> V;
 

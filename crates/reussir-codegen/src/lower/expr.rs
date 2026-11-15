@@ -4383,9 +4383,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     (SimdFn::Neg, true, _) => arith::negf(a, loc),
                     (SimdFn::Neg, false, _) => arith::subi(all(0), a, loc),
                     (SimdFn::Abs, true, _) => unary("math.absf")?,
-                    (SimdFn::Abs, false, true) => unary("math.absi")?,
-                    // An unsigned lane is its own magnitude.
-                    (SimdFn::Abs, false, false) => return Ok(Some(a)),
+                    (SimdFn::Abs, false, _) => unary("math.absi")?,
                     (SimdFn::And, ..) => arith::andi(a, b, loc),
                     (SimdFn::Or, ..) => arith::ori(a, b, loc),
                     (SimdFn::Xor, ..) => arith::xori(a, b, loc),
