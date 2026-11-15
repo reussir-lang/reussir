@@ -16,5 +16,9 @@ pub fn opposite(a: P) -> P { -a }
 // CHECK-DAG: `i32` does not implement `Not`
 pub fn flip(a: i32) -> i32 { !a }
 
-// A number has every arithmetic operator through `Num`.
-pub fn generic<T: Num>(a: T, b: T) -> T { -(a + b) * a / b % a }
+// A number has the binary arithmetic operators through `Num`. Negation is
+// apart, since not every number has negatives.
+pub fn generic<T: Num + Neg>(a: T, b: T) -> T { -(a + b) * a / b % a }
+
+// CHECK-DAG: the bound `Neg` is not satisfied by this generic
+pub fn unsigned<T: Num>(a: T) -> T { -a }

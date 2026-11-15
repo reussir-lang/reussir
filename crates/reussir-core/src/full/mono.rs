@@ -1936,10 +1936,12 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     // form — `core`'s source-declared scalar impls and the
                     // compiler's no-`core` fallback twins alike: the call
                     // lowers intrinsically instead of dispatching.
-                    if let Some(crate::semi::lang::LangItem::Operator(op)) =
-                        self.lang.get(&tdef.def)
-                    {
-                        return Some(TraitCallTarget::Operator(*op));
+                    let operator = match self.lang.get(&tdef.def) {
+                        Some(crate::semi::lang::LangItem::Operator(op)) => Some(*op),
+                        _ => crate::semi::lang::OperatorTrait::of_builtin(tid),
+                    };
+                    if let Some(op) = operator {
+                        return Some(TraitCallTarget::Operator(op));
                     }
                     if self
                         .lang

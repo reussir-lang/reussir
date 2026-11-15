@@ -34,21 +34,15 @@ pub(crate) struct TraitDecl {
     pub structural: bool,
     pub name: syn::Ident,
     pub supertraits: Vec<syn::Ident>,
-    /// Parsed but rejected in expansion this cut (reserved grammar).
     pub methods: Vec<MethodSig>,
 }
 
 pub(crate) struct MethodSig {
     pub name: syn::Ident,
-    #[allow(dead_code)]
     pub params: Vec<(syn::Ident, TypeRef)>,
-    #[allow(dead_code)]
     pub ret: Option<TypeRef>,
 }
 
-/// Reserved with [`MethodSig`]'s signature fields for the method-carrying
-/// future: parsed, rejected in expansion, so nothing reads the payload yet.
-#[allow(dead_code)]
 pub(crate) enum TypeRef {
     SelfTy,
     Scalar(syn::Ident),

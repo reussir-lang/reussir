@@ -1,0 +1,29 @@
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
+
+// An operator is a call of its trait's method. On a number the call is the
+// built-in operation at once; on a generic operand it is a trait call, which
+// each instance makes the built-in operation.
+
+// HIR-LABEL: fn #twice
+// HIR: trait#Add::<$0>#0(v0 : $0, v0 : $0)
+fn twice<T: Num>(a: T) -> T { a + a }
+
+// HIR-LABEL: fn #opposite
+// HIR: trait#Neg::<$1>#0(v0 : $1)
+fn opposite<T: Num + Neg>(a: T) -> T { -a }
+
+// The methods are callable by name.
+// HIR-LABEL: pub fn #go
+// HIR: (#twice::<i64>(v0 : i64) : i64 + #opposite::<i64>(v0 : i64) : i64) : i64
+// HIR: (#opposite::<f32>(v1 : f32) : f32 * v1 : f32) : f32
+pub fn go(x: i64, y: f32) -> f32 {
+    let z = twice(x).add(opposite(x));
+    opposite(y).mul(y)
+}
+
+// MIR-DAG: -(v0 : f32) : f32
+// MIR-DAG: -(v0 : i64) : i64
+// MIR-DAG: (v0 : i64 + v0 : i64) : i64
+// MIR-NOT: trait#

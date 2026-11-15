@@ -114,9 +114,9 @@ mod tests {
     use crate::with_tcx;
 
     /// The operator classes `Num` inherits from.
-    const ARITHMETIC: [crate::semi::lang::OperatorTrait; 6] = {
+    const ARITHMETIC: [crate::semi::lang::OperatorTrait; 5] = {
         use crate::semi::lang::OperatorTrait::*;
-        [Add, Sub, Mul, Div, Rem, Neg]
+        [Add, Sub, Mul, Div, Rem]
     };
 
     #[test]
@@ -2897,9 +2897,10 @@ mod tests {
         check_package(
             "core",
             &[
-                (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+                (&[], "pub mod cmp;\npub mod num;\npub mod ops;\npub mod t;"),
                 (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
                 (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (&["ops"], include_str!("../../../library/core/src/ops.rr")),
                 (&["t"], src),
             ],
             f,
@@ -3072,7 +3073,10 @@ mod tests {
                 let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
                 assert_eq!(
                     errors,
-                    ["integer pattern `-1` is out of range for `Nat`"],
+                    [
+                        "`Arc<Nat>` does not implement `core::ops::Neg`",
+                        "integer pattern `-1` is out of range for `Nat`"
+                    ],
                     "{errors:#?}"
                 );
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
@@ -3228,7 +3232,7 @@ mod tests {
                 assert_eq!(
                     messages,
                     [
-                        "a `Nat` cannot be negated",
+                        "`Nat` does not implement `core::ops::Neg`",
                         "cannot cast `Int` to `Nat`: an `Int` may be negative; convert it to `Nat` explicitly",
                         "cannot cast `i64` to `Nat`: a signed integer may be negative; cast it to `Int` \
                          and convert that to `Nat` explicitly",
@@ -3241,11 +3245,28 @@ mod tests {
     }
 
     #[test]
-    fn generic_nat_negation_and_casts_are_diagnosed_at_their_instance() {
+    fn generic_nat_negation_and_casts_are_diagnosed() {
+        // Negation is not part of `Num`: a generic body asks for it, and
+        // `Nat` is refused where the function is called.
         check_with_bigint(
-            "fn neg<T: Num>(x: T) -> T { -x }\n\
-             fn to<T: Num, U: Num>(x: T) -> U { x as U }\n\
-             pub fn f(n: Nat) -> Nat { neg(n) }\n\
+            "fn neg<T: core::num::Signed>(x: T) -> T { -x }\n\
+             fn bare<T: Num>(x: T) -> T { -x }\n\
+             pub fn ok(i: Int, x: f32) -> f32 { let j = neg(i); neg(x) }\n\
+             pub fn f(n: Nat) -> Nat { neg(n) }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
+                assert_eq!(
+                    messages,
+                    [
+                        "the bound `core::ops::Neg` is not satisfied by this generic",
+                        "`Nat` does not implement `core::num::Signed`",
+                    ],
+                    "{messages:#?}"
+                );
+            },
+        );
+        check_with_bigint(
+            "fn to<T: Num, U: Num>(x: T) -> U { x as U }\n\
              pub fn g(x: i64) -> Nat { to(x) }",
             |elab, _| {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
@@ -3254,9 +3275,8 @@ mod tests {
                 assert_eq!(
                     messages,
                     [
-                        "a `Nat` cannot be negated",
                         "cannot cast `i64` to `Nat`: a signed integer may be negative; cast it to `Int` \
-                         and convert that to `Nat` explicitly",
+                     and convert that to `Nat` explicitly"
                     ],
                     "{messages:#?}"
                 );
@@ -3441,7 +3461,10 @@ mod tests {
                 let errors: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
                 assert_eq!(
                     errors,
-                    ["integer pattern `-1` is out of range for `Nat`"],
+                    [
+                        "`Nat` does not implement `core::ops::Neg`",
+                        "integer pattern `-1` is out of range for `Nat`"
+                    ],
                     "{errors:#?}"
                 );
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
@@ -3461,9 +3484,10 @@ mod tests {
         check_package_with_features(
             "core",
             &[
-                (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+                (&[], "pub mod cmp;\npub mod num;\npub mod ops;\npub mod t;"),
                 (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
                 (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (&["ops"], include_str!("../../../library/core/src/ops.rr")),
                 (&["t"], "pub fn one(n: Nat) -> Nat { Nat::Succ{n} }"),
             ],
             FeatureSet::from_fn(|f| f != Feature::Rcgmp),
@@ -3471,7 +3495,7 @@ mod tests {
                 let app: Vec<&str> = elab
                     .reports
                     .iter()
-                    .filter(|r| r.file == reussir_syntax::source::FileId::from_index(3))
+                    .filter(|r| r.file == reussir_syntax::source::FileId::from_index(4))
                     .map(|r| r.message.as_str())
                     .collect();
                 assert_eq!(
@@ -3491,9 +3515,10 @@ mod tests {
         check_package(
             "core",
             &[
-                (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+                (&[], "pub mod cmp;\npub mod num;\npub mod ops;\npub mod t;"),
                 (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
                 (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (&["ops"], include_str!("../../../library/core/src/ops.rr")),
                 (
                     &["t"],
                     "pub fn twice(n: Nat) -> Nat { n + n }\n\

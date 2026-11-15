@@ -69,20 +69,6 @@ pub trait BitXor {
     fn bitxor(self: Self, other: Self) -> Self;
 }
 
-/// `a << b`.
-#[lang("shl")]
-#[sealed]
-pub trait Shl {
-    fn shl(self: Self, other: Self) -> Self;
-}
-
-/// `a >> b`.
-#[lang("shr")]
-#[sealed]
-pub trait Shr {
-    fn shr(self: Self, other: Self) -> Self;
-}
-
 /// `!a`.
 #[lang("not")]
 #[sealed]
@@ -258,30 +244,5 @@ impl BitXor for Nat { }
 impl BitXor for Int { }
 impl BitXor for Arc<Nat> { }
 impl BitXor for Arc<Int> { }
-
-// `Nat` and `Int` shift by an `i64` bit count instead of a value of their
-// own type, which the operators handle without these traits' methods.
-
-impl Shl for i8 { }
-impl Shl for i16 { }
-impl Shl for i32 { }
-impl Shl for i64 { }
-impl Shl for i128 { }
-impl Shl for u8 { }
-impl Shl for u16 { }
-impl Shl for u32 { }
-impl Shl for u64 { }
-impl Shl for u128 { }
-
-impl Shr for i8 { }
-impl Shr for i16 { }
-impl Shr for i32 { }
-impl Shr for i64 { }
-impl Shr for i128 { }
-impl Shr for u8 { }
-impl Shr for u16 { }
-impl Shr for u32 { }
-impl Shr for u64 { }
-impl Shr for u128 { }
 
 impl Not for bool { }

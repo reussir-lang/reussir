@@ -1082,9 +1082,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     /// Binary operators synthesize:
-    /// (ARITH) `op∈{+,-,*,/,%}` and (BIT) `op∈{&,|,^,<<,>>}` with `l ⇒ T`:
-    /// sugar for the method of the operator's trait in `core::ops`,
-    /// `l + r` ⇒ `Add::add(l, r)` ([`Self::operator_call`]).
+    /// (ARITH) `op∈{+,-,*,/,%}` and (BIT) `op∈{&,|,^}` with `l ⇒ T`: sugar for
+    /// the method of the operator's trait in `core::ops`, `l + r` ⇒
+    /// `Add::add(l, r)` ([`Self::operator_call`]).
+    /// (SHIFT) `op∈{<<,>>}`: `l ⇒ T`, `Integral ⊳ T`, `r ⇐ T`, result `T`.
     /// (LOGIC) `op∈{&&,||}`: `l ⇐ Bool`, `r ⇐ Bool`, result `Bool`, and the
     /// pair desugars to (IF) so it short-circuits — `l && r` elaborates to
     /// `if l { r } else { false }` and `l || r` to `if l { true } else { r }`,
@@ -1143,10 +1144,15 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 self.operator_call(operator_trait(op), l, Some((r, ty)), span)
             }
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
-                // (BIT) like (ARITH).
-                // Both operands share `T` — a shift amount is the operand
-                // type, not a separate width.
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+                let l = self.infer_expr(l);
+                let ty = l.ty;
+                self.operator_call(operator_trait(op), l, Some((r, ty)), span)
+            }
+            BinOp::Shl | BinOp::Shr => {
+                // (SHIFT) integers only, `Integral ⊳ T`. Both operands share
+                // `T` — a shift amount is the operand type, not a separate
+                // width.
                 // (SHIFT-BIGINT) the exception: when `l ⇒ Nat` or `l ⇒ Int`,
                 // a shift amount `r ⇐ i64`, a bit count rather than another
                 // arbitrary-precision integer. The rule applies only when the
@@ -1155,15 +1161,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 // monomorphization.
                 let l = self.infer_expr(l);
                 let ty = l.ty;
-                let shifts_bigint = matches!(op, BinOp::Shl | BinOp::Shr)
-                    && self.infer.shallow_resolve(ty).bigint().is_some();
-                if shifts_bigint {
-                    self.register_bound(self.lang.operator(operator_trait(op)), ty, span);
-                    let r = self.check_expr(r, self.tcx.mk_int(IntTy::Signed(64)));
-                    let aop = arith_op(op);
-                    return self.mk_expr(ExprKind::Arith(Box::new(l), aop, Box::new(r)), ty, span);
-                }
-                self.operator_call(operator_trait(op), l, Some((r, ty)), span)
+                self.register_bound(self.lang.integral, ty, span);
+                let shifts_bigint = self.infer.shallow_resolve(ty).bigint().is_some();
+                let amount_ty = if shifts_bigint {
+                    self.tcx.mk_int(IntTy::Signed(64))
+                } else {
+                    ty
+                };
+                let r = self.check_expr(r, amount_ty);
+                let aop = arith_op(op);
+                self.mk_expr(ExprKind::Arith(Box::new(l), aop, Box::new(r)), ty, span)
             }
             BinOp::And | BinOp::Or => {
                 // (LOGIC) is sugar for (IF), which is what makes it
@@ -1265,9 +1272,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// leaves a trait call for monomorphization. `other` is the right operand
     /// with the type it is checked against.
     ///
-    /// Two cases keep the built-in node under a bound instead: an operand
-    /// whose type is not known yet, which defaulting or context solves, and
-    /// a session without `core`, whose operator traits carry no methods.
+    /// An operand whose type is not known yet has no impl to select: it keeps
+    /// the built-in node under a bound, which defaulting or context solves.
     fn operator_call(
         &mut self,
         op: OperatorTrait,
@@ -1277,17 +1283,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) -> Expr<'tcx> {
         let tid = self.lang.operator(op);
         let ty = self.infer.shallow_resolve(receiver.ty);
-        let name = self.operator_method_names[op as usize];
-        let method = self
-            .traits
-            .trait_def(tid)
-            .methods
-            .iter()
-            .position(|m| m.name == name);
-        let (Some(midx), false) = (method, matches!(ty.kind(), TyKind::Hole(_))) else {
+        if matches!(ty.kind(), TyKind::Hole(_) | TyKind::Bottom) {
             self.register_bound(tid, ty, span);
             let other = other.map(|(e, expected)| self.check_expr(e, expected));
             return self.operator_node(op, receiver, other, span);
+        }
+        let name = self.operator_method_names[op as usize];
+        let methods = &self.traits.trait_def(tid).methods;
+        let Some(midx) = methods.iter().position(|m| m.name == name) else {
+            let shown = self.trait_display(tid);
+            self.error(
+                span,
+                format!(
+                    "the operator trait `{shown}` declares no method `{}`",
+                    op.method()
+                ),
+            );
+            return self.poison(span);
         };
         // A generic operand has the method through its bound.
         if matches!(ty.kind(), TyKind::Generic(_)) {
@@ -1452,14 +1464,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         span,
                     );
                     return self.mk_expr(ExprKind::Negate(Box::new(e)), ty, span);
-                }
-                // `Nat` is a `Num`, but has no negatives.
-                if matches!(
-                    self.infer.shallow_resolve(ty).bigint(),
-                    Some((BigIntTy::Nat, _))
-                ) {
-                    self.error(span, "a `Nat` cannot be negated");
-                    return self.poison(span);
                 }
                 self.operator_call(OperatorTrait::Neg, e, None, span)
             }
@@ -6795,7 +6799,7 @@ fn arith_op(op: BinOp) -> ArithOp {
     }
 }
 
-/// The class an arithmetic or bitwise operator asks of its left operand.
+/// The trait whose method an arithmetic or bitwise operator is sugar for.
 fn operator_trait(op: BinOp) -> OperatorTrait {
     match op {
         BinOp::Add => OperatorTrait::Add,
@@ -6806,9 +6810,7 @@ fn operator_trait(op: BinOp) -> OperatorTrait {
         BinOp::BitAnd => OperatorTrait::BitAnd,
         BinOp::BitOr => OperatorTrait::BitOr,
         BinOp::BitXor => OperatorTrait::BitXor,
-        BinOp::Shl => OperatorTrait::Shl,
-        BinOp::Shr => OperatorTrait::Shr,
-        _ => unreachable!("not an arithmetic operator"),
+        _ => unreachable!("not an operator with a trait"),
     }
 }
 

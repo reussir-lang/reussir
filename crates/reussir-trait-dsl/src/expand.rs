@@ -12,7 +12,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 
-use crate::ast::{Input, Item};
+use crate::ast::{Input, Item, MethodSig, TypeRef};
 
 /// The closed vocabulary an impl clause may name (the scalars and the
 /// `Generic` address space), with the type
@@ -44,6 +44,50 @@ fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
 const KNOWN_SCALARS: &str =
     "i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f16, f32, f64, bf16, f8, bool, Generic";
 
+fn unknown_scalar(ident: &syn::Ident) -> syn::Error {
+    syn::Error::new_spanned(
+        ident,
+        format!("unknown scalar `{ident}`; the builtin type vocabulary is {KNOWN_SCALARS}"),
+    )
+}
+
+/// The type a method signature names: `Self` is the trait's own parameter.
+fn type_ref(ty: &TypeRef) -> TokenStream {
+    match ty {
+        TypeRef::SelfTy => quote!(tcx.mk_generic(self_g)),
+        TypeRef::Scalar(ident) => scalar_ctor(ident).expect("validated above"),
+    }
+}
+
+/// A trait method as a `MethodSig`. A first parameter named `self` is the
+/// receiver; a signature without `->` returns unit.
+fn method_sig(m: &MethodSig) -> TokenStream {
+    let name = m.name.to_string();
+    let receiver = match m.params.first() {
+        Some((param, _)) if param == "self" => {
+            quote!(Some(crate::semi::traits::def::ReceiverForm::Value))
+        }
+        _ => quote!(None),
+    };
+    let params = m.params.iter().map(|(_, ty)| type_ref(ty));
+    let ret = m
+        .ret
+        .as_ref()
+        .map_or_else(|| quote!(tcx.mk_unit()), type_ref);
+    quote! {
+        crate::semi::traits::def::MethodSig {
+            name: interner.get_or_intern(#name),
+            generics: vec![],
+            receiver: #receiver,
+            params: vec![#(#params),*],
+            ret: #ret,
+            is_regional: false,
+            is_kernel: false,
+            span: None,
+        }
+    }
+}
+
 pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let input: Input = syn::parse2(input)?;
 
@@ -74,11 +118,23 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         ));
                     }
                 }
-                if let Some(m) = decl.methods.first() {
-                    return Err(syn::Error::new_spanned(
-                        &m.name,
-                        "trait method signatures are not yet supported by `builtin_traits!`",
-                    ));
+                for m in &decl.methods {
+                    let tys = m.params.iter().map(|(_, ty)| ty).chain(&m.ret);
+                    for ty in tys {
+                        if let TypeRef::Scalar(ident) = ty
+                            && scalar_ctor(ident).is_none()
+                        {
+                            return Err(unknown_scalar(ident));
+                        }
+                    }
+                    if let Some((param, TypeRef::Scalar(_))) = m.params.first()
+                        && param == "self"
+                    {
+                        return Err(syn::Error::new_spanned(
+                            param,
+                            "a builtin trait method takes its receiver as `self: Self`",
+                        ));
+                    }
                 }
                 index.insert(name, traits.len());
                 traits.push(decl);
@@ -102,13 +158,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 }
                 for ty in &decl.self_tys {
                     if scalar_ctor(ty).is_none() {
-                        return Err(syn::Error::new_spanned(
-                            ty,
-                            format!(
-                                "unknown scalar `{ty}`; the builtin impl vocabulary is \
-                                 {KNOWN_SCALARS}"
-                            ),
-                        ));
+                        return Err(unknown_scalar(ty));
                     }
                     if seen_impl
                         .insert((tname.clone(), ty.to_string()), ())
@@ -130,6 +180,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         .iter()
         .map(|t| format_ident!("{}", t.name.to_string().to_snake_case()))
         .collect();
+    let id_literals = (0..traits.len()).map(|i| proc_macro2::Literal::u32_unsuffixed(i as u32));
     let fields = traits.iter().zip(&field_idents).map(|(t, field)| {
         let docs = &t.docs;
         quote! {
@@ -150,11 +201,13 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 let s = &field_idents[index[&sup.to_string()]];
                 quote!(self_ref(#s))
             });
+            let methods = t.methods.iter().map(method_sig);
             quote! {
                 let #field = crate::semi::traits::TraitId(#i);
                 {
                     let key = interner.get_or_intern(#name);
                     let def = defs.declare_trait(key).expect("builtins precede user defs");
+                    let methods = vec![#(#methods),*];
                     db.add_trait(crate::semi::traits::def::TraitDef {
                         id: #field,
                         def,
@@ -163,7 +216,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         self_param: self_g,
                         params: vec![],
                         supertraits: vec![#(#supers),*],
-                        methods: vec![],
+                        methods,
                         assoc_tys: vec![],
                         assoc_consts: vec![],
                         span: None,
@@ -214,6 +267,12 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         }
 
         impl Builtins {
+            /// The ids [`Builtins::register`] assigns: declaration order,
+            /// the same in every session.
+            pub const IDS: Builtins = Builtins {
+                #(#field_idents: crate::semi::traits::TraitId(#id_literals)),*
+            };
+
             /// Register the built-in traits and their primitive impls into
             /// `db`, declaring each trait in `defs`' trait namespace at the
             /// crate root — prelude visibility for bare references,
@@ -358,11 +417,18 @@ mod tests {
     }
 
     #[test]
-    fn method_sigs_parse_but_are_rejected() {
-        let msg = expand_err(quote! {
-            trait Num { fn add(self: Self, other: Self) -> Self; }
+    fn method_sigs_become_trait_methods() {
+        let out = expand_ok(quote! {
+            trait Add { fn add(self: Self, other: Self) -> Self; }
+            trait Count { fn count() -> u32; }
         });
-        assert!(msg.contains("not yet supported"), "{msg}");
+        assert_eq!(out.matches("MethodSig").count(), 2);
+        assert_eq!(out.matches("ReceiverForm :: Value").count(), 1);
+        assert_eq!(out.matches("mk_generic (self_g)").count(), 4);
+        let msg = expand_err(quote! {
+            trait Bad { fn bad(self: i32); }
+        });
+        assert!(msg.contains("`self: Self`"), "{msg}");
     }
 
     #[test]

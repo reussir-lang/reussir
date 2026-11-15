@@ -13,9 +13,10 @@
 //! └── FloatingPoint (impl: f16..f8)
 //! ```
 //!
-//! Each operator has its own class, which is what the operator asks of its
-//! operand: `Num` is a subclass of `Add Sub Mul Div Rem Neg`, `Integral` also
-//! of `BitAnd BitOr BitXor Shl Shr`, and `bool` is the one member of `Not`.
+//! Each operator but the shifts has its own class, whose method the
+//! operator is sugar for: `Num` is a subclass of `Add Sub Mul Div Rem`,
+//! `Integral` also of `BitAnd BitOr BitXor`, and `bool` is the one member of
+//! `Not`. `Neg` is apart from `Num`, which has members without negatives.
 //!
 //! [`TraitDef`]: super::TraitDef
 //! [`ImplDef`]: super::ImplDef
@@ -25,46 +26,61 @@ use reussir_trait_dsl::builtin_traits;
 builtin_traits! {
     /// The operands of `+`.
     #[sealed]
-    trait Add;
+    trait Add {
+        fn add(self: Self, other: Self) -> Self;
+    }
     /// The operands of binary `-`.
     #[sealed]
-    trait Sub;
+    trait Sub {
+        fn sub(self: Self, other: Self) -> Self;
+    }
     /// The operands of `*`.
     #[sealed]
-    trait Mul;
+    trait Mul {
+        fn mul(self: Self, other: Self) -> Self;
+    }
     /// The operands of `/`.
     #[sealed]
-    trait Div;
+    trait Div {
+        fn div(self: Self, other: Self) -> Self;
+    }
     /// The operands of `%`.
     #[sealed]
-    trait Rem;
+    trait Rem {
+        fn rem(self: Self, other: Self) -> Self;
+    }
     /// The operands of unary `-`.
     #[sealed]
-    trait Neg;
+    trait Neg {
+        fn neg(self: Self) -> Self;
+    }
     /// The operands of `&`.
     #[sealed]
-    trait BitAnd;
+    trait BitAnd {
+        fn bitand(self: Self, other: Self) -> Self;
+    }
     /// The operands of `|`.
     #[sealed]
-    trait BitOr;
+    trait BitOr {
+        fn bitor(self: Self, other: Self) -> Self;
+    }
     /// The operands of `^`.
     #[sealed]
-    trait BitXor;
-    /// The operands of `<<`.
-    #[sealed]
-    trait Shl;
-    /// The operands of `>>`.
-    #[sealed]
-    trait Shr;
+    trait BitXor {
+        fn bitxor(self: Self, other: Self) -> Self;
+    }
     /// The operands of `!`.
     #[sealed]
-    trait Not;
+    trait Not {
+        fn not(self: Self) -> Self;
+    }
     /// The root numeric class: arithmetic and numeric literals.
     #[sealed]
-    trait Num: Add + Sub + Mul + Div + Rem + Neg;
-    /// Whole-number types; `Num` through the super-trait edge.
+    trait Num: Add + Sub + Mul + Div + Rem;
+    /// Whole-number types; `Num` through the super-trait edge. Shifts ask
+    /// for this class directly.
     #[sealed]
-    trait Integral: Num + BitAnd + BitOr + BitXor + Shl + Shr;
+    trait Integral: Num + BitAnd + BitOr + BitXor;
     /// Floating-point types; `Num` through the super-trait edge.
     #[sealed]
     trait FloatingPoint: Num;
@@ -117,21 +133,22 @@ mod tests {
                     b.addr_space
                 ],
                 [
+                    TraitId(10),
+                    TraitId(11),
                     TraitId(12),
                     TraitId(13),
                     TraitId(14),
-                    TraitId(15),
-                    TraitId(16),
-                    TraitId(17)
+                    TraitId(15)
                 ]
             );
-            assert_eq!(db.traits_len(), 18);
+            assert_eq!(Builtins::IDS.addr_space, b.addr_space);
+            assert_eq!(db.traits_len(), 16);
             assert_eq!(
                 db.impls_len(),
                 17,
                 "10 integral + 5 floating impls + 1 address space + `bool : Not`"
             );
-            for i in 0..18u32 {
+            for i in 0..16u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);
             }
             assert!(
@@ -145,13 +162,19 @@ mod tests {
                     .map(|s| s.trait_id)
                     .collect()
             };
-            assert_eq!(supers(b.num), [b.add, b.sub, b.mul, b.div, b.rem, b.neg]);
-            assert_eq!(
-                supers(b.integral),
-                [b.num, b.bit_and, b.bit_or, b.bit_xor, b.shl, b.shr]
-            );
+            assert_eq!(supers(b.num), [b.add, b.sub, b.mul, b.div, b.rem]);
+            assert_eq!(supers(b.integral), [b.num, b.bit_and, b.bit_or, b.bit_xor]);
             assert_eq!(supers(b.floating_point), [b.num]);
             assert!(supers(b.add).is_empty() && supers(b.sync).is_empty());
+            // Each operator trait declares the method its operator is sugar
+            // for; the binary ones take the other operand.
+            let params = |t: TraitId| -> Vec<usize> {
+                let methods = &db.trait_def(t).methods;
+                methods.iter().map(|m| m.params.len()).collect()
+            };
+            assert_eq!(params(b.add), [2]);
+            assert_eq!(params(b.neg), [1]);
+            assert!(params(b.num).is_empty());
         });
     }
 }

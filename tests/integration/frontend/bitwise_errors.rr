@@ -1,7 +1,7 @@
 // RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
 
-// The bitwise operators are integer-only: their traits exclude floats
-// and — unlike Rust — `bool`, whose connectives are `&&`/`||`.
+// The bitwise operators and the shifts are integer-only: their traits
+// exclude floats and — unlike Rust — `bool`, whose connectives are `&&`/`||`.
 
 // CHECK-DAG: `f64` does not implement `BitAnd`
 pub fn on_float(x : f64, y : f64) -> f64 { x & y }
@@ -9,7 +9,7 @@ pub fn on_float(x : f64, y : f64) -> f64 { x & y }
 // CHECK-DAG: `bool` does not implement `BitOr`
 pub fn on_bool(x : bool, y : bool) -> bool { x | y }
 
-// CHECK-DAG: `f32` does not implement `Shl`
+// CHECK-DAG: `f32` does not implement `Integral`
 pub fn shift_float(x : f32) -> f32 { x << 2 }
 
 // The bit-counting intrinsics carry the same bound.

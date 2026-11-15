@@ -5,17 +5,22 @@
 //! impls (an `impl` target must be a named type, so `i64 : Integral`
 //! cannot be written in source) and lowers everything intrinsically.
 //! `Num: PartialOrd` is the compatibility edge that keeps `T: Num` code
-//! comparing. The operators ask for their own traits in `core::ops`, which
-//! every number has through the edges below.
+//! comparing. The arithmetic and bitwise operators ask for their own traits
+//! in `core::ops`, which every number has through the edges below. Negation
+//! asks for `Neg`, which `Signed` adds to `Num`.
 
 #[lang("num")]
 #[sealed]
-pub trait Num: PartialOrd + Add + Sub + Mul + Div + Rem + Neg {}
+pub trait Num: PartialOrd + Add + Sub + Mul + Div + Rem {}
+
+/// Numbers with negatives: the signed integers, the floating-point scalars
+/// and `Int`. `Nat` and the unsigned integers are `Num` only.
+pub trait Signed: Num + Neg {}
 
 /// Whole numbers: `i8`…`i128`, `u8`…`u128`, `Nat`, and `Int`.
 #[lang("integral")]
 #[sealed]
-pub trait Integral: Num + BitAnd + BitOr + BitXor + Shl + Shr {}
+pub trait Integral: Num + BitAnd + BitOr + BitXor {}
 
 /// Floating-point scalars: `f16`, `f32`, `f64`, `bf16`, `f8`.
 #[lang("floating_point")]
@@ -62,6 +67,19 @@ impl FloatingPoint for f32 { }
 impl FloatingPoint for f64 { }
 impl FloatingPoint for bfloat16 { }
 impl FloatingPoint for float8 { }
+
+impl Signed for i8 { }
+impl Signed for i16 { }
+impl Signed for i32 { }
+impl Signed for i64 { }
+impl Signed for i128 { }
+impl Signed for f16 { }
+impl Signed for f32 { }
+impl Signed for f64 { }
+impl Signed for bfloat16 { }
+impl Signed for float8 { }
+impl Signed for Int { }
+impl Signed for Arc<Int> { }
 
 // The built-in integers are totally ordered; their comparison impls live
 // beside their declarations.

@@ -215,14 +215,12 @@ pub enum OperatorTrait {
     BitAnd,
     BitOr,
     BitXor,
-    Shl,
-    Shr,
     Not,
 }
 
 impl OperatorTrait {
     /// In `Builtins` field order.
-    pub const ALL: [OperatorTrait; 12] = [
+    pub const ALL: [OperatorTrait; 10] = [
         OperatorTrait::Add,
         OperatorTrait::Sub,
         OperatorTrait::Mul,
@@ -232,8 +230,6 @@ impl OperatorTrait {
         OperatorTrait::BitAnd,
         OperatorTrait::BitOr,
         OperatorTrait::BitXor,
-        OperatorTrait::Shl,
-        OperatorTrait::Shr,
         OperatorTrait::Not,
     ];
 
@@ -248,8 +244,6 @@ impl OperatorTrait {
             OperatorTrait::BitAnd => "bit_and",
             OperatorTrait::BitOr => "bit_or",
             OperatorTrait::BitXor => "bit_xor",
-            OperatorTrait::Shl => "shl",
-            OperatorTrait::Shr => "shr",
             OperatorTrait::Not => "not",
         }
     }
@@ -276,10 +270,34 @@ impl OperatorTrait {
             OperatorTrait::BitAnd => ArithOp::BitAnd,
             OperatorTrait::BitOr => ArithOp::BitOr,
             OperatorTrait::BitXor => ArithOp::BitXor,
-            OperatorTrait::Shl => ArithOp::Shl,
-            OperatorTrait::Shr => ArithOp::Shr,
             OperatorTrait::Neg | OperatorTrait::Not => return None,
         })
+    }
+
+    /// The operator traits of the compiler's own table, in [`Self::ALL`]
+    /// order.
+    fn builtin_ids(table: &Builtins) -> [TraitId; 10] {
+        [
+            table.add,
+            table.sub,
+            table.mul,
+            table.div,
+            table.rem,
+            table.neg,
+            table.bit_and,
+            table.bit_or,
+            table.bit_xor,
+            table.not,
+        ]
+    }
+
+    /// The operator whose trait in the compiler's own table is `id`, which
+    /// is the trait in use where no source declares the lang item.
+    pub fn of_builtin(id: TraitId) -> Option<OperatorTrait> {
+        Self::ALL
+            .into_iter()
+            .zip(Self::builtin_ids(&Builtins::IDS))
+            .find_map(|(op, builtin)| (builtin == id).then_some(op))
     }
 
     /// Whether the operator computes on numbers: every one but `!`.
@@ -476,18 +494,18 @@ pub struct LangItems {
     /// may be the `A` of `Ptr<A>`.
     pub addr_space: TraitId,
     /// The operator classes, in [`OperatorTrait::ALL`] order.
-    operators: [TraitId; 12],
+    operators: [TraitId; 10],
     /// The construction-time builtin ids, in [`LangItem::TOWER`] order
     /// followed by [`OperatorTrait::ALL`] order — retained after the wired
     /// fields repoint, so bare-name resolution can recognize (and
     /// substitute) a builtin hit.
-    builtin: [TraitId; 18],
+    builtin: [TraitId; 16],
     declared: Vec<(LangItem, DefId)>,
 }
 
 /// The wired trait ids: [`LangItem::TOWER`] order, then
 /// [`OperatorTrait::ALL`] order.
-pub(crate) type WiredTraits = [TraitId; 18];
+pub(crate) type WiredTraits = [TraitId; 16];
 
 impl LangItems {
     /// A registry over the fallback-registered tower.
@@ -499,21 +517,8 @@ impl LangItems {
             ptr_like: fallback.ptr_like,
             sync: fallback.sync,
             addr_space: fallback.addr_space,
-            operators: [
-                fallback.add,
-                fallback.sub,
-                fallback.mul,
-                fallback.div,
-                fallback.rem,
-                fallback.neg,
-                fallback.bit_and,
-                fallback.bit_or,
-                fallback.bit_xor,
-                fallback.shl,
-                fallback.shr,
-                fallback.not,
-            ],
-            builtin: [fallback.num; 18],
+            operators: OperatorTrait::builtin_ids(&fallback),
+            builtin: [fallback.num; 16],
             declared: Vec::new(),
         };
         lang.builtin = lang.fields();
@@ -553,7 +558,7 @@ impl LangItems {
     /// The wired fields — the REPL checkpoint's snapshot (a rejected batch
     /// that repointed them must restore the builtins).
     pub(crate) fn fields(&self) -> WiredTraits {
-        let mut fields = [self.num; 18];
+        let mut fields = [self.num; 16];
         fields[..6].copy_from_slice(&[
             self.num,
             self.integral,
@@ -575,7 +580,7 @@ impl LangItems {
             self.sync,
             self.addr_space,
         ] = fields[..6].try_into().expect("six tower traits");
-        self.operators = fields[6..].try_into().expect("twelve operator traits");
+        self.operators = fields[6..].try_into().expect("ten operator traits");
     }
 
     /// Substitute a bare-name hit on a *construction builtin* with the

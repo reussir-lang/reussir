@@ -576,7 +576,7 @@ pub struct Elaborator<'a, 'tcx> {
     pub(super) cmp_method_names: [TokenKey; 6],
     /// The method names of the operator traits, in
     /// [`OperatorTrait::ALL`](crate::semi::lang::OperatorTrait::ALL) order.
-    pub(super) operator_method_names: [TokenKey; 12],
+    pub(super) operator_method_names: [TokenKey; 10],
     pub(super) tuple_temp_name: TokenKey,
     pub inside_region: bool,
     pub inside_kernel: bool,
@@ -1940,7 +1940,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let operators = {
             use crate::semi::lang::OperatorTrait::*;
             let arithmetic = [Add, Sub, Mul, Div, Rem, Neg];
-            let bitwise = [BitAnd, BitOr, BitXor, Shl, Shr];
+            let bitwise = [BitAnd, BitOr, BitXor];
             let on = |ops: &[crate::semi::lang::OperatorTrait], ty: Ty<'tcx>| {
                 ops.iter()
                     .map(|&op| (self.lang.operator(op), ty))
