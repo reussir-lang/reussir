@@ -143,6 +143,7 @@ pub(super) struct Snapshot {
     shapes: ena::unify::Snapshot<InPlace<ShapeKey>>,
     undo: usize,
     progress: u64,
+    unions: u64,
 }
 pub(super) struct ShapeStore<'tcx> {
     dims: InPlaceUnificationTable<DimKey>,
@@ -152,6 +153,8 @@ pub(super) struct ShapeStore<'tcx> {
     undo: Vec<Undo<'tcx>>,
     snapshots: usize,
     pub(super) progress: u64,
+    /// The part of `progress` that unified two holes without solving either.
+    pub(super) unions: u64,
 }
 impl<'tcx> Default for ShapeStore<'tcx> {
     fn default() -> Self {
@@ -163,6 +166,7 @@ impl<'tcx> Default for ShapeStore<'tcx> {
             undo: Vec::new(),
             snapshots: 0,
             progress: 0,
+            unions: 0,
         }
     }
 }
@@ -174,6 +178,7 @@ impl<'tcx> ShapeStore<'tcx> {
             shapes: self.shapes.snapshot(),
             undo: self.undo.len(),
             progress: self.progress,
+            unions: self.unions,
         }
     }
     pub(super) fn commit(&mut self, snapshot: Snapshot) {
@@ -203,6 +208,7 @@ impl<'tcx> ShapeStore<'tcx> {
         self.dims.rollback_to(snapshot.dims);
         self.shapes.rollback_to(snapshot.shapes);
         self.progress = snapshot.progress;
+        self.unions = snapshot.unions;
         self.snapshots -= 1;
     }
     pub(super) fn set_view(&mut self, id: HoleId, view: Shaped<'tcx>) {
@@ -246,6 +252,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// Monotonic within a transaction; rollback restores the previous revision.
     pub fn progress(&self) -> u64 {
         self.shapes.progress
+    }
+    /// [`Self::progress`] without the unifications of two holes: only this
+    /// much can have made a type lose a hole.
+    pub fn solved(&self) -> u64 {
+        self.shapes.progress - self.shapes.unions
     }
     pub fn new_dim(&mut self) -> Dim {
         let id = self.shapes.dims.new_key(DimValue {

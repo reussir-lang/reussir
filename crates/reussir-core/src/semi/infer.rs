@@ -353,6 +353,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     self.set_hole_view(*h1, view);
                 }
                 self.shapes.progress += 1;
+                self.shapes.unions += 1;
                 Ok(())
             }
             (TyKind::Hole(h), _) => self.solve(*h, b),
@@ -797,6 +798,20 @@ mod tests {
     /// A distinct record `DefId` for tests (no resolution pass).
     fn def(n: u32) -> DefId {
         DefId(n)
+    }
+
+    #[test]
+    fn unifying_two_holes_solves_neither() {
+        with_tcx(|tcx| {
+            let mut infer = InferCtxt::new(tcx);
+            let (a, b) = (infer.new_hole_ty(), infer.new_hole_ty());
+            let before = (infer.progress(), infer.solved());
+            infer.unify(a, b).unwrap();
+            assert_eq!((infer.progress(), infer.solved()), (before.0 + 1, before.1));
+            infer.unify(a, tcx.mk_bool()).unwrap();
+            assert_eq!(infer.solved(), before.1 + 1);
+            assert_eq!(infer.resolve(b), tcx.mk_bool());
+        });
     }
 
     #[test]

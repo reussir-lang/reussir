@@ -35,6 +35,10 @@ pub struct FulfillCtxt<'tcx> {
     /// Associated types whose trait reference still held an inference hole
     /// where they were instantiated, each with the hole standing in for it.
     pub(super) projections: Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)>,
+    /// [`InferCtxt::solved`] when `projections` was last gone through.
+    ///
+    /// [`InferCtxt::solved`]: crate::semi::infer::InferCtxt::solved
+    pub(super) projections_solved: u64,
     /// Associated types that stand for no type, each with the reason, until
     /// an expression gives a span to report them at.
     pub(super) assoc_failures: Vec<(

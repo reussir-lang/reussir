@@ -6538,6 +6538,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// not to be the type it was used as.
     pub(super) fn solve_projections(&mut self, span: Option<Span>) {
         self.report_assoc_failures(span);
+        // One loses its last hole only when a hole is solved.
+        if self.fulfill.projections_solved == self.infer.solved() {
+            return;
+        }
         while self
             .fulfill
             .projections
@@ -6570,6 +6574,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
             }
         }
+        self.fulfill.projections_solved = self.infer.solved();
     }
 
     /// Report, at `span`, the associated types [`Self::normalize`] found to
