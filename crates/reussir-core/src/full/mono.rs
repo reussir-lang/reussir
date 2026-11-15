@@ -1278,8 +1278,9 @@ enum TraitCallTarget<'tcx> {
     /// comparison lowers straight to the intrinsic.
     Intrinsic(CmpOp),
     /// A method-less compiler impl of an operator trait in `core::ops`: the
-    /// call is the built-in operation.
-    Operator(crate::semi::lang::OperatorTrait),
+    /// call is the built-in operation of the trait's method, by its index
+    /// in [`OperatorTrait::methods`](crate::semi::lang::OperatorTrait::methods).
+    Operator(crate::semi::lang::OperatorTrait, usize),
     /// `Ord::cmp` over a scalar: a synthesized three-way comparison
     /// returning `Ordering`.
     ThreeWay,
@@ -1948,7 +1949,16 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         _ => crate::semi::lang::OperatorTrait::of_builtin(tid),
                     };
                     if let Some(op) = operator {
-                        return Some(TraitCallTarget::Operator(op));
+                        return match op.methods().iter().position(|&m| m == mname) {
+                            Some(index) => Some(TraitCallTarget::Operator(op, index)),
+                            None => {
+                                self.error(
+                                    span,
+                                    format!("`{mname}` is not the method of an operator"),
+                                );
+                                None
+                            }
+                        };
                     }
                     if self
                         .lang
@@ -2835,13 +2845,13 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                             M::Poison
                         }
                     }
-                    Some(TraitCallTarget::Operator(op)) => {
+                    Some(TraitCallTarget::Operator(op, method)) => {
                         if self.inside_kernel {
                             self.error(span, "host trait operations are not allowed in a kernel");
                             return M::Poison;
                         }
                         use crate::semi::lang::OperatorTrait;
-                        match (op.arith(), self.lower_slice(args, subst)) {
+                        match (op.arith(method), self.lower_slice(args, subst)) {
                             (Some(arith), [l, r]) => M::Arith(l, arith, r),
                             (None, [e]) if op == OperatorTrait::Neg => M::Negate(e),
                             (None, [e]) => M::Not(e),
@@ -2919,33 +2929,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 ExprKind::ConstFloat(f) if *f.mantissa() != 0 => {
                     M::ConstFloat(self.tcx.alloc(f.neg()))
                 }
-                _ => {
-                    // The checker rejects negating a `Nat` it can see; generic
-                    // code negating a `Num` reaches here at its `Nat` instance.
-                    if matches!(result_ty.bigint(), Some((BigIntTy::Nat, _))) {
-                        self.error(span, "a `Nat` cannot be negated");
-                    }
-                    M::Negate(self.lower_ref(e, subst))
-                }
+                _ => M::Negate(self.lower_ref(e, subst)),
             },
             ExprKind::Not(e) => M::Not(self.lower_ref(e, subst)),
             ExprKind::Arith(l, op, r) => {
-                // A built-in integer shifts by an `i64` bit count. The checker
-                // types the amount so when it sees the left operand's type;
-                // generic code, or operands solved after the shift, can still
-                // arrive here with the amount at the operand's own type.
-                if matches!(op, hir::ArithOp::Shl | hir::ArithOp::Shr)
-                    && let Some((int, _)) = result_ty.bigint()
-                    && !matches!(
-                        self.ground.ty(r.ty, subst).kind(),
-                        TyKind::Int(IntTy::Signed(64))
-                    )
-                {
-                    self.error(
-                        span,
-                        format!("the shift amount of a `{}` must be an `i64`", int.name()),
-                    );
-                }
                 M::Arith(self.lower_ref(l, subst), *op, self.lower_ref(r, subst))
             }
             ExprKind::Cmp(l, op, r) => {

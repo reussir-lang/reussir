@@ -6,10 +6,12 @@
 //! ```text
 //! input      ::= item*
 //! item       ::= trait-item | impl-item
-//! trait-item ::= attr* 'trait' ident (':' ident ('+' ident)*)? (';' | '{' method* '}')
+//! trait-item ::= attr* 'trait' ident (':' ident ('+' ident)*)? (';' | '{' member* '}')
+//! member     ::= assoc-type | method
+//! assoc-type ::= 'type' ident '=' tyref ';'
 //! method     ::= 'fn' ident '(' (ident ':' tyref) (',' ident ':' tyref)* ')'
 //!                ('->' tyref)? ';'
-//! tyref      ::= 'Self' | ident
+//! tyref      ::= 'Self' | 'Self' '::' ident | ident
 //! impl-item  ::= 'impl' ident 'for' ident ('|' ident)* ';'
 //! attr       ::= '#[sealed]' | '#[structural]' | doc comment
 //! ```
@@ -34,6 +36,9 @@ pub(crate) struct TraitDecl {
     pub structural: bool,
     pub name: syn::Ident,
     pub supertraits: Vec<syn::Ident>,
+    /// Associated types with their defaults. The impls of the table bind
+    /// nothing, so every one takes its default.
+    pub assoc_tys: Vec<(syn::Ident, TypeRef)>,
     pub methods: Vec<MethodSig>,
 }
 
@@ -45,6 +50,8 @@ pub(crate) struct MethodSig {
 
 pub(crate) enum TypeRef {
     SelfTy,
+    /// `Self::Name`: an associated type of the trait being declared.
+    Assoc(syn::Ident),
     Scalar(syn::Ident),
 }
 
@@ -104,12 +111,22 @@ impl Parse for TraitDecl {
                 supertraits.push(input.parse()?);
             }
         }
+        let mut assoc_tys = Vec::new();
         let mut methods = Vec::new();
         if input.peek(syn::token::Brace) {
             let body;
             syn::braced!(body in input);
             while !body.is_empty() {
-                methods.push(body.parse()?);
+                if body.peek(Token![type]) {
+                    body.parse::<Token![type]>()?;
+                    let name: syn::Ident = body.parse()?;
+                    body.parse::<Token![=]>()?;
+                    let default: TypeRef = body.parse()?;
+                    body.parse::<Token![;]>()?;
+                    assoc_tys.push((name, default));
+                } else {
+                    methods.push(body.parse()?);
+                }
             }
         } else {
             input.parse::<Token![;]>()?;
@@ -120,6 +137,7 @@ impl Parse for TraitDecl {
             structural,
             name,
             supertraits,
+            assoc_tys,
             methods,
         })
     }
@@ -158,6 +176,10 @@ impl Parse for TypeRef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         if input.peek(Token![Self]) {
             input.parse::<Token![Self]>()?;
+            if input.peek(Token![::]) {
+                input.parse::<Token![::]>()?;
+                return Ok(TypeRef::Assoc(input.parse()?));
+            }
             return Ok(TypeRef::SelfTy);
         }
         Ok(TypeRef::Scalar(input.parse()?))

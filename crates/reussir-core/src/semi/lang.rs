@@ -216,11 +216,13 @@ pub enum OperatorTrait {
     BitOr,
     BitXor,
     Not,
+    /// `a << n` and `a >> n`, one method each.
+    Shift,
 }
 
 impl OperatorTrait {
     /// In `Builtins` field order.
-    pub const ALL: [OperatorTrait; 10] = [
+    pub const ALL: [OperatorTrait; 11] = [
         OperatorTrait::Add,
         OperatorTrait::Sub,
         OperatorTrait::Mul,
@@ -231,6 +233,7 @@ impl OperatorTrait {
         OperatorTrait::BitOr,
         OperatorTrait::BitXor,
         OperatorTrait::Not,
+        OperatorTrait::Shift,
     ];
 
     pub fn name(self) -> &'static str {
@@ -245,23 +248,34 @@ impl OperatorTrait {
             OperatorTrait::BitOr => "bit_or",
             OperatorTrait::BitXor => "bit_xor",
             OperatorTrait::Not => "not",
+            OperatorTrait::Shift => "shift",
         }
     }
 
-    /// The trait's method: `a + b` is `Add::add(a, b)`.
-    pub fn method(self) -> &'static str {
+    /// The trait's methods: `a + b` is `Add::add(a, b)`.
+    pub fn methods(self) -> &'static [&'static str] {
         match self {
-            OperatorTrait::BitAnd => "bitand",
-            OperatorTrait::BitOr => "bitor",
-            OperatorTrait::BitXor => "bitxor",
-            _ => self.name(),
+            OperatorTrait::Add => &["add"],
+            OperatorTrait::Sub => &["sub"],
+            OperatorTrait::Mul => &["mul"],
+            OperatorTrait::Div => &["div"],
+            OperatorTrait::Rem => &["rem"],
+            OperatorTrait::Neg => &["neg"],
+            OperatorTrait::BitAnd => &["bitand"],
+            OperatorTrait::BitOr => &["bitor"],
+            OperatorTrait::BitXor => &["bitxor"],
+            OperatorTrait::Not => &["not"],
+            OperatorTrait::Shift => &["shl", "shr"],
         }
     }
 
-    /// The built-in operation of a binary operator.
-    pub fn arith(self) -> Option<crate::semi::hir::ArithOp> {
+    /// The built-in operation of the binary operator that calls the
+    /// `method`-th of [`Self::methods`].
+    pub fn arith(self, method: usize) -> Option<crate::semi::hir::ArithOp> {
         use crate::semi::hir::ArithOp;
         Some(match self {
+            OperatorTrait::Shift if method == 0 => ArithOp::Shl,
+            OperatorTrait::Shift => ArithOp::Shr,
             OperatorTrait::Add => ArithOp::Add,
             OperatorTrait::Sub => ArithOp::Sub,
             OperatorTrait::Mul => ArithOp::Mul,
@@ -276,7 +290,7 @@ impl OperatorTrait {
 
     /// The operator traits of the compiler's own table, in [`Self::ALL`]
     /// order.
-    fn builtin_ids(table: &Builtins) -> [TraitId; 10] {
+    fn builtin_ids(table: &Builtins) -> [TraitId; 11] {
         [
             table.add,
             table.sub,
@@ -288,6 +302,7 @@ impl OperatorTrait {
             table.bit_or,
             table.bit_xor,
             table.not,
+            table.shift,
         ]
     }
 
@@ -494,18 +509,18 @@ pub struct LangItems {
     /// may be the `A` of `Ptr<A>`.
     pub addr_space: TraitId,
     /// The operator classes, in [`OperatorTrait::ALL`] order.
-    operators: [TraitId; 10],
+    operators: [TraitId; 11],
     /// The construction-time builtin ids, in [`LangItem::TOWER`] order
     /// followed by [`OperatorTrait::ALL`] order — retained after the wired
     /// fields repoint, so bare-name resolution can recognize (and
     /// substitute) a builtin hit.
-    builtin: [TraitId; 16],
+    builtin: [TraitId; 17],
     declared: Vec<(LangItem, DefId)>,
 }
 
 /// The wired trait ids: [`LangItem::TOWER`] order, then
 /// [`OperatorTrait::ALL`] order.
-pub(crate) type WiredTraits = [TraitId; 16];
+pub(crate) type WiredTraits = [TraitId; 17];
 
 impl LangItems {
     /// A registry over the fallback-registered tower.
@@ -518,7 +533,7 @@ impl LangItems {
             sync: fallback.sync,
             addr_space: fallback.addr_space,
             operators: OperatorTrait::builtin_ids(&fallback),
-            builtin: [fallback.num; 16],
+            builtin: [fallback.num; 17],
             declared: Vec::new(),
         };
         lang.builtin = lang.fields();
@@ -558,7 +573,7 @@ impl LangItems {
     /// The wired fields — the REPL checkpoint's snapshot (a rejected batch
     /// that repointed them must restore the builtins).
     pub(crate) fn fields(&self) -> WiredTraits {
-        let mut fields = [self.num; 16];
+        let mut fields = [self.num; 17];
         fields[..6].copy_from_slice(&[
             self.num,
             self.integral,

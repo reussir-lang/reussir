@@ -3299,16 +3299,25 @@ mod tests {
                 );
             },
         );
+        // Generic code names the amount's type through the bound, and each
+        // instance takes the one its impl binds.
         check_with_bigint(
-            "fn shl<T: Integral>(x: T, k: T) -> T { x << k }\n\
-             pub fn f(n: Nat) -> Nat { shl(n, n) }",
+            "fn shl<T: Integral>(x: T, k: T::Amount) -> T { x << k }\n\
+             pub fn f(n: Nat, k: i64) -> Nat { shl(n, k) }\n\
+             pub fn g(x: u8, k: u8) -> u8 { shl(x, k) }",
             |elab, _| {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
                 let (_, reports) = crate::full::mono::monomorphize(&elab.mono_input());
-                let messages: Vec<&str> = reports.iter().map(|r| r.message.as_str()).collect();
+                assert!(reports.is_empty(), "{reports:#?}");
+            },
+        );
+        check_with_bigint(
+            "fn shl<T: Integral>(x: T, k: T) -> T { x << k }",
+            |elab, _| {
+                let messages: Vec<&str> = elab.reports.iter().map(|r| r.message.as_str()).collect();
                 assert_eq!(
                     messages,
-                    ["the shift amount of a `Nat` must be an `i64`"],
+                    ["type mismatch: expected `T::Amount`, found `T`"],
                     "{messages:#?}"
                 );
             },

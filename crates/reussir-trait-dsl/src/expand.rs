@@ -51,11 +51,35 @@ fn unknown_scalar(ident: &syn::Ident) -> syn::Error {
     )
 }
 
-/// The type a method signature names: `Self` is the trait's own parameter.
+/// The type a trait member names: `Self` is the trait's own parameter and
+/// `Self::Name` one of its associated types. Expands where `def` is the
+/// trait's def.
 fn type_ref(ty: &TypeRef) -> TokenStream {
     match ty {
         TypeRef::SelfTy => quote!(tcx.mk_generic(self_g)),
+        TypeRef::Assoc(ident) => {
+            let name = ident.to_string();
+            quote!(tcx.mk_assoc(def, interner.get_or_intern(#name), &[tcx.mk_generic(self_g)]))
+        }
         TypeRef::Scalar(ident) => scalar_ctor(ident).expect("validated above"),
+    }
+}
+
+/// Reject a type a trait member cannot name: an unknown scalar, or an
+/// associated type `decl` does not declare.
+fn check_type_ref(decl: &crate::ast::TraitDecl, ty: &TypeRef) -> syn::Result<()> {
+    match ty {
+        TypeRef::Scalar(ident) if scalar_ctor(ident).is_none() => Err(unknown_scalar(ident)),
+        TypeRef::Assoc(ident) if decl.assoc_tys.iter().all(|(name, _)| name != ident) => {
+            Err(syn::Error::new_spanned(
+                ident,
+                format!(
+                    "trait `{}` declares no associated type `{ident}`",
+                    decl.name
+                ),
+            ))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -118,16 +142,15 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         ));
                     }
                 }
+                for (_, default) in &decl.assoc_tys {
+                    check_type_ref(decl, default)?;
+                }
                 for m in &decl.methods {
                     let tys = m.params.iter().map(|(_, ty)| ty).chain(&m.ret);
                     for ty in tys {
-                        if let TypeRef::Scalar(ident) = ty
-                            && scalar_ctor(ident).is_none()
-                        {
-                            return Err(unknown_scalar(ident));
-                        }
+                        check_type_ref(decl, ty)?;
                     }
-                    if let Some((param, TypeRef::Scalar(_))) = m.params.first()
+                    if let Some((param, TypeRef::Scalar(_) | TypeRef::Assoc(_))) = m.params.first()
                         && param == "self"
                     {
                         return Err(syn::Error::new_spanned(
@@ -202,6 +225,17 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 quote!(self_ref(#s))
             });
             let methods = t.methods.iter().map(method_sig);
+            let assoc_tys = t.assoc_tys.iter().map(|(name, default)| {
+                let name = name.to_string();
+                let default = type_ref(default);
+                quote! {
+                    crate::semi::traits::def::AssocTyDef {
+                        name: interner.get_or_intern(#name),
+                        default: Some(#default),
+                        span: None,
+                    }
+                }
+            });
             quote! {
                 let #field = crate::semi::traits::TraitId(#i);
                 {
@@ -213,6 +247,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         .or_else(|| defs.declare_trait(key))
                         .expect("builtins precede user defs");
                     let methods = vec![#(#methods),*];
+                    let assoc_tys = vec![#(#assoc_tys),*];
                     db.add_trait(crate::semi::traits::def::TraitDef {
                         id: #field,
                         def,
@@ -222,7 +257,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         params: vec![],
                         supertraits: vec![#(#supers),*],
                         methods,
-                        assoc_tys: vec![],
+                        assoc_tys,
                         assoc_consts: vec![],
                         span: None,
                         file: reussir_syntax::source::FileId::ROOT,
@@ -238,6 +273,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             .iter()
             .map(|ty| {
                 let ctor = scalar_ctor(ty).expect("validated above");
+                let assoc_tys = traits[*t].assoc_tys.iter().map(|_| quote!(None));
                 let id = proc_macro2::Literal::u32_unsuffixed(next_impl);
                 next_impl += 1;
                 quote! {
@@ -254,7 +290,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                             where_clauses: vec![],
                             methods: vec![],
                             assoc_consts: vec![],
-                            assoc_tys: vec![],
+                            assoc_tys: vec![#(#assoc_tys),*],
                             span: None,
                             file: reussir_syntax::source::FileId::ROOT,
                         });
@@ -435,6 +471,24 @@ mod tests {
             trait Bad { fn bad(self: i32); }
         });
         assert!(msg.contains("`self: Self`"), "{msg}");
+    }
+
+    #[test]
+    fn assoc_types_take_their_defaults_in_every_impl() {
+        let out = expand_ok(quote! {
+            trait Shift {
+                type Amount = Self;
+                fn shl(self: Self, amount: Self::Amount) -> Self;
+            }
+            impl Shift for i8 | u8;
+        });
+        assert_eq!(out.matches("AssocTyDef").count(), 1);
+        assert_eq!(out.matches("mk_assoc").count(), 1);
+        assert_eq!(out.matches("assoc_tys : vec ! [None]").count(), 2);
+        let msg = expand_err(quote! {
+            trait Bad { fn bad(self: Self, other: Self::Missing); }
+        });
+        assert!(msg.contains("no associated type `Missing`"), "{msg}");
     }
 
     #[test]

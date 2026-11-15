@@ -9,7 +9,7 @@ pub fn on_float(x : f64, y : f64) -> f64 { x & y }
 // CHECK-DAG: `bool` does not implement `BitOr`
 pub fn on_bool(x : bool, y : bool) -> bool { x | y }
 
-// CHECK-DAG: `f32` does not implement `Integral`
+// CHECK-DAG: `f32` does not implement `Shift`
 pub fn shift_float(x : f32) -> f32 { x << 2 }
 
 // The bit-counting intrinsics carry the same bound.
