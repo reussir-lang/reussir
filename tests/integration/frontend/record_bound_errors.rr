@@ -34,22 +34,29 @@ pub fn annotation(h: Plain<bool>) -> i64 {
 }
 
 // A type parameter satisfies a bound only through its own bounds.
-// CHECK-DAG: `Hold<P>` is ill-formed: `P` does not implement `Tr`
+// CHECK-DAG: `Hold<P>` is ill-formed: the bound `Tr` is not satisfied by this generic
 // CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:24
 pub fn unbounded<P>(h: Hold<P>) -> u64 { h.a }
 
-// CHECK-DAG: `Hold<Q>` is ill-formed: `Q` does not implement `Tr`
+// CHECK-DAG: `Hold<Q>` is ill-formed: the bound `Tr` is not satisfied by this generic
 // CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:33
 pub fn other_bound<Q: Other>(h: Hold<Q>) -> i64 { 0 }
 
-// CHECK-DAG: `Hold<R>` is ill-formed: `R` does not implement `Tr`
+// CHECK-DAG: `Hold<R>` is ill-formed: the bound `Tr` is not satisfied by this generic
 impl<R> Hold<R> { fn inherent(self: Self) -> i64 { 0 } }
 
-// CHECK-DAG: `Hold<S>` is ill-formed: `S` does not implement `Tr`
+// CHECK-DAG: `Hold<S>` is ill-formed: the bound `Tr` is not satisfied by this generic
 impl<S> Other for Hold<S> { fn other(self: Self) -> i64 { 0 } }
+
+// `Sync` is decided from the shape of the type, not by an impl.
+// CHECK-DAG: `Shared<Cell<i64>>` is ill-formed: `Cell<i64>` is not `Sync`
+pub struct Shared<T: Sync> { v: T }
+pub fn unsync(s: Shared<Cell<i64>>) -> i64 { 0 }
 
 // OK-NOT: `Hold<V>` is ill-formed
 // OK-NOT: <bool>` is ill-formed
+// OK-NOT: `Shared<i64>` is ill-formed
+pub fn sync(s: Shared<i64>) -> i64 { s.v }
 pub fn bounded<V: Tr>(h: Hold<V>) -> V::A { h.a }
 pub fn concrete(h: Hold<bool>, p: Plain<bool>) -> i64 { h.a }
 pub struct Chain<V: Tr> { next: Plain<V>, held: Hold<V> }
