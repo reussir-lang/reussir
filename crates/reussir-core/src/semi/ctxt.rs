@@ -4997,6 +4997,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return;
         }
+        let failures: Vec<String> = self
+            .argument_bounds(&proto.generics, &ty_args)
+            .iter()
+            .filter_map(|bound| self.bound_failure(bound))
+            .collect();
+        if !failures.is_empty() {
+            failures
+                .into_iter()
+                .for_each(|reason| self.error(span, reason));
+            return;
+        }
 
         self.trampolines.push(TrampolineRoot {
             name: tramp.name.clone(),

@@ -814,31 +814,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     fn report_record_bounds(&mut self, ty: Ty<'tcx>, span: Option<surface::Span>) {
-        use crate::semi::traits::TraitRef;
         let TyKind::Record { def, args, .. } = *ty.kind() else {
             return;
         };
         let Some(record) = self.records.get(&def) else {
             return;
         };
-        let bounds: Vec<_> = record
-            .ty_params
-            .iter()
-            .zip(args)
-            .flat_map(|(&(_, generic), &arg)| {
-                self.generic_bounds(generic)
-                    .iter()
-                    .map(move |&bound| (bound, arg))
-            })
-            .collect();
-        for (trait_id, arg) in bounds {
-            if matches!(arg.kind(), TyKind::Bottom) {
-                continue;
-            }
-            let bound = TraitRef {
-                trait_id,
-                args: vec![arg],
-            };
+        for bound in self.argument_bounds(&record.ty_params, args) {
             if let Some(reason) = self.bound_failure(&bound) {
                 self.error(
                     span,
@@ -846,6 +828,28 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 );
             }
         }
+    }
+
+    /// The bounds `args` must satisfy as the arguments of `generics`. An
+    /// argument already reported as an error owes none.
+    pub(super) fn argument_bounds(
+        &self,
+        generics: &[(TokenKey, GenericId)],
+        args: &[Ty<'tcx>],
+    ) -> Vec<crate::semi::traits::TraitRef<'tcx>> {
+        generics
+            .iter()
+            .zip(args)
+            .filter(|(_, arg)| !matches!(arg.kind(), TyKind::Bottom))
+            .flat_map(|(&(_, generic), &arg)| {
+                self.generic_bounds(generic).iter().map(move |&trait_id| {
+                    crate::semi::traits::TraitRef {
+                        trait_id,
+                        args: vec![arg],
+                    }
+                })
+            })
+            .collect()
     }
 
     /// Evaluate a type that carries a `[flex]` flag (a parameter, return type,

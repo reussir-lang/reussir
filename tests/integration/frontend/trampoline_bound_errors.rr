@@ -1,0 +1,15 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// A trampoline's type arguments must satisfy the bounds on its target's
+// parameters.
+pub trait Tr { type A; }
+pub struct Yes { v: i64 }
+pub struct No { v: i64 }
+impl Tr for Yes { type A = i64; }
+fn id_item<T: Tr>(x: T::A) -> T::A { x }
+
+// CHECK-NOT: `Yes` does not implement
+extern "C" trampoline "id_yes" = id_item<Yes>;
+// CHECK: `No` does not implement `Tr`
+// CHECK-NEXT: trampoline_bound_errors.rr:[[# @LINE + 1]]:1
+extern "C" trampoline "id_no" = id_item<No>;
