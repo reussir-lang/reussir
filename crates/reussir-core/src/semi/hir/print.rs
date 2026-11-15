@@ -444,25 +444,21 @@ impl<'a> Printer<'a> {
         let consts = i.consts.iter().map(|(name, value)| {
             text(format!("const {} = ", spell_name(name))) + self.const_value(value)
         });
-        let mut members = Doc::Null;
-        let mut gap = "";
-        for member in types.chain(consts) {
-            members = members + text(gap) + member + text(";");
-            gap = " ";
-        }
-        if i.methods.is_empty() {
-            gap = "";
-        }
+        let mut members: Vec<Doc<'static>> = types
+            .chain(consts)
+            .map(|member| member + text(";"))
+            .collect();
         let methods: Vec<Doc<'static>> = i.methods.iter().map(|m| text(format!("#{m}"))).collect();
+        if !methods.is_empty() {
+            members.push(comma_sep(methods));
+        }
         text("impl")
             + self.text_binder(&i.generics)
             + text(format!(" #{}", i.trait_path))
             + self.ty_args(&i.args)
             + self.item_loc(i.file, i.span)
             + text(" { ")
-            + members
-            + text(gap)
-            + comma_sep(methods)
+            + sep_by(members, " ")
             + text(" }")
     }
 
@@ -1203,10 +1199,14 @@ fn pat_ref(path: &PatVarRef) -> Doc<'static> {
 }
 
 fn comma_sep(docs: Vec<Doc<'static>>) -> Doc<'static> {
+    sep_by(docs, ", ")
+}
+
+fn sep_by(docs: Vec<Doc<'static>>, sep: &'static str) -> Doc<'static> {
     let mut d = Doc::Null;
     for (i, item) in docs.into_iter().enumerate() {
         if i > 0 {
-            d = d + text(", ");
+            d = d + text(sep);
         }
         d = d + item;
     }

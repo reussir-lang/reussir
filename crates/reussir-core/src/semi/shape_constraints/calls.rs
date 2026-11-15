@@ -39,8 +39,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return Err("invalid trait method argument count in a shape relation".into());
         }
         let ty_args: Vec<_> = ty_args.iter().map(|&ty| self.infer.resolve(ty)).collect();
-        let binders = std::iter::once(tdef.self_param)
-            .chain(tdef.params.iter().map(|&(_, g)| g))
+        let binders = tdef
+            .own_params()
             .chain(signature.generics.iter().map(|&(_, g)| g));
         let subst: FxHashMap<_, _> = binders.zip(ty_args.iter().copied()).collect();
         for (&formal, actual) in signature.params.iter().zip(args) {

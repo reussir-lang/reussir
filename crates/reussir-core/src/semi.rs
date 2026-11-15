@@ -3716,8 +3716,6 @@ mod tests {
         });
     }
 
-    /// The builtin-impl special form is fenced: reserved to lang-bound
-    /// traits of the declaring package (an ordinary local trait takes the
     /// A builtin impl has no method bodies, but it binds the trait's
     /// associated types: by name, or by taking the trait's default.
     #[test]

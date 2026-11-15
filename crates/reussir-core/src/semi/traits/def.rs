@@ -139,7 +139,21 @@ pub struct ImplDef<'tcx> {
     pub file: FileId,
 }
 
-impl TraitDef<'_> {
+impl<'tcx> TraitDef<'tcx> {
+    /// The trait's own parameters, `Self` first.
+    pub fn own_params(&self) -> impl Iterator<Item = GenericId> + '_ {
+        std::iter::once(self.self_param).chain(self.params.iter().map(|&(_, g)| g))
+    }
+
+    /// The trait's own parameters bound to the arguments of a reference to
+    /// it, the implementing type first.
+    pub fn binder(
+        &self,
+        args: impl IntoIterator<Item = Ty<'tcx>>,
+    ) -> rustc_hash::FxHashMap<GenericId, Ty<'tcx>> {
+        self.own_params().zip(args).collect()
+    }
+
     /// Whether this trait is compiler-provided — a sealed builtin or the
     /// site-less comparison-tower fallback — rather than declared by
     /// source or a loaded interface. Compiler-provided declarations never

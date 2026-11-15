@@ -29,6 +29,12 @@ pub(crate) enum Item {
     Impl(ImplDecl),
 }
 
+/// `type Name = Default;` in a trait declaration.
+pub(crate) struct AssocTy {
+    pub name: syn::Ident,
+    pub default: TypeRef,
+}
+
 pub(crate) struct TraitDecl {
     /// Forwarded doc comments (rendered onto the generated `Builtins` field).
     pub docs: Vec<syn::Attribute>,
@@ -38,7 +44,7 @@ pub(crate) struct TraitDecl {
     pub supertraits: Vec<syn::Ident>,
     /// Associated types with their defaults. The impls of the table bind
     /// nothing, so every one takes its default.
-    pub assoc_tys: Vec<(syn::Ident, TypeRef)>,
+    pub assoc_tys: Vec<AssocTy>,
     pub methods: Vec<MethodSig>,
 }
 
@@ -118,12 +124,7 @@ impl Parse for TraitDecl {
             syn::braced!(body in input);
             while !body.is_empty() {
                 if body.peek(Token![type]) {
-                    body.parse::<Token![type]>()?;
-                    let name: syn::Ident = body.parse()?;
-                    body.parse::<Token![=]>()?;
-                    let default: TypeRef = body.parse()?;
-                    body.parse::<Token![;]>()?;
-                    assoc_tys.push((name, default));
+                    assoc_tys.push(body.parse()?);
                 } else {
                     methods.push(body.parse()?);
                 }
@@ -172,17 +173,26 @@ impl Parse for MethodSig {
     }
 }
 
+impl Parse for AssocTy {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        input.parse::<Token![type]>()?;
+        let name = input.parse()?;
+        input.parse::<Token![=]>()?;
+        let default = input.parse()?;
+        input.parse::<Token![;]>()?;
+        Ok(AssocTy { name, default })
+    }
+}
+
 impl Parse for TypeRef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        if input.peek(Token![Self]) {
-            input.parse::<Token![Self]>()?;
-            if input.peek(Token![::]) {
-                input.parse::<Token![::]>()?;
-                return Ok(TypeRef::Assoc(input.parse()?));
-            }
-            return Ok(TypeRef::SelfTy);
+        if input.parse::<Option<Token![Self]>>()?.is_none() {
+            return Ok(TypeRef::Scalar(input.parse()?));
         }
-        Ok(TypeRef::Scalar(input.parse()?))
+        if input.parse::<Option<Token![::]>>()?.is_some() {
+            return Ok(TypeRef::Assoc(input.parse()?));
+        }
+        Ok(TypeRef::SelfTy)
     }
 }
 

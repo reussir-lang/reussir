@@ -359,7 +359,7 @@ fn dynamic_shape<'tcx>(
 }
 fn open(t: Ty<'_>) -> bool {
     match t.kind() {
-        TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Assoc { .. } => true,
+        _ if t.is_open() => true,
         TyKind::Tensor { elem, .. } | TyKind::Array { elem, .. } => open(*elem),
         TyKind::Future(ts) | TyKind::Tuple(ts) => ts.iter().any(|&t| open(t)),
         _ => false,

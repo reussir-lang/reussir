@@ -285,6 +285,21 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
 }
 
 /// Collect private records through every structural type former.
+/// How the reports about an impl's `type` or `const` members word them.
+struct ImplMemberKind {
+    noun: &'static str,
+    verb: &'static str,
+}
+
+const ASSOC_TYPE: ImplMemberKind = ImplMemberKind {
+    noun: "type",
+    verb: "bound",
+};
+const ASSOC_CONST: ImplMemberKind = ImplMemberKind {
+    noun: "const",
+    verb: "defined",
+};
+
 /// The members that reach themselves through `deps`, each member's list of
 /// the members it depends on.
 fn cyclic_members(deps: &[Vec<usize>]) -> Vec<usize> {
@@ -2482,10 +2497,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             if ib.trait_ref.is_some() {
                 let declared = self.scan_trait_impl(ib, *span);
                 for (m, def) in ib.members.iter().zip(declared) {
-                    let mspan = Some(surface::Span {
-                        start: m.start,
-                        end: m.end,
-                    });
+                    let mspan = Some(m.span());
                     methods.push((&m.value, mspan, def));
                 }
                 continue;
@@ -2495,10 +2507,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             // it, and the language has no const items outside traits.
             for c in &ib.consts {
                 self.error(
-                    Some(Span {
-                        start: c.start,
-                        end: c.end,
-                    }),
+                    Some(c.span()),
                     format!(
                         "associated const `{}` must be declared by a trait; an \
                          inherent `impl` cannot define consts",
@@ -2508,10 +2517,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             for t in &ib.types {
                 self.error(
-                    Some(Span {
-                        start: t.start,
-                        end: t.end,
-                    }),
+                    Some(t.span()),
                     format!(
                         "associated type `{}` must be declared by a trait; an \
                          inherent `impl` cannot bind types",
@@ -2570,10 +2576,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 _ => None,
             };
             for m in &ib.members {
-                let mspan = Some(surface::Span {
-                    start: m.start,
-                    end: m.end,
-                });
+                let mspan = Some(m.span());
                 let def = match (target, &impl_generics, self_ty) {
                     (Some(target), Some(generics), Some(self_ty)) => {
                         self.defs.set_module(scope.module.to_vec());
@@ -3636,10 +3639,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .iter()
             .map(|m| {
                 let func = &m.value;
-                let mspan = Some(Span {
-                    start: m.start,
-                    end: m.end,
-                });
+                let mspan = Some(m.span());
                 let Some(sig_idx) = sigs.iter().position(|sig| sig.name == func.name) else {
                     self.error(
                         mspan,
@@ -3797,20 +3797,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return;
         }
 
-        let map: FxHashMap<GenericId, Ty<'tcx>> = std::iter::once((tdef.self_param, self_ty))
-            .chain(
-                tdef.params
-                    .iter()
-                    .zip(trait_args)
-                    .map(|(&(_, p), &a)| (p, a)),
-            )
-            .chain(
-                sig.generics
-                    .iter()
-                    .zip(own)
-                    .map(|(&(_, sg), &(_, ig))| (sg, self.tcx.mk_generic(ig))),
-            )
-            .collect();
+        let mut map = tdef.binder(std::iter::once(self_ty).chain(trait_args.iter().copied()));
+        map.extend(
+            sig.generics
+                .iter()
+                .zip(own)
+                .map(|(&(_, sg), &(_, ig))| (sg, self.tcx.mk_generic(ig))),
+        );
 
         if sig.params.len() != proto.params.len() {
             self.error(
@@ -3907,26 +3900,89 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         assoc_tys: &[(TokenKey, Ty<'tcx>)],
     ) -> Ty<'tcx> {
         let tdef = self.traits.trait_def(tid);
-        let own_args: Vec<Ty<'tcx>> = std::iter::once(tdef.self_param)
-            .chain(tdef.params.iter().map(|&(_, g)| g))
-            .map(|g| binder[&g])
-            .collect();
+        let own_args: Vec<Ty<'tcx>> = tdef.own_params().map(|g| binder[&g]).collect();
         crate::semi::traits::subst::rebuild(
             self.tcx,
             ty,
             &mut |g| binder.get(&g).copied(),
-            &mut |assoc| match *assoc.kind() {
-                TyKind::Assoc {
-                    trait_def,
-                    name,
-                    args,
-                } if trait_def == tdef.def && args == own_args.as_slice() => assoc_tys
-                    .iter()
-                    .find(|(n, _)| *n == name)
-                    .map_or(assoc, |&(_, bound)| bound),
-                _ => assoc,
+            &mut |trait_def, name, args| {
+                let own = trait_def == tdef.def && args == own_args.as_slice();
+                let (_, bound) = assoc_tys.iter().find(|(n, _)| own && *n == name)?;
+                Some(*bound)
             },
         )
+    }
+
+    /// The declaration a `type` or `const` member of an impl of trait `tr`
+    /// defines, as its position in `names`. `defined` holds the member
+    /// that already defines each. A name the trait does not declare and a
+    /// second member of one name are reported and give `None`.
+    #[allow(clippy::too_many_arguments)]
+    fn impl_member_slot(
+        &mut self,
+        kind: &ImplMemberKind,
+        tr: &str,
+        names: &[TokenKey],
+        defined: &[Option<Span>],
+        name: TokenKey,
+        visibility: surface::Visibility,
+        span: Option<Span>,
+    ) -> Option<usize> {
+        let ImplMemberKind { noun, verb } = kind;
+        let shown = self.sym(name).to_owned();
+        let Some(index) = names.iter().position(|&n| n == name) else {
+            self.error(
+                span,
+                format!("`{shown}` is not an associated {noun} of trait `{tr}`"),
+            );
+            return None;
+        };
+        if defined[index].is_some() {
+            self.error(
+                span,
+                format!("associated {noun} `{shown}` is {verb} more than once"),
+            );
+            return None;
+        }
+        if visibility == surface::Visibility::Public {
+            self.error(
+                span,
+                format!(
+                    "visibility is not allowed on a trait impl {noun}; the trait's \
+                     visibility applies"
+                ),
+            );
+        }
+        Some(index)
+    }
+
+    /// Report the `missing` declarations of trait `tr` that its impl for
+    /// `self_ty` leaves out although the trait gives no default. Whether
+    /// there is none.
+    fn report_missing_members(
+        &mut self,
+        kind: &ImplMemberKind,
+        tr: &str,
+        self_ty: Ty<'tcx>,
+        missing: impl Iterator<Item = TokenKey>,
+        span: Option<Span>,
+    ) -> bool {
+        let missing: Vec<String> = missing
+            .map(|name| format!("`{}`", self.sym(name)))
+            .collect();
+        if missing.is_empty() {
+            return true;
+        }
+        self.error(
+            span,
+            format!(
+                "impl of trait `{tr}` for `{}` is missing associated {}(s) {}",
+                self.ty_display(self_ty),
+                kind.noun,
+                missing.join(", ")
+            ),
+        );
+        false
     }
 
     /// The associated types of a trait impl: each `type` member names a
@@ -3949,20 +4005,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) -> Option<(Vec<Option<Ty<'tcx>>>, Vec<(TokenKey, Ty<'tcx>)>)> {
         let tdef = self.traits.trait_def(tid);
         let decls = tdef.assoc_tys.clone();
-        let binder: FxHashMap<GenericId, Ty<'tcx>> = std::iter::once((tdef.self_param, self_ty))
-            .chain(
-                tdef.params
-                    .iter()
-                    .zip(trait_args)
-                    .map(|(&(_, p), &a)| (p, a)),
-            )
-            .collect();
-        let tr = self.trait_display(tid);
-        // `Self::Name` in a binding names the trait's associated type at
-        // this impl; the bindings replace those names below.
         let own_args: Vec<Ty<'tcx>> = std::iter::once(self_ty)
             .chain(trait_args.iter().copied())
             .collect();
+        let binder = tdef.binder(own_args.iter().copied());
+        let tr = self.trait_display(tid);
+        // `Self::Name` in a binding names the trait's associated type at
+        // this impl; the bindings replace those names below.
         let own: Vec<(TokenKey, Ty<'tcx>)> = decls
             .iter()
             .map(|d| (d.name, self.tcx.mk_assoc(tdef.def, d.name, &own_args)))
@@ -3971,36 +4020,22 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut bound: Vec<Option<Ty<'tcx>>> = vec![None; decls.len()];
         let mut spans: Vec<Option<Span>> = vec![None; decls.len()];
         let mut ok = true;
+        let names: Vec<TokenKey> = decls.iter().map(|d| d.name).collect();
         for member in &ib.types {
-            let tspan = Some(Span {
-                start: member.start,
-                end: member.end,
-            });
+            let tspan = Some(member.span());
             let t = &member.value;
-            let name = self.sym(t.name).to_owned();
-            let Some(idx) = decls.iter().position(|d| d.name == t.name) else {
-                self.error(
-                    tspan,
-                    format!("`{name}` is not an associated type of trait `{tr}`"),
-                );
+            let Some(idx) = self.impl_member_slot(
+                &ASSOC_TYPE,
+                &tr,
+                &names,
+                &spans,
+                t.name,
+                t.visibility,
+                tspan,
+            ) else {
                 ok = false;
                 continue;
             };
-            if bound[idx].is_some() {
-                self.error(
-                    tspan,
-                    format!("associated type `{name}` is bound more than once"),
-                );
-                ok = false;
-                continue;
-            }
-            if t.visibility == surface::Visibility::Public {
-                self.error(
-                    tspan,
-                    "visibility is not allowed on a trait impl type; the trait's \
-                     visibility applies",
-                );
-            }
             let ty = t.ty.as_ref().expect("the parser requires an impl binding");
             self.generic_names = generics.iter().copied().collect();
             self.self_alias = Some(self_ty);
@@ -4011,21 +4046,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.self_alias = None;
             self.self_assoc_tys.clear();
         }
-        let missing: Vec<String> = decls
+        let missing = decls
             .iter()
             .zip(&bound)
             .filter(|(decl, b)| b.is_none() && decl.default.is_none())
-            .map(|(decl, _)| format!("`{}`", self.sym(decl.name)))
-            .collect();
-        if !missing.is_empty() {
-            self.error(
-                span,
-                format!(
-                    "impl of trait `{tr}` for `{}` is missing associated type(s) {}",
-                    self.ty_display(self_ty),
-                    missing.join(", ")
-                ),
-            );
+            .map(|(decl, _)| decl.name);
+        if !self.report_missing_members(&ASSOC_TYPE, &tr, self_ty, missing, span) {
             return None;
         }
         // A default is written over the trait's binder; it and a binding
@@ -4041,7 +4067,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 (decl.name, ty)
             })
             .collect();
-        let names: Vec<TokenKey> = decls.iter().map(|d| d.name).collect();
         let deps: Vec<Vec<usize>> = named
             .iter()
             .map(|&(_, ty)| self.own_assoc_deps(ty, trait_def, &own_args, &names))
@@ -4097,45 +4122,27 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     ) -> Option<Vec<Option<crate::semi::const_eval::ConstValue<'tcx>>>> {
         let tdef = self.traits.trait_def(tid);
         let decls = tdef.assoc_consts.clone();
-        let map: FxHashMap<GenericId, Ty<'tcx>> = std::iter::once((tdef.self_param, self_ty))
-            .chain(
-                tdef.params
-                    .iter()
-                    .zip(trait_args)
-                    .map(|(&(_, p), &a)| (p, a)),
-            )
-            .collect();
+        let map = tdef.binder(std::iter::once(self_ty).chain(trait_args.iter().copied()));
         let tr = self.trait_display(tid);
-        let mut defined = vec![false; decls.len()];
+        let names: Vec<TokenKey> = decls.iter().map(|d| d.name).collect();
+        let mut defined: Vec<Option<Span>> = vec![None; decls.len()];
         let mut values = vec![None; decls.len()];
         for member in &ib.consts {
-            let cspan = Some(Span {
-                start: member.start,
-                end: member.end,
-            });
+            let cspan = Some(member.span());
             let c = &member.value;
             let name = self.sym(c.name).to_owned();
-            let Some(idx) = decls.iter().position(|d| d.name == c.name) else {
-                self.error(
-                    cspan,
-                    format!("`{name}` is not an associated const of trait `{tr}`"),
-                );
+            let Some(idx) = self.impl_member_slot(
+                &ASSOC_CONST,
+                &tr,
+                &names,
+                &defined,
+                c.name,
+                c.visibility,
+                cspan,
+            ) else {
                 continue;
             };
-            if std::mem::replace(&mut defined[idx], true) {
-                self.error(
-                    cspan,
-                    format!("associated const `{name}` is defined more than once"),
-                );
-                continue;
-            }
-            if c.visibility == surface::Visibility::Public {
-                self.error(
-                    cspan,
-                    "visibility is not allowed on a trait impl const; the trait's \
-                     visibility applies",
-                );
-            }
+            defined[idx] = cspan;
             self.generic_names = generics.iter().copied().collect();
             self.self_alias = Some(self_ty);
             let ty = self.eval_decl_type(&c.ty);
@@ -4159,25 +4166,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .expect("the parser requires an impl initializer");
             values[idx] = self.eval_const(init, ty);
         }
-        let missing: Vec<String> = decls
+        let missing = decls
             .iter()
             .zip(&defined)
-            .filter(|(decl, d)| !**d && decl.default.is_none())
-            .map(|(decl, _)| format!("`{}`", self.sym(decl.name)))
-            .collect();
-        if !missing.is_empty() {
-            self.error(
-                span,
-                format!(
-                    "impl of trait `{tr}` for `{}` is missing associated const(s) {}",
-                    self.ty_display(self_ty),
-                    missing.join(", ")
-                ),
-            );
-        }
+            .filter(|(decl, d)| d.is_none() && decl.default.is_none())
+            .map(|(decl, _)| decl.name);
+        let complete = self.report_missing_members(&ASSOC_CONST, &tr, self_ty, missing, span);
         // A defined const without a value failed its type or initializer.
-        let evaluated = defined.iter().zip(&values).all(|(&d, v)| d == v.is_some());
-        (missing.is_empty() && evaluated).then_some(values)
+        let evaluated = defined
+            .iter()
+            .zip(&values)
+            .all(|(d, v)| d.is_some() == v.is_some());
+        (complete && evaluated).then_some(values)
     }
 
     /// Validate an `impl` block's target: it must resolve to a record this
@@ -4558,10 +4558,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
         let mut assoc_tys: Vec<crate::semi::traits::AssocTyDef<'tcx>> = Vec::new();
         for member in &td.types {
-            let tspan = Some(Span {
-                start: member.start,
-                end: member.end,
-            });
+            let tspan = Some(member.span());
             let name = member.value.name;
             if assoc_tys.iter().any(|a| a.name == name) {
                 self.error(
@@ -4626,10 +4623,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
         let mut methods: Vec<crate::semi::traits::def::MethodSig<'tcx>> = Vec::new();
         for member in &td.members {
-            let mspan = Some(Span {
-                start: member.start,
-                end: member.end,
-            });
+            let mspan = Some(member.span());
             if methods.iter().any(|m| m.name == member.value.name) {
                 self.error(
                     mspan,
@@ -4652,10 +4646,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.generic_names = trait_params.iter().copied().collect();
         self.self_alias = Some(self_ty);
         for member in &td.consts {
-            let cspan = Some(Span {
-                start: member.start,
-                end: member.end,
-            });
+            let cspan = Some(member.span());
             let name = member.value.name;
             if methods.iter().any(|m| m.name == name) || assoc_consts.iter().any(|c| c.name == name)
             {
@@ -4748,18 +4739,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         names: &[TokenKey],
     ) -> Vec<usize> {
         let mut named = Vec::new();
-        crate::semi::traits::subst::rebuild(self.tcx, ty, &mut |_| None, &mut |assoc| {
+        ty.walk(&mut |t| {
             if let TyKind::Assoc {
                 trait_def: of,
                 name,
                 args,
-            } = *assoc.kind()
+            } = *t.kind()
                 && of == trait_def
                 && args == own_args
             {
                 named.extend(names.iter().position(|&n| n == name));
             }
-            assoc
         });
         named
     }

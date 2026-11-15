@@ -186,10 +186,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // An associated type still waiting for its implementing type is
         // stuck on a hole reported above or at zonk time.
         for (_, hole) in self.fulfill.deferred.take_all() {
-            let mut holes = Vec::new();
-            collect_holes(self.infer.resolve(hole), &mut holes);
-            self.reported_holes.extend(holes);
+            self.mark_reported(hole);
         }
+    }
+
+    /// Count the holes left in `ty` as reported: an error already covers
+    /// them, so none gets a report of its own.
+    pub(super) fn mark_reported(&mut self, ty: crate::semi::ty::Ty<'tcx>) {
+        let mut holes = Vec::new();
+        collect_holes(self.infer.resolve(ty), &mut holes);
+        self.reported_holes.extend(holes);
     }
 
     /// REPL defaulting: solve numeric holes that only literal/arithmetic
@@ -409,25 +415,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 /// `ty` is expected to be deeply resolved (`InferCtxt::resolve`), so a remaining
 /// `Hole` is an unsolved variable, not an indirection.
 pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
-    match ty.kind() {
-        TyKind::Hole(_) => true,
-        TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
-            args.iter().any(|a| ty_has_hole(*a))
-        }
-        TyKind::Closure { params, ret } => {
-            params.iter().any(|p| ty_has_hole(*p)) || ty_has_hole(*ret)
-        }
-        TyKind::Nullable(inner) => ty_has_hole(*inner),
-        TyKind::Cell { elem: inner, .. } => ty_has_hole(*inner),
-        TyKind::Ptr { space, .. } => ty_has_hole(*space),
-        TyKind::Arc(inner) | TyKind::ConstSeq(inner) => ty_has_hole(*inner),
-        TyKind::DevArray {
-            elem, placement, ..
-        } => ty_has_hole(*elem) || ty_has_hole(*placement),
-        TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().any(|&p| ty_has_hole(p)),
-        TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => ty_has_hole(*elem),
-        _ => false,
-    }
+    ty.any(&mut |t| matches!(t.kind(), TyKind::Hole(_)))
 }
 
 /// Collect every hole in a deeply-resolved type, in structural order.
@@ -435,29 +423,11 @@ pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
 /// `Elaborator::zonk_ty` and the unresolved-bound path of
 /// [`Elaborator::resolve_obligations`]).
 pub(super) fn collect_holes(ty: crate::semi::ty::Ty<'_>, out: &mut Vec<HoleId>) {
-    match ty.kind() {
-        TyKind::Hole(h) => out.push(*h),
-        TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
-            args.iter().for_each(|a| collect_holes(*a, out))
+    ty.walk(&mut |t| {
+        if let TyKind::Hole(h) = *t.kind() {
+            out.push(h);
         }
-        TyKind::Closure { params, ret } => {
-            params.iter().for_each(|p| collect_holes(*p, out));
-            collect_holes(*ret, out);
-        }
-        TyKind::Nullable(inner) => collect_holes(*inner, out),
-        TyKind::Cell { elem: inner, .. } => collect_holes(*inner, out),
-        TyKind::Ptr { space, .. } => collect_holes(*space, out),
-        TyKind::Arc(inner) | TyKind::ConstSeq(inner) => collect_holes(*inner, out),
-        TyKind::DevArray {
-            elem, placement, ..
-        } => {
-            collect_holes(*elem, out);
-            collect_holes(*placement, out);
-        }
-        TyKind::Future(ps) | TyKind::Tuple(ps) => ps.iter().for_each(|&p| collect_holes(p, out)),
-        TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } => collect_holes(*elem, out),
-        _ => {}
-    }
+    });
 }
 
 #[cfg(test)]

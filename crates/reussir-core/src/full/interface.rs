@@ -263,52 +263,13 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
 /// Note every record a type's structure mentions, queueing fresh ones for the
 /// field-closure pass.
 fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut VecDeque<DefId>) {
-    match *ty.kind() {
-        TyKind::Record { def, args, .. } => {
-            if records.insert(def) {
-                queue.push_back(def);
-            }
-            for &a in args {
-                note_records(a, records, queue);
-            }
+    ty.walk(&mut |t| {
+        if let TyKind::Record { def, .. } = *t.kind()
+            && records.insert(def)
+        {
+            queue.push_back(def);
         }
-        TyKind::Closure { params, ret } => {
-            for &p in params {
-                note_records(p, records, queue);
-            }
-            note_records(ret, records, queue);
-        }
-        TyKind::DevArray {
-            elem, placement, ..
-        } => {
-            note_records(elem, records, queue);
-            note_records(placement, records, queue);
-        }
-        TyKind::Future(ps) | TyKind::Tuple(ps) | TyKind::Assoc { args: ps, .. } => {
-            ps.iter().for_each(|&p| note_records(p, records, queue))
-        }
-        TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {
-            note_records(elem, records, queue);
-        }
-        TyKind::Nullable(inner) | TyKind::Arc(inner) | TyKind::ConstSeq(inner) => {
-            note_records(inner, records, queue);
-        }
-        TyKind::Ptr { space, .. } => note_records(space, records, queue),
-        TyKind::Token
-        | TyKind::DefaultPlacement
-        | TyKind::GenericAddrSpace
-        | TyKind::Simd { .. }
-        | TyKind::Int(_)
-        | TyKind::BigInt(_)
-        | TyKind::Fp(_)
-        | TyKind::Bool
-        | TyKind::Str
-        | TyKind::Char
-        | TyKind::Unit
-        | TyKind::Generic(_)
-        | TyKind::Hole(_)
-        | TyKind::Bottom => {}
-    }
+    });
 }
 
 #[cfg(test)]

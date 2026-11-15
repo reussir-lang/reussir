@@ -260,10 +260,7 @@ impl<'tcx> TraitDb<'tcx> {
                 tdef.assoc_tys[index]
                     .default
                     .ok_or(AssocError::Undeclared)?,
-                std::iter::once(tdef.self_param)
-                    .chain(tdef.params.iter().map(|&(_, g)| g))
-                    .zip(args.iter().copied())
-                    .collect(),
+                tdef.binder(args.iter().copied()),
             ),
         };
         Ok(AssocTy::Bound(replace_generics(tcx, ty, &binder)))
@@ -294,15 +291,7 @@ impl<'tcx> TraitDb<'tcx> {
         if !mentions_assoc(ty) {
             return ty;
         }
-        rebuild(tcx, ty, &mut |_| None, &mut |assoc| {
-            let TyKind::Assoc {
-                trait_def,
-                name,
-                args,
-            } = *assoc.kind()
-            else {
-                unreachable!("`rebuild` hands over associated types only")
-            };
+        rebuild(tcx, ty, &mut |_| None, &mut |trait_def, name, args| {
             let projected = match self.trait_by_def(trait_def) {
                 // A default may name the type it defines, directly or not.
                 Some(trait_id) if depth > SELECT_DEPTH_LIMIT => {
@@ -315,11 +304,11 @@ impl<'tcx> TraitDb<'tcx> {
                 None => Err(AssocError::Undeclared),
             };
             match projected {
-                Ok(AssocTy::Rigid) => assoc,
-                Ok(AssocTy::Bound(ty)) => self.normalize_at(tcx, env, ty, depth + 1, failed),
+                Ok(AssocTy::Rigid) => None,
+                Ok(AssocTy::Bound(ty)) => Some(self.normalize_at(tcx, env, ty, depth + 1, failed)),
                 Err(error) => {
-                    failed.get_or_insert((assoc, error));
-                    tcx.mk(TyKind::Bottom)
+                    failed.get_or_insert((tcx.mk_assoc(trait_def, name, args), error));
+                    Some(tcx.mk(TyKind::Bottom))
                 }
             }
         })
@@ -332,10 +321,7 @@ impl<'tcx> TraitDb<'tcx> {
         tref: &TraitRef<'tcx>,
     ) -> Vec<TraitRef<'tcx>> {
         let def = self.trait_def(tref.trait_id);
-        let binder: FxHashMap<_, _> = std::iter::once(def.self_param)
-            .chain(def.params.iter().map(|&(_, param)| param))
-            .zip(tref.args.iter().copied())
-            .collect();
+        let binder = def.binder(tref.args.iter().copied());
         def.supertraits
             .iter()
             .map(|sup| TraitRef {

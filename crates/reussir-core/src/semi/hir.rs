@@ -436,14 +436,8 @@ impl<'tcx> ImplText<'tcx> {
         decls: &[crate::semi::traits::AssocConstDef<'tcx>],
         mut key: impl FnMut(&str) -> TokenKey,
     ) -> Option<Vec<Option<crate::semi::const_eval::ConstValue<'tcx>>>> {
-        let keys: Vec<TokenKey> = self.consts.iter().map(|(name, _)| key(name)).collect();
-        decls
-            .iter()
-            .map(|d| match keys.iter().position(|&k| k == d.name) {
-                Some(at) => Some(Some(self.consts[at].1.clone())),
-                None => d.default.is_some().then_some(None),
-            })
-            .collect()
+        let decls = decls.iter().map(|d| (d.name, d.default.is_some()));
+        in_decl_order(&self.consts, decls, &mut key)
     }
 
     /// The type bindings in the order of the trait's declarations `decls`,
@@ -456,15 +450,29 @@ impl<'tcx> ImplText<'tcx> {
         decls: &[crate::semi::traits::AssocTyDef<'tcx>],
         mut key: impl FnMut(&str) -> TokenKey,
     ) -> Option<Vec<Option<Ty<'tcx>>>> {
-        let keys: Vec<TokenKey> = self.types.iter().map(|(name, _)| key(name)).collect();
-        decls
-            .iter()
-            .map(|d| match keys.iter().position(|&k| k == d.name) {
-                Some(at) => Some(Some(self.types[at].1)),
-                None => d.default.is_some().then_some(None),
-            })
-            .collect()
+        let decls = decls.iter().map(|d| (d.name, d.default.is_some()));
+        in_decl_order(&self.types, decls, &mut key)
     }
+}
+
+/// The members an impl gives by name, in the order of the trait's
+/// declarations, each a name and whether it has a default: `None` where the
+/// impl omits one that has a default, and `None` overall when it omits one
+/// that has none.
+fn in_decl_order<V: Clone>(
+    given: &[(String, V)],
+    decls: impl Iterator<Item = (TokenKey, bool)>,
+    key: &mut impl FnMut(&str) -> TokenKey,
+) -> Option<Vec<Option<V>>> {
+    let keys: Vec<TokenKey> = given.iter().map(|(name, _)| key(name)).collect();
+    decls
+        .map(
+            |(name, has_default)| match keys.iter().position(|&k| k == name) {
+                Some(at) => Some(Some(given[at].1.clone())),
+                None => has_default.then_some(None),
+            },
+        )
+        .collect()
 }
 
 /// Render the user-declared traits and impls of `db` print-ready. Sealed

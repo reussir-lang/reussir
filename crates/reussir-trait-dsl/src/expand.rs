@@ -12,7 +12,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 
-use crate::ast::{Input, Item, MethodSig, TypeRef};
+use crate::ast::{AssocTy, Input, Item, MethodSig, TypeRef};
 
 /// The closed vocabulary an impl clause may name (the scalars and the
 /// `Generic` address space), with the type
@@ -70,7 +70,7 @@ fn type_ref(ty: &TypeRef) -> TokenStream {
 fn check_type_ref(decl: &crate::ast::TraitDecl, ty: &TypeRef) -> syn::Result<()> {
     match ty {
         TypeRef::Scalar(ident) if scalar_ctor(ident).is_none() => Err(unknown_scalar(ident)),
-        TypeRef::Assoc(ident) if decl.assoc_tys.iter().all(|(name, _)| name != ident) => {
+        TypeRef::Assoc(ident) if decl.assoc_tys.iter().all(|assoc| assoc.name != *ident) => {
             Err(syn::Error::new_spanned(
                 ident,
                 format!(
@@ -142,7 +142,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         ));
                     }
                 }
-                for (_, default) in &decl.assoc_tys {
+                for AssocTy { default, .. } in &decl.assoc_tys {
                     check_type_ref(decl, default)?;
                 }
                 for m in &decl.methods {
@@ -225,7 +225,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 quote!(self_ref(#s))
             });
             let methods = t.methods.iter().map(method_sig);
-            let assoc_tys = t.assoc_tys.iter().map(|(name, default)| {
+            let assoc_tys = t.assoc_tys.iter().map(|AssocTy { name, default }| {
                 let name = name.to_string();
                 let default = type_ref(default);
                 quote! {
@@ -273,7 +273,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             .iter()
             .map(|ty| {
                 let ctor = scalar_ctor(ty).expect("validated above");
-                let assoc_tys = traits[*t].assoc_tys.iter().map(|_| quote!(None));
+                let assoc_tys = traits[*t].assoc_tys.len();
                 let id = proc_macro2::Literal::u32_unsuffixed(next_impl);
                 next_impl += 1;
                 quote! {
@@ -290,7 +290,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                             where_clauses: vec![],
                             methods: vec![],
                             assoc_consts: vec![],
-                            assoc_tys: vec![#(#assoc_tys),*],
+                            assoc_tys: vec![None; #assoc_tys],
                             span: None,
                             file: reussir_syntax::source::FileId::ROOT,
                         });
@@ -484,7 +484,7 @@ mod tests {
         });
         assert_eq!(out.matches("AssocTyDef").count(), 1);
         assert_eq!(out.matches("mk_assoc").count(), 1);
-        assert_eq!(out.matches("assoc_tys : vec ! [None]").count(), 2);
+        assert_eq!(out.matches("assoc_tys : vec ! [None ; 1usize]").count(), 2);
         let msg = expand_err(quote! {
             trait Bad { fn bad(self: Self, other: Self::Missing); }
         });

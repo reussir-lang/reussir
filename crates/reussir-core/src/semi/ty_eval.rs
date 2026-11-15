@@ -610,9 +610,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// Evaluate one array or tensor extent expression as a `u64` constant
-    /// ([`Self::eval_const`]). An invalid extent is reported and recovers as
-    /// extent 1 (a *dynamic* dimension is spelled `?`, not an expression).
     /// `T::Name`: the associated type `Name` that a bound of the type
     /// parameter `generic` declares, directly or through its supertraits.
     fn generic_assoc_ty(
@@ -747,6 +744,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.tcx.mk_simd(elem, &dims, scalable)
     }
 
+    /// Evaluate one array or tensor extent expression as a `u64` constant
+    /// ([`Self::eval_const`]). An invalid extent is reported and recovers as
+    /// extent 1 (a *dynamic* dimension is spelled `?`, not an expression).
     fn eval_extent(&mut self, e: &surface::Expr) -> u64 {
         let u64_ty = self.tcx.mk_int(IntTy::Unsigned(64));
         match self.eval_const(e, u64_ty) {
