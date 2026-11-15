@@ -13,8 +13,13 @@
 # which do not use the macro.
 #
 # The `alloc.rs` `MI_MAX_ALIGN_SIZE` constant must stay equal to this value.
+#
+# mimalloc prints __DATE__ and __TIME__ in its verbose banner. sccache runs the
+# compiler without SOURCE_DATE_EPOCH, so under sccache the object differed on
+# every build, never hit the cache, and took the crates that link it with it.
+# Giving the two macros fixed values makes the object reproducible.
 [env]
-CFLAGS = "-DMI_MAX_ALIGN_SIZE=8"
+CFLAGS = '-DMI_MAX_ALIGN_SIZE=8 -Wno-builtin-macro-redefined -D__DATE__="redacted" -D__TIME__="redacted"'
 
 # Cargo's new build-dir layout drops target/<profile>/deps — the directory
 # the RustCompiler dependency discovery, the unittests
