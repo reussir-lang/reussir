@@ -556,6 +556,11 @@ pub struct Elaborator<'a, 'tcx> {
     ///
     /// [`run_files`]: Elaborator::run_files
     pub(super) records_complete: bool,
+    /// Record types written while this batch's declarations were scanned,
+    /// each with its span and file. Their parameter bounds are checked once
+    /// the batch's impls are known
+    /// ([`Elaborator::check_pending_record_bounds`]).
+    pub(super) pending_record_bounds: Vec<(Ty<'tcx>, Option<Span>, FileId)>,
 
     // ----- per-function working state (reset by `enter_function`) -----
     pub infer: InferCtxt<'a, 'tcx>,
@@ -694,6 +699,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             reports: Vec::new(),
             current_file: FileId::ROOT,
             records_complete: false,
+            pending_record_bounds: Vec::new(),
             infer: InferCtxt::new(tcx),
             vars: VarEnv::default(),
             generic_names: FxHashMap::default(),
@@ -2422,7 +2428,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                             self.tcx.mk_ptr(*space, crate::semi::ty::PtrKind::Const)
                         }
                         // `Nat` and `Int` methods take the built-in integers.
-                        _ => self.record_def_ty(target, &args, flex),
+                        _ => {
+                            let self_ty = self.record_def_ty(target, &args, flex);
+                            self.require_record_bounds(self_ty, *span);
+                            self_ty
+                        }
                     })
                 }
                 _ => None,
@@ -2475,6 +2485,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             })
             .collect();
         self.register_main_entry(&mains);
+        self.check_pending_record_bounds();
         // Post-populate sweep: signatures and record members were evaluated
         // before fields existed, so their `Arc` nodes wf-check only now.
         // Restricted to this batch's items so a REPL re-run does not re-report
@@ -3352,7 +3363,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     DefaultCap::Value | DefaultCap::Shared => Flexivity::Irrelevant,
                     DefaultCap::Regional => Flexivity::Regional,
                 };
-                self.tcx.mk_record(target, &self_args, flex)
+                let self_ty = self.tcx.mk_record(target, &self_args, flex);
+                self.require_record_bounds(self_ty, span);
+                self_ty
             }
             (None, None) => unreachable!("a non-scalar impl target resolved above"),
         };

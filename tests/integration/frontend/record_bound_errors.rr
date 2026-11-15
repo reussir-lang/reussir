@@ -1,0 +1,56 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=OK
+
+// A record type is well-formed only where its arguments satisfy the bounds
+// on the record's parameters, wherever the type is written.
+pub trait Tr { type A; fn get(self: Self) -> Self::A; }
+pub trait Other { fn other(self: Self) -> i64; }
+impl Tr for bool { type A = i64; fn get(self: bool) -> i64 { 1 } }
+
+pub struct Plain<T: Tr> { a: T }
+pub struct Hold<T: Tr> { a: T::A }
+
+// CHECK-DAG: `Plain<i8>` is ill-formed: `i8` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:17
+pub fn param(h: Plain<i8>) -> i64 { 0 }
+
+// CHECK-DAG: `Plain<i16>` is ill-formed: `i16` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:20
+pub fn result() -> Plain<i16> { result() }
+
+// CHECK-DAG: `Plain<i32>` is ill-formed: `i32` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:23
+pub struct Outer { p: Plain<i32> }
+
+// CHECK-DAG: `Plain<u8>` is ill-formed: `u8` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:31
+pub fn nested(t: (i64, i64 -> Plain<u8>)) -> i64 { 0 }
+
+// CHECK-DAG: `Plain<u16>` is ill-formed: `u16` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 2]]:12
+pub fn annotation(h: Plain<bool>) -> i64 {
+    let k: Plain<u16> = annotation(h);
+    0
+}
+
+// A type parameter satisfies a bound only through its own bounds.
+// CHECK-DAG: `Hold<P>` is ill-formed: `P` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:24
+pub fn unbounded<P>(h: Hold<P>) -> u64 { h.a }
+
+// CHECK-DAG: `Hold<Q>` is ill-formed: `Q` does not implement `Tr`
+// CHECK-DAG: record_bound_errors.rr:[[# @LINE + 1]]:33
+pub fn other_bound<Q: Other>(h: Hold<Q>) -> i64 { 0 }
+
+// CHECK-DAG: `Hold<R>` is ill-formed: `R` does not implement `Tr`
+impl<R> Hold<R> { fn inherent(self: Self) -> i64 { 0 } }
+
+// CHECK-DAG: `Hold<S>` is ill-formed: `S` does not implement `Tr`
+impl<S> Other for Hold<S> { fn other(self: Self) -> i64 { 0 } }
+
+// OK-NOT: `Hold<V>` is ill-formed
+// OK-NOT: <bool>` is ill-formed
+pub fn bounded<V: Tr>(h: Hold<V>) -> V::A { h.a }
+pub fn concrete(h: Hold<bool>, p: Plain<bool>) -> i64 { h.a }
+pub struct Chain<V: Tr> { next: Plain<V>, held: Hold<V> }
+impl<V: Tr> Hold<V> { fn held(self: Self) -> V::A { self.a } }

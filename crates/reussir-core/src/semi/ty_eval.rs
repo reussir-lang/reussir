@@ -50,6 +50,7 @@ use crate::semi::ty::{DefId, Flexivity, FpTy, GenericId, IntTy, Ty, TyKind};
 use crate::surface::{self, FpType, IntegralType, TypeKind};
 
 use super::ctxt::{DefaultCap, Elaborator, RecordFields};
+use super::fulfill::ty_has_hole;
 
 impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Evaluate an exported or reusable declaration type. Dimension holes are
@@ -788,7 +789,68 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             DefaultCap::Value | DefaultCap::Shared => Flexivity::Irrelevant,
             DefaultCap::Regional => Flexivity::Regional,
         };
-        self.record_def_ty(def, &args, flex)
+        let ty = self.record_def_ty(def, &args, flex);
+        self.require_record_bounds(ty, Some(span));
+        ty
+    }
+
+    /// Require the record type `ty`, written at `span`, to satisfy the
+    /// bounds on the record's parameters. A batch's impls are not all known
+    /// while its declarations are scanned, so those wait for
+    /// [`Self::check_pending_record_bounds`].
+    pub(super) fn require_record_bounds(&mut self, ty: Ty<'tcx>, span: Option<surface::Span>) {
+        if self.records_complete {
+            self.report_record_bounds(ty, span);
+        } else {
+            self.pending_record_bounds
+                .push((ty, span, self.current_file));
+        }
+    }
+
+    pub(super) fn check_pending_record_bounds(&mut self) {
+        for (ty, span, file) in std::mem::take(&mut self.pending_record_bounds) {
+            self.set_current_file(file);
+            self.report_record_bounds(ty, span);
+        }
+    }
+
+    fn report_record_bounds(&mut self, ty: Ty<'tcx>, span: Option<surface::Span>) {
+        use crate::semi::traits::{Obligation, SelectCtxt, SelectError, TraitRef};
+        let TyKind::Record { def, args, .. } = *ty.kind() else {
+            return;
+        };
+        let Some(record) = self.records.get(&def) else {
+            return;
+        };
+        let bounds: Vec<_> = record
+            .ty_params
+            .iter()
+            .zip(args)
+            .flat_map(|(&(_, generic), &arg)| {
+                self.generic_bounds(generic)
+                    .iter()
+                    .map(move |&bound| (bound, arg))
+            })
+            .collect();
+        for (trait_id, arg) in bounds {
+            if matches!(arg.kind(), TyKind::Bottom) || ty_has_hole(arg) {
+                continue;
+            }
+            let goal = Obligation::Trait(TraitRef {
+                trait_id,
+                args: vec![arg],
+            });
+            let reason = match SelectCtxt::new(&self.traits, self.tcx, &self.generics).select(&goal)
+            {
+                Ok(_) => continue,
+                Err(SelectError::NoImpl(inner)) => self.no_impl_message(arg, trait_id, &inner),
+                Err(SelectError::DepthLimit(goal)) => self.depth_limit_message(&goal),
+            };
+            self.error(
+                span,
+                format!("`{}` is ill-formed: {reason}", self.ty_display(ty)),
+            );
+        }
     }
 
     /// Evaluate a type that carries a `[flex]` flag (a parameter, return type,

@@ -3897,30 +3897,6 @@ mod tests {
         });
     }
 
-    /// An import texture and the ground record scan can demand the same
-    /// entry. A bridge the evidence rejects is then wanted twice, and the
-    /// programmer must still be told once.
-    #[test]
-    fn a_rejected_bridge_is_diagnosed_once() {
-        let source = format!(
-            r#"{CMP_TOWER}
-            #[ffi(rust = "::std::collections::BTreeSet")]
-            pub struct BTreeSet<T: Ord>;
-
-            pub struct Key {{ value: i64 }}
-
-            #[ffi(import)]
-            pub fn empty<T>() -> BTreeSet<T> [{{ Default::default() }}];
-
-            pub fn run() -> BTreeSet<Key> {{ empty<Key>() }}"#
-        );
-        let rejected: Vec<_> = mono_reports(&source)
-            .into_iter()
-            .filter(|report| report.starts_with("cannot synthesize a Rust FFI comparison bridge"))
-            .collect();
-        assert_eq!(rejected.len(), 1, "{rejected:#?}");
-    }
-
     /// **Resumability, PolyFFI edition**: bridge rendering reads the binder
     /// bounds a dump serializes, so a program resumed from its HIR must reach
     /// the same MIR — the same textures and the same comparison entries — as
