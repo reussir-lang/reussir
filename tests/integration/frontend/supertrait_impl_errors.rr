@@ -1,0 +1,45 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=OK
+
+// An impl of a trait requires the implementing type to implement each of
+// the trait's supertraits; an impl of the sub-trait does not stand in for
+// one.
+pub trait Base { type A; fn base(self: Self) -> i64; }
+pub trait Marker { }
+pub trait Derived: Base + Marker { fn derived(self: Self) -> i64; }
+pub trait Leaf: Derived { }
+
+pub struct None { v: i64 }
+// CHECK-DAG: an impl of `Derived` requires `Base`: `None` does not implement `Base`
+// CHECK-DAG: an impl of `Derived` requires `Marker`: `None` does not implement `Marker`
+// CHECK-DAG: supertrait_impl_errors.rr:[[# @LINE + 1]]:1
+impl Derived for None { fn derived(self: None) -> i64 { self.v } }
+
+// Each impl answers for the direct supertraits of its own trait.
+pub struct Skip { v: i64 }
+// CHECK-DAG: an impl of `Leaf` requires `Derived`: `Skip` does not implement `Derived`
+impl Base for Skip { type A = i64; fn base(self: Skip) -> i64 { self.v } }
+impl Marker for Skip { }
+impl Leaf for Skip { }
+
+// A generic impl of the supertrait applies only where its bounds hold.
+pub trait Tag { }
+impl Tag for bool { }
+pub struct W<T> { inner: T }
+impl<T: Tag> Base for W<T> { type A = T; fn base(self: W<T>) -> i64 { 0 } }
+impl<T> Marker for W<T> { }
+// CHECK-DAG: an impl of `Derived` requires `Base`: `W<i32>` does not implement `Base`: `i32` does not implement `Tag`
+impl Derived for W<i32> { fn derived(self: W<i32>) -> i64 { 1 } }
+
+// A bound through the sub-trait reaches the supertrait's members.
+// OK-NOT: `All` does not implement
+// OK-NOT: `W<bool>` does not implement
+pub struct All { v: i64 }
+impl Base for All { type A = bool; fn base(self: All) -> i64 { self.v } }
+impl Marker for All { }
+impl Derived for All { fn derived(self: All) -> i64 { self.v } }
+impl Leaf for All { }
+impl Derived for W<bool> { fn derived(self: W<bool>) -> i64 { 2 } }
+
+fn through<T: Leaf>(x: T, a: T::A) -> i64 { x.base() }
+pub fn use_all(x: All) -> i64 { through(x, true) }

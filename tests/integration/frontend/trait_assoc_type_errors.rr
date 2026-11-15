@@ -91,15 +91,8 @@ pub fn narrow() -> i64 {
     shift(D { v: 1 }, n).v
 }
 
-// A sub-trait's impl satisfies a bound on the supertrait but binds none of
-// the supertrait's types.
-// CHECK-DAG: `E::Amount` names no type: its trait is implemented only through a sub-trait
+// An impl requires its type to implement the trait's supertraits.
+// CHECK-DAG: an impl of `Rotate` requires `Shifter`: `E` does not implement `Shifter`
 pub trait Rotate: Shifter { }
 pub struct E { v: i64 }
 impl Rotate for E { }
-
-fn amount<T: Shifter>(a: T, n: T::Amount) -> T::Amount { n }
-
-pub fn indirect(a: E, b: E) -> E {
-    amount(a, b)
-}

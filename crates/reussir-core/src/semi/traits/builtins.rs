@@ -86,10 +86,10 @@ builtin_traits! {
     /// The root numeric class: arithmetic and numeric literals.
     #[sealed]
     trait Num: Add + Sub + Mul + Div + Rem;
-    /// Whole-number types; `Num` through the super-trait edge.
+    /// Whole-number types.
     #[sealed]
     trait Integral: Num + BitAnd + BitOr + BitXor + Shift;
-    /// Floating-point types; `Num` through the super-trait edge.
+    /// Floating-point types.
     #[sealed]
     trait FloatingPoint: Num;
     /// Pointer-shaped values (nullable-niche eligible).
@@ -109,12 +109,12 @@ builtin_traits! {
     #[sealed]
     trait AddrSpace;
 
+    impl Num for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
     impl Integral for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl FloatingPoint for f16 | f32 | f64 | bf16 | f8;
     impl AddrSpace for Generic;
 
-    // A method call needs an impl of the method's own trait: the edges from
-    // `Num` and `Integral` satisfy bounds only.
     impl Add for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
         | f16 | f32 | f64 | bf16 | f8;
     impl Sub for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
@@ -171,10 +171,10 @@ mod tests {
             assert_eq!(db.traits_len(), 17);
             assert_eq!(
                 db.impls_len(),
-                147,
-                "10 integral + 5 floating impls + 1 address space, 6 arithmetic \
-                 traits over the 15 numbers, 3 bitwise and `Shift` over the 10 \
-                 integers, and `bool : Not`"
+                162,
+                "15 numeric + 10 integral + 5 floating impls + 1 address space, \
+                 6 arithmetic traits over the 15 numbers, 3 bitwise and `Shift` \
+                 over the 10 integers, and `bool : Not`"
             );
             for i in 0..17u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);

@@ -50,9 +50,6 @@ pub enum AssocError<'tcx> {
     Undeclared,
     /// Selection proves no impl of the trait for the self type.
     Select(SelectError<'tcx>),
-    /// The bound holds only through a sub-trait, so no impl of the trait
-    /// itself defines the item.
-    Indirect,
 }
 
 /// What an associated type is once its trait reference is selected.
@@ -202,15 +199,17 @@ impl<'tcx> TraitDb<'tcx> {
             trait_id,
             args: vec![self_ty],
         });
-        match SelectCtxt::new(self, tcx, &[]).select(&goal) {
-            Ok(Evidence::Impl { impl_id, .. }) => Ok(self.impl_def(impl_id).assoc_consts[index]
-                .as_ref()
-                .or(decls[index].default.as_ref())
-                .expect("conformance requires a value or a default value")
-                .clone()),
-            Ok(_) => Err(AssocError::Indirect),
-            Err(error) => Err(AssocError::Select(error)),
-        }
+        let evidence = SelectCtxt::new(self, tcx, &[])
+            .select(&goal)
+            .map_err(AssocError::Select)?;
+        let Evidence::Impl { impl_id, .. } = evidence else {
+            unreachable!("without assumptions only an impl proves a bound")
+        };
+        Ok(self.impl_def(impl_id).assoc_consts[index]
+            .as_ref()
+            .or(decls[index].default.as_ref())
+            .expect("conformance requires a value or a default value")
+            .clone())
     }
 
     /// The associated type `name` of the trait reference `trait_id<args>`
@@ -237,12 +236,16 @@ impl<'tcx> TraitDb<'tcx> {
         let evidence = SelectCtxt::new(self, tcx, env)
             .select(&goal)
             .map_err(AssocError::Select)?;
-        let (impl_id, impl_args) = match &evidence {
-            Evidence::Impl { impl_id, args, .. } => (*impl_id, args),
-            _ if evidence.is_assumed() => return Ok(AssocTy::Rigid),
-            _ => return Err(AssocError::Indirect),
+        // Any other proof starts from a bound in scope.
+        let Evidence::Impl {
+            impl_id,
+            args: impl_args,
+            ..
+        } = &evidence
+        else {
+            return Ok(AssocTy::Rigid);
         };
-        let imp = self.impl_def(impl_id);
+        let imp = self.impl_def(*impl_id);
         // A compiler-provided impl lists no bindings: it takes the defaults.
         let (ty, binder): (_, FxHashMap<_, _>) = match imp.assoc_tys.get(index).copied().flatten() {
             Some(ty) => (
@@ -322,8 +325,31 @@ impl<'tcx> TraitDb<'tcx> {
         })
     }
 
-    /// All impls in registration (dense-id) order — the deterministic scan
-    /// order for super-trait projection in selection.
+    /// The supertraits of `tref`'s trait, at `tref`'s arguments.
+    pub fn supertrait_refs(
+        &self,
+        tcx: &TyCtxt<'tcx>,
+        tref: &TraitRef<'tcx>,
+    ) -> Vec<TraitRef<'tcx>> {
+        let def = self.trait_def(tref.trait_id);
+        let binder: FxHashMap<_, _> = std::iter::once(def.self_param)
+            .chain(def.params.iter().map(|&(_, param)| param))
+            .zip(tref.args.iter().copied())
+            .collect();
+        def.supertraits
+            .iter()
+            .map(|sup| TraitRef {
+                trait_id: sup.trait_id,
+                args: sup
+                    .args
+                    .iter()
+                    .map(|&ty| replace_generics(tcx, ty, &binder))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// All impls in registration (dense-id) order.
     pub fn impls(&self) -> impl Iterator<Item = &ImplDef<'tcx>> {
         self.impls.iter()
     }

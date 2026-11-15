@@ -80,14 +80,3 @@ pub enum Evidence<'tcx> {
         index: usize,
     },
 }
-
-impl Evidence<'_> {
-    /// Whether the proof starts from a bound in scope rather than an impl.
-    pub fn is_assumed(&self) -> bool {
-        match self {
-            Evidence::Param { .. } => true,
-            Evidence::Super { of, .. } => of.is_assumed(),
-            Evidence::Impl { .. } => false,
-        }
-    }
-}

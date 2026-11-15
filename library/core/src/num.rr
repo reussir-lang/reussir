@@ -6,8 +6,8 @@
 //! cannot be written in source) and lowers everything intrinsically.
 //! `Num: PartialOrd` is the compatibility edge that keeps `T: Num` code
 //! comparing. The arithmetic and bitwise operators ask for their own traits
-//! in `core::ops`, which every number has through the edges below. Negation
-//! asks for `Neg`, which `Signed` adds to `Num`.
+//! in `core::ops`, which every number implements. Negation asks for `Neg`,
+//! which `Signed` adds to `Num`.
 
 #[lang("num")]
 #[sealed]
@@ -46,6 +46,26 @@ pub enum Int {
 
 // The builtin impls (see `core::cmp` for the form): membership of the
 // sealed numeric classes, declared in source.
+
+impl Num for i8 { }
+impl Num for i16 { }
+impl Num for i32 { }
+impl Num for i64 { }
+impl Num for i128 { }
+impl Num for u8 { }
+impl Num for u16 { }
+impl Num for u32 { }
+impl Num for u64 { }
+impl Num for u128 { }
+impl Num for Nat { }
+impl Num for Int { }
+impl Num for Arc<Nat> { }
+impl Num for Arc<Int> { }
+impl Num for f16 { }
+impl Num for f32 { }
+impl Num for f64 { }
+impl Num for bfloat16 { }
+impl Num for float8 { }
 
 impl Integral for i8 { }
 impl Integral for i16 { }

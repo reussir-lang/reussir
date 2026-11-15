@@ -1893,10 +1893,8 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     ///   TraitCall{T, m, τ̄}(ē)  ⟶  Call f⟨θᾱ ++ τ̄₁‥⟩(ē)
     /// ```
     ///
-    /// Every other outcome — no trait tables, an unknown trait, non-`Impl`
-    /// evidence (the bound holds only through a sub-trait, so no direct
-    /// impl carries the body), `⊥`, or `↯` — is a spanned report and the
-    /// call lowers to poison.
+    /// Every other outcome — no trait tables, an unknown trait, `⊥`, or `↯`
+    /// — is a spanned report and the call lowers to poison.
     fn resolve_trait_call(
         &mut self,
         trait_def: DefId,
@@ -1991,16 +1989,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     regional,
                 })
             }
-            Ok(_) => {
-                self.error(
-                    span,
-                    format!(
-                        "no direct `impl {shown}` provides method `{mname}` for this \
-                         instantiation (the bound holds only through a sub-trait)"
-                    ),
-                );
-                None
-            }
+            Ok(_) => unreachable!("without assumptions only an impl proves a bound"),
             Err(SelectError::NoImpl(inner)) => {
                 let inner_trait = path(self.defs, db.trait_def(inner.trait_id).def);
                 self.error(
@@ -2063,10 +2052,6 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             Err(AssocError::Select(SelectError::DepthLimit(_))) => {
                 format!("overflow selecting an `impl {shown}` for this instantiation")
             }
-            Err(AssocError::Indirect) => format!(
-                "no direct `impl {shown}` defines associated const `{cname}` for this \
-                 instantiation (the bound holds only through a sub-trait)"
-            ),
         };
         self.error(span, message);
         None
@@ -2098,10 +2083,6 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             AssocError::Select(SelectError::DepthLimit(_)) => {
                 format!("overflow selecting an `impl {shown}` for this instantiation")
             }
-            AssocError::Indirect => format!(
-                "no direct `impl {shown}` binds associated type `{name}` for this \
-                 instantiation (the bound holds only through a sub-trait)"
-            ),
         };
         self.error(span, message);
     }

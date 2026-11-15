@@ -50,12 +50,6 @@
 //!  ──────────────────────────────────────────────────────────── (impl)
 //!   Δ; D ⊢ₖ T⟨τ̄⟩ ⇓ Impl(I, θᾱ, ε̄)
 //!
-//!   head(τ̄₀) = h      (ᾱ. I) ∈ D[S, h]      S ≠ T      S ⊴⁺ T
-//!   I.self ≐_ᾱ τ̄₀ ⇝ θ      Δ; D ⊢ₖ₋₁ S⟨θ I.args⟩ ⇓ ε₀
-//!   S⟨θ I.args⟩ ⇝* T⟨τ̄⟩ ∣ σ̄
-//!  ──────────────────────────────────────────────────────────── (super)
-//!   Δ; D ⊢ₖ T⟨τ̄⟩ ⇓ π(σ̄)(ε₀)
-//!
 //!  ──────────────────── (overflow)
 //!   Δ; D ⊢₀ G ⇓ ↯(G)
 //! ```
@@ -66,17 +60,14 @@
 //!   `D[T, h]` matches a given τ̄, so the first (impl) candidate whose match
 //!   succeeds is *the* candidate, and a failing where-premise is a hard
 //!   `⊥(θW′)` carrying the inner goal — never a cue to try the next
-//!   candidate. Only (super) probes restfully: a `⊥` sub-derivation moves
-//!   on to the next sub-impl, but `↯` aborts the whole search — a
-//!   depth-relative failure must not be relabeled "no impl".
+//!   candidate.
 //! * **Rule order.** A bare-generic self (no head) can only be proved by
 //!   (assume) — blanket impls are rejected, so no impl applies; `Hole` and
 //!   `Bottom` have no head and no rule, failing as `⊥(G)` (the fulfillment
-//!   caller defers holes before selecting). A ground-headed self tries
-//!   (impl) before (super). Assumptions scan in declaration order and
-//!   (super) candidates in impl-registration order; the first derivation
-//!   wins, and coherence makes (impl) itself order-independent — the scan
-//!   orders only pin the (assume)/(super) tie-breaks deterministically.
+//!   caller defers holes before selecting). A ground-headed self is
+//!   proved by (impl) alone: an impl of a sub-trait proves nothing about
+//!   the supertraits, which every impl must satisfy on its own. Assumptions
+//!   scan in declaration order and the first derivation wins.
 //! * **Memoization.** Derivations cache per session keyed on G — except
 //!   `↯`, which is relative to the depth it was probed at and would poison
 //!   shallower re-queries of the same goal.
@@ -159,8 +150,7 @@ impl<'a, 'tcx> SelectCtxt<'a, 'tcx> {
         result
     }
 
-    /// One derivation step: (assume) for a bare-generic self, else (impl)
-    /// then (super), in the committed order the module docs lay out.
+    /// One derivation step: (assume) for a bare-generic self, else (impl).
     fn select_uncached(
         &mut self,
         goal: &TraitRef<'tcx>,
@@ -225,49 +215,6 @@ impl<'a, 'tcx> SelectCtxt<'a, 'tcx> {
             });
         }
 
-        // Otherwise reach the goal through super-trait hops: an impl of a
-        // sub-trait for this head whose super-closure contains the goal.
-        // (This subsumes the old hard-coded class DAG: `i32 : Num` holds via
-        // `impl Integral for i32` and the `Integral: Num` edge.) Impls are
-        // scanned in registration order, so a (legal) diamond resolves
-        // deterministically to the earliest sub-impl.
-        for imp in db.impls() {
-            if imp.trait_ref.trait_id == goal.trait_id
-                || head_key(imp.self_ty) != Some(head)
-                || !db.implies(imp.trait_ref.trait_id, goal.trait_id)
-            {
-                continue;
-            }
-            let Some(binding) = match_impl(&imp.trait_ref.args[..1], &goal.args[..1], imp) else {
-                continue;
-            };
-            let subst: FxHashMap<GenericId, Ty<'tcx>> = imp
-                .generics
-                .iter()
-                .map(|&g| (g, resolve_binding(self.tcx.mk_generic(g), &binding)))
-                .collect();
-            let inst_ref = TraitRef {
-                trait_id: imp.trait_ref.trait_id,
-                args: imp
-                    .trait_ref
-                    .args
-                    .iter()
-                    .map(|&t| replace_generics(self.tcx, t, &subst))
-                    .collect(),
-            };
-            let base = match self.select_trait(&inst_ref, depth + 1) {
-                Ok(base) => base,
-                // Overflow is a hard stop, not a candidate that failed to
-                // apply — swallowing it would mislabel the result NoImpl
-                // (and poison the memo with a depth-relative failure).
-                Err(err @ SelectError::DepthLimit(_)) => return Err(err),
-                Err(SelectError::NoImpl(_)) => continue,
-            };
-            if let Some(ev) = self.project_super(&inst_ref, base, goal) {
-                return Ok(ev);
-            }
-        }
-
         Err(SelectError::NoImpl(goal.clone()))
     }
 
@@ -310,30 +257,20 @@ impl<'a, 'tcx> SelectCtxt<'a, 'tcx> {
         base: Evidence<'tcx>,
         goal: &TraitRef<'tcx>,
     ) -> Option<Evidence<'tcx>> {
-        let def = self.db.trait_def(base_ref.trait_id);
-        let mut map = FxHashMap::default();
-        map.insert(def.self_param, base_ref.args[0]);
-        for (&(_, p), &a) in def.params.iter().zip(base_ref.args.iter().skip(1)) {
-            map.insert(p, a);
-        }
-        def.supertraits.iter().enumerate().find_map(|(index, sup)| {
-            let sup_ref = TraitRef {
-                trait_id: sup.trait_id,
-                args: sup
-                    .args
-                    .iter()
-                    .map(|&t| replace_generics(self.tcx, t, &map))
-                    .collect(),
-            };
-            let step = Evidence::Super {
-                of: Box::new(base.clone()),
-                index,
-            };
-            if sup.trait_id == goal.trait_id && sup_ref.args == goal.args {
-                return Some(step);
-            }
-            self.project_super(&sup_ref, step, goal)
-        })
+        self.db
+            .supertrait_refs(self.tcx, base_ref)
+            .into_iter()
+            .enumerate()
+            .find_map(|(index, sup_ref)| {
+                let step = Evidence::Super {
+                    of: Box::new(base.clone()),
+                    index,
+                };
+                if sup_ref == *goal {
+                    return Some(step);
+                }
+                self.project_super(&sup_ref, step, goal)
+            })
     }
 }
 
@@ -418,11 +355,11 @@ mod tests {
             let i32 = tcx.mk_int(IntTy::Signed(32));
             let f32 = tcx.mk_fp(FpTy::Ieee(32));
 
-            // i32 is Integral directly, and Num through the super-trait edge.
+            // i32 is Integral and Num, each by its own impl.
             assert!(sel.select(&needs(b.integral, i32)).is_ok());
             assert!(sel.select(&needs(b.num, i32)).is_ok());
 
-            // f32 is FloatingPoint and (super) Num, but not Integral.
+            // f32 is FloatingPoint and Num, but not Integral.
             assert!(sel.select(&needs(b.floating_point, f32)).is_ok());
             assert!(sel.select(&needs(b.num, f32)).is_ok());
             assert!(sel.select(&needs(b.integral, f32)).is_err());
@@ -433,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn transitive_super_traits_build_a_full_evidence_chain() {
+    fn supertraits_follow_from_assumptions_not_from_sub_trait_impls() {
         with_tcx(|tcx: &TyCtxt| {
             // A 3-level chain: Sub : Mid : Top.
             let mut db = TraitDb::new();
@@ -449,12 +386,22 @@ mod tests {
             let unit = tcx.mk_unit();
             db.add_impl(impl_def(0, vec![], sub, unit, vec![]));
 
-            // `unit: Top` is two hops away (Sub -> Mid -> Top): the evidence must
-            // nest two `Super` projections over the `Sub` impl.
+            // The impl of `Sub` proves `Sub` alone.
             let mut sel = SelectCtxt::new(&db, tcx, &[]);
+            assert!(sel.select(&needs(sub, unit)).is_ok());
+            assert!(sel.select(&needs(top, unit)).is_err());
+
+            // `G: Sub` in scope reaches `Top` two hops up.
+            let key =
+                lasso::Rodeo::<reussir_syntax::kind::TokenKey>::new().get_or_intern_static("G");
+            let env = vec![crate::semi::ctxt::GenericInfo {
+                name: key,
+                bounds: vec![sub],
+            }];
+            let mut sel = SelectCtxt::new(&db, tcx, &env);
             let ev = sel
-                .select(&needs(top, unit))
-                .expect("unit: Top should hold");
+                .select(&needs(top, tcx.mk_generic(GenericId(0))))
+                .expect("G: Top should hold");
             match ev {
                 Evidence::Super {
                     of: outer,
@@ -464,7 +411,7 @@ mod tests {
                         of: inner,
                         index: 0,
                     } => {
-                        assert!(matches!(*inner, Evidence::Impl { .. }))
+                        assert!(matches!(*inner, Evidence::Param { .. }))
                     }
                     other => panic!("expected a nested Super, got {other:?}"),
                 },
