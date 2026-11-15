@@ -32,6 +32,17 @@ pub struct PendingObligation<'tcx> {
 #[derive(Default)]
 pub struct FulfillCtxt<'tcx> {
     pending: Vec<PendingObligation<'tcx>>,
+    /// Associated types whose trait reference still held an inference hole
+    /// where they were instantiated, each with the hole standing in for it.
+    pub(super) projections: Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)>,
+    /// Associated types that stand for no type, each with the reason, until
+    /// an expression gives a span to report them at.
+    pub(super) assoc_failures: Vec<(
+        crate::semi::ty::Ty<'tcx>,
+        crate::semi::traits::AssocError<'tcx>,
+    )>,
+    /// Those already reported in this function.
+    pub(super) reported_assoc: rustc_hash::FxHashSet<crate::semi::ty::Ty<'tcx>>,
     pub(super) shapes: super::shape_constraints::ShapeConstraints<'tcx>,
 }
 
@@ -57,6 +68,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut pending = Vec::new();
         loop {
             let revision = self.infer.progress();
+            self.solve_projections(None);
             self.resolve_shape_constraints(false);
             pending.append(&mut self.fulfill.pending);
             let mut progress = false;
@@ -93,6 +105,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let self_ty = self.infer.resolve(tref.self_ty());
             let mut holes = Vec::new();
             collect_holes(self_ty, &mut holes);
+            self.reported_holes.extend(holes);
+        }
+        // An associated type still waiting for its implementing type is
+        // stuck on a hole reported above or at zonk time.
+        for (_, hole) in std::mem::take(&mut self.fulfill.projections) {
+            let mut holes = Vec::new();
+            collect_holes(self.infer.resolve(hole), &mut holes);
             self.reported_holes.extend(holes);
         }
     }
@@ -307,7 +326,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
     match ty.kind() {
         TyKind::Hole(_) => true,
-        TyKind::Record { args, .. } => args.iter().any(|a| ty_has_hole(*a)),
+        TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
+            args.iter().any(|a| ty_has_hole(*a))
+        }
         TyKind::Closure { params, ret } => {
             params.iter().any(|p| ty_has_hole(*p)) || ty_has_hole(*ret)
         }
@@ -331,7 +352,9 @@ pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
 pub(super) fn collect_holes(ty: crate::semi::ty::Ty<'_>, out: &mut Vec<HoleId>) {
     match ty.kind() {
         TyKind::Hole(h) => out.push(*h),
-        TyKind::Record { args, .. } => args.iter().for_each(|a| collect_holes(*a, out)),
+        TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
+            args.iter().for_each(|a| collect_holes(*a, out))
+        }
         TyKind::Closure { params, ret } => {
             params.iter().for_each(|p| collect_holes(*p, out));
             collect_holes(*ret, out);

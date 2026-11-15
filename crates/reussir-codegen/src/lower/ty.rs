@@ -951,7 +951,9 @@ fn scalar_ty<'c>(context: &'c Context, ty: Ty<'_>) -> Result<Type<'c>> {
         // Intercepted by [`TypeCtx::mlir_ty`]; reaching here is a bug.
         TyKind::Closure { .. } => err("closure type reached scalar lowering without an rc wrapper"),
         TyKind::Bottom => err("bottom type reached lowering"),
-        TyKind::Generic(_) | TyKind::Hole(_) => err("non-ground type reached lowering"),
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => {
+            err("non-ground type reached lowering")
+        }
     }
 }
 

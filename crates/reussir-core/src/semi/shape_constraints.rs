@@ -409,7 +409,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             Constraint::RecursiveCall(call) => self.check_shape_call_contract(call),
             Constraint::Condition(ty) | Constraint::Relation(Relation::Condition { ty }) => {
                 if matches!(self.infer.resolve(*ty).kind(), TyKind::Tensor { elem, dims }
-                    if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
+                    if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_) | TyKind::Assoc { .. }))
                 {
                     return Ok(RuleStatus::Deferred);
                 }
@@ -572,12 +572,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .map(|((_, g), &t)| (*g, t)),
         );
         for ((_, parameter), argument) in proto.params.iter().zip(&call.args) {
-            self.infer
-                .unify_instantiated(*parameter, &inst, argument.ty)
+            self.unify_template(*parameter, &inst, argument.ty)
                 .map_err(|_| "recursive call violates its parameter type contract".to_owned())?;
         }
-        self.infer
-            .unify_instantiated(proto.return_ty, &inst, call.result)
+        self.unify_template(proto.return_ty, &inst, call.result)
             .map_err(|_| "recursive call violates its result type contract".to_owned())?;
         Ok(RuleStatus::Solved)
     }
@@ -621,7 +619,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
 fn has_generic(ty: Ty<'_>) -> bool {
     match ty.kind() {
-        TyKind::Generic(_) => true,
+        TyKind::Generic(_) | TyKind::Assoc { .. } => true,
         TyKind::Record { args, .. } | TyKind::Future(args) | TyKind::Tuple(args) => {
             args.iter().any(|&t| has_generic(t))
         }

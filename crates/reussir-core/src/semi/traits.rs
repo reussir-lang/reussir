@@ -18,7 +18,7 @@ pub mod select;
 pub mod subst;
 pub mod sync;
 
-pub use db::{AssocConstError, SelectError, TraitDb};
+pub use db::{AssocError, AssocTy, SelectError, TraitDb};
 pub use def::{AssocConstDef, AssocTyDef, ImplDef, MethodSig, TraitDef};
 pub use select::{ParamEnv, SELECT_DEPTH_LIMIT, SelectCtxt};
 
@@ -79,4 +79,15 @@ pub enum Evidence<'tcx> {
         of: Box<Evidence<'tcx>>,
         index: usize,
     },
+}
+
+impl Evidence<'_> {
+    /// Whether the proof starts from a bound in scope rather than an impl.
+    pub fn is_assumed(&self) -> bool {
+        match self {
+            Evidence::Param { .. } => true,
+            Evidence::Super { of, .. } => of.is_assumed(),
+            Evidence::Impl { .. } => false,
+        }
+    }
 }

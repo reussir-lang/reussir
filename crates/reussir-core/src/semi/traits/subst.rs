@@ -14,32 +14,55 @@ pub fn replace_generics<'tcx>(
     ty: Ty<'tcx>,
     map: &FxHashMap<GenericId, Ty<'tcx>>,
 ) -> Ty<'tcx> {
+    rebuild(tcx, ty, &mut |g| map.get(&g).copied(), &mut |assoc| assoc)
+}
+
+/// Rebuild `ty` bottom-up: a type parameter becomes `generic(g)` when that
+/// is `Some`, and an associated type, once its arguments are rebuilt,
+/// becomes `assoc(it)`.
+pub fn rebuild<'tcx>(
+    tcx: &TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    generic: &mut impl FnMut(GenericId) -> Option<Ty<'tcx>>,
+    assoc: &mut impl FnMut(Ty<'tcx>) -> Ty<'tcx>,
+) -> Ty<'tcx> {
     match *ty.kind() {
-        TyKind::Generic(g) => map.get(&g).copied().unwrap_or(ty),
+        TyKind::Generic(g) => generic(g).unwrap_or(ty),
+        TyKind::Assoc {
+            trait_def,
+            name,
+            args,
+        } => {
+            let new: Vec<Ty> = args
+                .iter()
+                .map(|&a| rebuild(tcx, a, generic, assoc))
+                .collect();
+            assoc(tcx.mk_assoc(trait_def, name, &new))
+        }
         TyKind::Nullable(inner) => {
-            let n = replace_generics(tcx, inner, map);
+            let n = rebuild(tcx, inner, generic, assoc);
             if n == inner { ty } else { tcx.mk_nullable(n) }
         }
         TyKind::Arc(inner) => {
-            let n = replace_generics(tcx, inner, map);
+            let n = rebuild(tcx, inner, generic, assoc);
             if n == inner { ty } else { tcx.mk_arc(n) }
         }
         TyKind::ConstSeq(elem) => {
-            let n = replace_generics(tcx, elem, map);
+            let n = rebuild(tcx, elem, generic, assoc);
             if n == elem { ty } else { tcx.mk_const_seq(n) }
         }
         TyKind::Ptr { space, kind } => {
-            let n = replace_generics(tcx, space, map);
+            let n = rebuild(tcx, space, generic, assoc);
             if n == space { ty } else { tcx.mk_ptr(n, kind) }
         }
         TyKind::Cell { elem, kind } => {
-            let n = replace_generics(tcx, elem, map);
+            let n = rebuild(tcx, elem, generic, assoc);
             if n == elem { ty } else { tcx.mk_cell(n, kind) }
         }
         TyKind::Record { def, args, flex } => {
             let new: Vec<Ty> = args
                 .iter()
-                .map(|&a| replace_generics(tcx, a, map))
+                .map(|&a| rebuild(tcx, a, generic, assoc))
                 .collect();
             if new.iter().zip(args.iter()).all(|(a, b)| a == b) {
                 ty
@@ -50,9 +73,9 @@ pub fn replace_generics<'tcx>(
         TyKind::Closure { params, ret } => {
             let new: Vec<Ty> = params
                 .iter()
-                .map(|&p| replace_generics(tcx, p, map))
+                .map(|&p| rebuild(tcx, p, generic, assoc))
                 .collect();
-            let r = replace_generics(tcx, ret, map);
+            let r = rebuild(tcx, ret, generic, assoc);
             if r == ret && new.iter().zip(params.iter()).all(|(a, b)| a == b) {
                 ty
             } else {
@@ -64,27 +87,27 @@ pub fn replace_generics<'tcx>(
             dims,
             placement,
         } => {
-            let elem = replace_generics(tcx, elem, map);
-            let placement = Some(replace_generics(tcx, placement, map));
+            let elem = rebuild(tcx, elem, generic, assoc);
+            let placement = Some(rebuild(tcx, placement, generic, assoc));
             tcx.mk_devarray(elem, dims, placement)
         }
         TyKind::Tuple(fields) => tcx.mk_tuple(
             &fields
                 .iter()
-                .map(|&t| replace_generics(tcx, t, map))
+                .map(|&t| rebuild(tcx, t, generic, assoc))
                 .collect::<Vec<_>>(),
         ),
         TyKind::Future(ps) => tcx.mk_future(
             &ps.iter()
-                .map(|&p| replace_generics(tcx, p, map))
+                .map(|&p| rebuild(tcx, p, generic, assoc))
                 .collect::<Vec<_>>(),
         ),
         TyKind::Tensor { elem, dims } => {
-            let elem = replace_generics(tcx, elem, map);
+            let elem = rebuild(tcx, elem, generic, assoc);
             tcx.mk_tensor(elem, dims)
         }
         TyKind::Array { elem, dims } => {
-            let n = replace_generics(tcx, elem, map);
+            let n = rebuild(tcx, elem, generic, assoc);
             if n == elem { ty } else { tcx.mk_array(n, dims) }
         }
         _ => ty,
@@ -92,6 +115,8 @@ pub fn replace_generics<'tcx>(
 }
 
 /// Collect every generic occurring in `ty` — the E0207 constrainedness walk.
+/// An associated type's arguments do not count: naming `T::Name` does not
+/// determine `T`.
 pub fn collect_generics_of(ty: Ty<'_>, out: &mut rustc_hash::FxHashSet<GenericId>) {
     match *ty.kind() {
         TyKind::Generic(g) => {

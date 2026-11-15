@@ -207,7 +207,7 @@ SealedAttr: () = "#" "[" "sealed" "]" => ();
 TraitDecl: raw::TraitItem =
     <lang:LangAttr?> <sealed:SealedAttr?> <p:"pub"?> "trait" "#" <path:QPath> <generics:Generics>
     <supers:(":" <CommaPlus<SuperRef>>)?>
-    <loc:ItemLoc?> "{" <consts:TraitConstSig*> <methods:TraitMethodSig*> "}"
+    <loc:ItemLoc?> "{" <types:TraitTypeSig*> <consts:TraitConstSig*> <methods:TraitMethodSig*> "}"
     => raw::TraitItem {
         lang,
         sealed: sealed.is_some(),
@@ -215,6 +215,7 @@ TraitDecl: raw::TraitItem =
         path,
         generics,
         supers: supers.unwrap_or_default(),
+        types,
         consts,
         methods,
         file: loc.map(|l| l.0),
@@ -240,6 +241,12 @@ TraitMethodSig: raw::TraitMethodItem =
         span: sp,
     };
 
+/// An associated type declaration, `type Name;`, or with a default,
+/// `type Name = ty;`.
+TraitTypeSig: raw::TraitTypeItem =
+    "type" <name:DebugName> <default:("=" <Ty>)?> <sp:Span?> ";"
+    => raw::TraitTypeItem { name: name.into(), default, span: sp };
+
 /// An associated const declaration, `const NAME : ty;`, or with a default
 /// value, `const NAME : ty = value;`.
 TraitConstSig: raw::TraitConstItem =
@@ -256,16 +263,17 @@ RecvForm: raw::RecvForm = {
 
 /// An impl item: the trait reference carries its full argument list
 /// (args[0] is the self type), and the body lists the impl's associated
-/// const values by name, then its method definitions by qualified path in
-/// trait-method order — the functions themselves serialize as ordinary
-/// items.
+/// type bindings and const values by name, then its method definitions by
+/// qualified path in trait-method order — the functions themselves
+/// serialize as ordinary items.
 ImplDecl: raw::ImplItem =
     "impl" <generics:Generics?> "#" <tr:PathArgs> <loc:ItemLoc?>
-    "{" <consts:ImplConstValue*> <methods:Comma<MethodRef>> "}"
+    "{" <types:ImplTypeBinding*> <consts:ImplConstValue*> <methods:Comma<MethodRef>> "}"
     => raw::ImplItem {
         generics: generics.unwrap_or_default(),
         trait_path: tr.0,
         args: tr.1,
+        types,
         consts,
         methods,
         file: loc.map(|l| l.0),
@@ -273,6 +281,10 @@ ImplDecl: raw::ImplItem =
     };
 
 MethodRef: String = "#" <p:QPath> => p;
+
+/// An associated type binding, `type Name = ty;`.
+ImplTypeBinding: (String, raw::Ty) =
+    "type" <name:DebugName> "=" <ty:Ty> ";" => (name.into(), ty);
 
 /// An associated const value: `const NAME = 4;`, for a sequence
 /// `const NAME = ConstSeq[1, 2] : ConstSeq<i64>;`, and for a record value
@@ -384,6 +396,7 @@ Name: &'input str = {
     "trait" => "trait",
     "impl" => "impl",
     "const" => "const",
+    "type" => "type",
     "transform" => "transform",
     "transform_anchor" => "transform_anchor",
     "import" => "import",
@@ -479,6 +492,8 @@ Ty: raw::Ty = {
     "char" => raw::Ty::Char,
     "!" => raw::Ty::Bottom,
     <g:"generic"> => raw::Ty::Generic(g),
+    "trait" "#" <path:PathArgs> "#" <name:DebugName>
+        => raw::Ty::Assoc { path: path.0, args: path.1, name: name.into() },
     "Nullable" "<" <t:Ty> ">" => raw::Ty::Nullable(Box::new(t)),
     "Cell" "<" <t:Ty> ">" => raw::Ty::Cell { inner: Box::new(t), kind: CellKind::Plain },
     "RefCell" "<" <t:Ty> ">" => raw::Ty::Cell { inner: Box::new(t), kind: CellKind::Exclusive },
@@ -780,6 +795,7 @@ extern {
         "trait" => Token::Trait,
         "lang" => Token::Lang,
         "sealed" => Token::Sealed,
+        "type" => Token::Type,
         "impl" => Token::Impl,
         "const" => Token::Const,
         "transform_anchor" => Token::TransformAnchor,

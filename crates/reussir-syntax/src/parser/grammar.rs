@@ -130,7 +130,7 @@ impl Parser<'_> {
         self.at_ctx_kw("trait") && self.nth(1).is_ident_like() && self.nth(1) != AsKw
     }
 
-    /// `trait Name generics? (':' path ('+' path)*)? '{' (trait-method | trait-const)* '}'`.
+    /// `trait Name generics? (':' path ('+' path)*)? '{' (trait-method | trait-const | trait-type)* '}'`.
     /// Supertraits are bare `+`-separated paths; methods are signatures only.
     fn trait_stmt(&mut self, m: Marker) {
         self.bump(); // the `trait` ident
@@ -151,12 +151,18 @@ impl Parser<'_> {
             if self.at_assoc_const() {
                 let member = self.start();
                 self.assoc_const(member, false);
+            } else if self.at_assoc_type() {
+                let member = self.start();
+                self.assoc_type(member, false);
             } else if self.at(Pound) || self.at(RegionalKw) || self.at(FnKw) {
                 let member = self.start();
                 self.attrs_opt();
                 if self.at_assoc_const() {
                     self.error("attributes are not allowed on an associated const");
                     self.assoc_const(member, false);
+                } else if self.at_assoc_type() {
+                    self.error("attributes are not allowed on an associated type");
+                    self.assoc_type(member, false);
                 } else {
                     self.trait_method(member);
                 }
@@ -165,7 +171,7 @@ impl Parser<'_> {
                 // trait members take the trait's visibility.
                 let e = self.start();
                 self.error(format!(
-                    "expected `fn`, `regional fn`, or `const` in a `trait` body, found {}",
+                    "expected `fn`, `regional fn`, `const`, or `type` in a `trait` body, found {}",
                     self.current().describe()
                 ));
                 while !self.at_eof()
@@ -174,6 +180,7 @@ impl Parser<'_> {
                     && !self.at(RegionalKw)
                     && !self.at(FnKw)
                     && !self.at_assoc_const()
+                    && !self.at_assoc_type()
                 {
                     self.bump();
                 }
@@ -267,6 +274,7 @@ impl Parser<'_> {
                 || self.at(RegionalKw)
                 || self.at(FnKw)
                 || self.at_assoc_const()
+                || self.at_assoc_type()
             {
                 let member = self.start();
                 let attributed = self.at(Pound);
@@ -279,11 +287,16 @@ impl Parser<'_> {
                         self.error("attributes are not allowed on an associated const");
                     }
                     self.assoc_const(member, true);
+                } else if self.at_assoc_type() {
+                    if attributed {
+                        self.error("attributes are not allowed on an associated type");
+                    }
+                    self.assoc_type(member, true);
                 } else if self.at(RegionalKw) || self.at(FnKw) {
                     self.fn_stmt(member);
                 } else {
                     self.error(format!(
-                        "expected `fn`, `regional fn`, or `const` after visibility, found {}",
+                        "expected `fn`, `regional fn`, `const`, or `type` after visibility, found {}",
                         self.current().describe()
                     ));
                     member.complete(self, ErrorNode);
@@ -293,7 +306,7 @@ impl Parser<'_> {
                 // member (or the closing brace) under an error node.
                 let e = self.start();
                 self.error(format!(
-                    "expected `pub`, `fn`, `regional fn`, or `const` in an `impl` block, found {}",
+                    "expected `pub`, `fn`, `regional fn`, `const`, or `type` in an `impl` block, found {}",
                     self.current().describe()
                 ));
                 while !self.at_eof()
@@ -303,6 +316,7 @@ impl Parser<'_> {
                     && !self.at(RegionalKw)
                     && !self.at(FnKw)
                     && !self.at_assoc_const()
+                    && !self.at_assoc_type()
                 {
                     self.bump();
                 }
@@ -339,6 +353,28 @@ impl Parser<'_> {
         }
         self.expect(Semicolon);
         m.complete(self, ConstStmt);
+    }
+
+    /// `type` is contextual, as `const` is: it heads an associated type
+    /// member only when the type's name follows.
+    fn at_assoc_type(&self) -> bool {
+        self.at_ctx_kw("type") && self.nth(1).is_ident_like()
+    }
+
+    /// An associated type member, completing an `AssocTypeStmt`: a trait
+    /// declares `type Name;`, optionally with a default (`= Type`), and an
+    /// impl binds `type Name = Type;`.
+    fn assoc_type(&mut self, m: Marker, in_impl: bool) {
+        self.bump(); // the `type` ident
+        self.expect_ident("an associated type name");
+        if self.at(Eq) {
+            self.bump();
+            self.type_();
+        } else if in_impl {
+            self.error("expected `=` and a type for an associated type in an `impl` block");
+        }
+        self.expect(Semicolon);
+        m.complete(self, AssocTypeStmt);
     }
 
     /// `transform [{ opaque MLIR }];`.

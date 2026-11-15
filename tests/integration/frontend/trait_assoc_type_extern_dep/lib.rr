@@ -1,0 +1,24 @@
+// The dependency behind trait_assoc_type_extern.rr: a pub trait with
+// associated types, one of them defaulted, an impl binding one, and a pub
+// generic whose signature names one through a bound.
+
+pub trait Shift {
+    type Amount = Self;
+    type Wide;
+    fn shl(self: Self, amount: Self::Amount) -> Self;
+    fn widen(self: Self) -> Self::Wide;
+}
+
+pub struct Base {
+    pub v: i64,
+}
+
+impl Shift for Base {
+    type Wide = i64;
+    fn shl(self: Base, amount: Base) -> Base { Base { v: self.v << amount.v } }
+    fn widen(self: Base) -> i64 { self.v }
+}
+
+pub fn shift<T: Shift>(a: T, n: T::Amount) -> T {
+    a.shl(n)
+}

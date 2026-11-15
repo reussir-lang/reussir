@@ -83,8 +83,10 @@ fn equal<'tcx>(i: &mut InferCtxt<'_, 'tcx>, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<
     // assignable inference variables. Concrete disagreements are still errors.
     let left = i.shallow_resolve(a);
     let right = i.shallow_resolve(b);
-    if (matches!(left.kind(), TyKind::Generic(_)) && !matches!(right.kind(), TyKind::Hole(_)))
-        || (matches!(right.kind(), TyKind::Generic(_)) && !matches!(left.kind(), TyKind::Hole(_)))
+    if (matches!(left.kind(), TyKind::Generic(_) | TyKind::Assoc { .. })
+        && !matches!(right.kind(), TyKind::Hole(_)))
+        || (matches!(right.kind(), TyKind::Generic(_) | TyKind::Assoc { .. })
+            && !matches!(left.kind(), TyKind::Hole(_)))
     {
         return Ok(());
     }
@@ -115,8 +117,10 @@ fn tensor<'tcx>(
 ) -> Result<Option<TensorView<'tcx>>, RuleError> {
     let resolved = i.shallow_resolve(t);
     // A rigid whole-shape formal has no rank until the summary is instantiated.
-    if matches!(resolved.kind(), TyKind::Generic(_) | TyKind::Bottom)
-        || matches!(resolved.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
+    if matches!(
+        resolved.kind(),
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Bottom
+    ) || matches!(resolved.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_) | TyKind::Assoc { .. }))
     {
         return Ok(None);
     }
@@ -140,7 +144,7 @@ fn array<'tcx>(
         return Ok(Some(view));
     }
     match i.shallow_resolve(t).kind() {
-        TyKind::Generic(_) | TyKind::Bottom => Ok(None),
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Bottom => Ok(None),
         TyKind::Hole(_) => {
             let elem = i.new_hole_ty();
             let shape = i.new_shape();
@@ -265,7 +269,7 @@ fn scalar_element<'tcx>(
     arg: &Argument<'tcx>,
 ) -> Result<Option<Ty<'tcx>>, RuleError> {
     let resolved = i.shallow_resolve(arg.ty);
-    if matches!(resolved.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
+    if matches!(resolved.kind(), TyKind::Tensor { elem, dims } if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_) | TyKind::Assoc { .. }))
     {
         return Ok(None);
     }
@@ -289,7 +293,7 @@ fn scalar_element<'tcx>(
         {
             Ok(Some(ty))
         }
-        TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Bottom => Ok(None),
+        TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Bottom => Ok(None),
         _ => Err(RuleError::ExpectedScalar),
     }
 }
@@ -315,7 +319,7 @@ fn fields<'tcx>(
         TyKind::Tuple(fields) => Ok(Some(
             fields.iter().copied().map(Argument::unknown).collect(),
         )),
-        TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => Ok(None),
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) | TyKind::Bottom => Ok(None),
         _ => Err(RuleError::ExpectedTuple),
     }
 }
@@ -355,7 +359,7 @@ fn dynamic_shape<'tcx>(
 }
 fn open(t: Ty<'_>) -> bool {
     match t.kind() {
-        TyKind::Hole(_) | TyKind::Generic(_) => true,
+        TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Assoc { .. } => true,
         TyKind::Tensor { elem, .. } | TyKind::Array { elem, .. } => open(*elem),
         TyKind::Future(ts) | TyKind::Tuple(ts) => ts.iter().any(|&t| open(t)),
         _ => false,
@@ -417,7 +421,9 @@ pub(super) fn apply<'tcx>(
             match i.shallow_resolve(args[0].ty).kind() {
                 TyKind::Future(payload) if payload.len() == 1 => equal(i, result, payload[0])?,
                 TyKind::Hole(_) => equal(i, args[0].ty, tcx.mk_future(&[result]))?,
-                TyKind::Generic(_) | TyKind::Bottom => status = RuleStatus::Deferred,
+                TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Bottom => {
+                    status = RuleStatus::Deferred
+                }
                 _ => {
                     return Err(RuleError::ExpectedTensorFuture);
                 }

@@ -1,0 +1,105 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// A trait declares each associated type once, and a default may name the
+// trait's other associated types but not itself.
+// CHECK-DAG: trait `Twice` declares associated type `Item` more than once
+// CHECK-DAG: the default of associated type `Wide` names itself
+// CHECK-DAG: the default of associated type `Narrow` names itself
+// CHECK-DAG: no associated type `Missing` on `Self`
+pub trait Twice {
+    type Item;
+    type Item;
+}
+
+pub trait Cyclic {
+    type Wide = Self::Narrow;
+    type Narrow = Self::Wide;
+    type Other = Self::Missing;
+}
+
+pub trait Shift {
+    type Amount;
+    fn shl(self: Self, amount: Self::Amount) -> Self;
+}
+
+pub trait Scale {
+    type Amount;
+}
+
+pub struct A { v: i64 }
+pub struct B { v: i64 }
+pub struct C { v: i64 }
+pub struct D { v: i64 }
+pub struct W<T> { v: T }
+
+// An impl binds every associated type without a default exactly once,
+// nothing the trait does not declare, and its methods take the bound type.
+// CHECK-DAG: impl of trait `Shift` for `A` is missing associated type(s) `Amount`
+impl Shift for A {
+    fn shl(self: A, amount: i64) -> A { self }
+}
+
+// CHECK-DAG: associated type `Amount` is bound more than once
+// CHECK-DAG: `Extra` is not an associated type of trait `Shift`
+impl Shift for B {
+    type Amount = i64;
+    type Amount = i32;
+    type Extra = i64;
+    fn shl(self: B, amount: i64) -> B { self }
+}
+
+// CHECK-DAG: parameter 1 of method `shl` has type `i32` but trait `Shift` requires `i64`
+impl Shift for C {
+    type Amount = i64;
+    fn shl(self: C, amount: i32) -> C { self }
+}
+
+// CHECK-DAG: visibility is not allowed on a trait impl type; the trait's visibility applies
+impl Shift for D {
+    pub type Amount = i64;
+    fn shl(self: D, amount: i64) -> D { self }
+}
+
+// CHECK-DAG: an associated type cannot appear in the trait reference or the self type of an `impl`
+impl<T: Shift> Scale for W<T::Amount> {
+    type Amount = T;
+}
+
+// CHECK-DAG: associated type `Inherent` must be declared by a trait; an inherent `impl` cannot bind types
+impl A {
+    type Inherent = i64;
+}
+
+// `T::Name` needs exactly one bound of `T` that declares `Name`.
+// CHECK-DAG: no associated type `Amount` on `T`: no bound of `T` declares it
+fn unbounded<T>(a: T, n: T::Amount) -> T { a }
+// CHECK-DAG: multiple bounds of `T` declare associated type `Amount`: `Shift` and `Scale`
+fn ambiguous<T: Shift + Scale>(a: T, n: T::Amount) -> T { a }
+// CHECK-DAG: an associated type takes no type arguments
+fn applied<T: Shift>(a: T, n: T::Amount<i64>) -> T { a }
+
+// Nothing is known about an associated type of a type parameter.
+// CHECK-DAG: `T::Amount` does not implement `Add`
+fn doubled<T: Shift>(a: T, n: T::Amount) -> T::Amount { n + n }
+
+fn shift<T: Shift>(a: T, n: T::Amount) -> T { a.shl(n) }
+
+// At a call the associated type is the one the argument's impl binds.
+// CHECK-DAG: type mismatch: expected `i64`, found `i32`
+pub fn narrow() -> i64 {
+    let n: i32 = 1;
+    shift(D { v: 1 }, n).v
+}
+
+// A sub-trait's impl satisfies a bound on the supertrait but binds none of
+// the supertrait's types.
+// CHECK-DAG: `E::Amount` names no type: its trait is implemented only through a sub-trait
+pub trait Rotate: Shift { }
+pub struct E { v: i64 }
+impl Rotate for E { }
+
+fn amount<T: Shift>(a: T, n: T::Amount) -> T::Amount { n }
+
+pub fn indirect(a: E, b: E) -> E {
+    amount(a, b)
+}

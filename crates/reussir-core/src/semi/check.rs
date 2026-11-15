@@ -56,6 +56,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // Body type annotations in an impl member resolve `Self` to the
         // target; `enter_function` cleared the previous item's alias.
         self.self_alias = proto.self_ty;
+        self.self_assoc_tys.clone_from(&proto.self_assoc_tys);
         // A `[regional]` function body runs inside an implicit region: its
         // parameters may already be flex and it may construct regional records
         // directly, so the body is checked with the region context active.
@@ -137,7 +138,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if callee_kernel
             && matches!(
                 self.infer.resolve(result).kind(),
-                TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom
+                TyKind::Tensor { .. }
+                    | TyKind::Generic(_)
+                    | TyKind::Assoc { .. }
+                    | TyKind::Hole(_)
+                    | TyKind::Bottom
             )
         {
             return true;
@@ -159,6 +164,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         ty: Ty<'tcx>,
         span: Option<Span>,
     ) -> Expr<'tcx> {
+        // The operands of this node are typed, which may have settled the
+        // self type an associated type was waiting for.
+        self.solve_projections(span);
         let id = self.fresh_expr_id();
         self.register_expression_relations(&kind, ty, span, id);
         Expr { kind, ty, span, id }
@@ -1210,7 +1218,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         _ => unreachable!(),
                     };
                     let result = if matches!(ty.kind(), TyKind::Tensor { elem, dims }
-                        if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_)))
+                        if dims.is_empty() && matches!(elem.kind(), TyKind::Generic(_) | TyKind::Assoc { .. }))
                     {
                         // A rigid whole-shape parameter is not a scalar dtype.
                         // Its result relation is instantiated at ordinary calls.
@@ -1663,17 +1671,17 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ),
             );
         }
-        let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        let result = self.instantiate_ty(proto.return_ty, &inst);
         if let Some(expected) = expected {
             self.expect(result, expected, span);
         }
         let mut args = Vec::new();
         for (arg, (_, pty)) in fc.args.iter().zip(&proto.params) {
-            let expected = self.infer.instantiate_ty(*pty, &inst);
+            let expected = self.instantiate_ty(*pty, &inst);
             args.push(self.check_expr(arg, expected));
         }
         let ty_args = self.inst_args(&proto.generics, &inst);
-        let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        let result = self.instantiate_ty(proto.return_ty, &inst);
         if !self.check_kernel_call(proto.is_kernel, result, span) {
             return self.poison(span);
         }
@@ -1741,9 +1749,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             None => self.tcx.mk(TyKind::DefaultPlacement),
         };
         let placement_ok = match placement.kind() {
-            TyKind::DefaultPlacement | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => {
-                true
-            }
+            TyKind::DefaultPlacement
+            | TyKind::Generic(_)
+            | TyKind::Assoc { .. }
+            | TyKind::Hole(_)
+            | TyKind::Bottom => true,
             TyKind::Record { def, .. } => {
                 self.records.get(def).is_some_and(|r| r.placement.is_some())
             }
@@ -1808,13 +1818,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut args = Vec::new();
         for (arg, (_, param)) in fc.args.iter().zip(&proto.params) {
             let arg = self.infer_expr(arg);
-            let expected = self.infer.instantiate_ty(*param, &inst);
+            let expected = self.instantiate_ty(*param, &inst);
             if let Some(actual) = self.launch_argument_type(arg.ty, expected, span) {
                 self.expect(actual, expected, arg.span);
             }
             args.push(arg);
         }
-        let result = self.infer.instantiate_ty(proto.return_ty, &inst);
+        let result = self.instantiate_ty(proto.return_ty, &inst);
         let result = self.infer.resolve(result);
         let TyKind::Tensor { elem, dims } = *result.kind() else {
             self.error(span, "launch requires exactly one Tensor result");
@@ -2247,7 +2257,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, "cannot call a regional function outside of a region");
         }
         let inst = self.instantiate(&proto.generics, &[], span);
-        let expected_recv = self.infer.instantiate_ty(color(proto.params[0].1), &inst);
+        let expected_recv = self.instantiate_ty(color(proto.params[0].1), &inst);
         self.expect(receiver.ty, expected_recv, span);
         let rest = &proto.params[1..];
         if args.len() < rest.len() {
@@ -2272,11 +2282,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let mut out = vec![receiver];
         for (arg, (_, pty)) in args.iter().zip(rest) {
-            let expected = self.infer.instantiate_ty(color(*pty), &inst);
+            let expected = self.instantiate_ty(color(*pty), &inst);
             out.push(self.check_expr(arg, expected));
         }
         let ty_args = self.inst_args(&proto.generics, &inst);
-        let result = self.infer.instantiate_ty(color(proto.return_ty), &inst);
+        let result = self.instantiate_ty(color(proto.return_ty), &inst);
         if !self.check_kernel_call(proto.is_kernel, result, span) {
             return self.poison(span);
         }
@@ -2383,7 +2393,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Dot candidates for a bare-generic receiver: declaring traits
     /// reachable from the generic's bounds — a bound's super-traits
     /// dispatch too (`T: Integral` reaches a method `Num` declares).
-    fn generic_trait_candidates(
+    pub(super) fn generic_trait_candidates(
         &self,
         g: GenericId,
         member: impl Fn(&TraitDef<'tcx>) -> Option<usize>,
@@ -2790,7 +2800,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let mut inst = self.instantiate(&sig.generics, &[], span);
         inst.insert(self_param, self_ty);
-        let expected_recv = self.infer.instantiate_ty(sig.params[0], &inst);
+        let expected_recv = self.instantiate_ty(sig.params[0], &inst);
         self.expect(receiver.ty, expected_recv, span);
         let rest = &sig.params[1..];
         if args.len() != rest.len() {
@@ -2806,14 +2816,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let out: Vec<Expr<'tcx>> = std::iter::once(receiver)
             .chain(args.iter().zip(rest).map(|(arg, &pty)| {
-                let expected = self.infer.instantiate_ty(pty, &inst);
+                let expected = self.instantiate_ty(pty, &inst);
                 self.check_expr(arg, expected)
             }))
             .collect();
         let ty_args: Vec<Ty<'tcx>> = std::iter::once(self_ty)
             .chain(self.inst_args(&sig.generics, &inst))
             .collect();
-        let result = self.infer.instantiate_ty(sig.ret, &inst);
+        let result = self.instantiate_ty(sig.ret, &inst);
         self.mk_expr(
             ExprKind::TraitCall {
                 trait_def: trait_def_id,
@@ -2990,14 +3000,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .iter()
             .zip(&sig.params)
             .map(|(arg, &pty)| {
-                let expected = self.infer.instantiate_ty(pty, &inst);
+                let expected = self.instantiate_ty(pty, &inst);
                 self.check_expr(arg, expected)
             })
             .collect();
         let ty_args: Vec<Ty<'tcx>> = std::iter::once(self_ty)
             .chain(self.inst_args(&sig.generics, &inst))
             .collect();
-        let result = self.infer.instantiate_ty(sig.ret, &inst);
+        let result = self.instantiate_ty(sig.ret, &inst);
         // The bound obligation is what turns an unimplemented `Self` into a
         // real diagnostic (and constrains a hole `Self` like any bound).
         self.register_bound(tid, self_ty, span);
@@ -3226,14 +3236,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut params = Vec::with_capacity(proto.params.len());
         let mut args = Vec::with_capacity(proto.params.len());
         for (name, pty) in &proto.params {
-            let ty = self.infer.instantiate_ty(*pty, inst);
+            let ty = self.instantiate_ty(*pty, inst);
             let var = self.vars.fresh(*name, ty, span);
             params.push((var, ty));
             args.push(self.mk_expr(ExprKind::Var(var), ty, span));
         }
         self.vars.restore(mark);
         let ty_args = self.inst_args(&proto.generics, inst);
-        let ret = self.infer.instantiate_ty(proto.return_ty, inst);
+        let ret = self.instantiate_ty(proto.return_ty, inst);
         let body = self.mk_expr(
             ExprKind::FuncCall {
                 target: def,
@@ -3270,7 +3280,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let result = self.infer.resolve(body.ty);
         if !matches!(
             result.kind(),
-            TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Hole(_)
+            TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
         ) {
             self.error(span, "an async block must return exactly one Tensor");
         }
@@ -4721,6 +4731,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         let valid = match *p.kind() {
                             TyKind::DefaultPlacement
                             | TyKind::Generic(_)
+                            | TyKind::Assoc { .. }
                             | TyKind::Hole(_)
                             | TyKind::Bottom => true,
                             TyKind::Record { def, args, .. } => {
@@ -5093,7 +5104,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let resolved = self.infer.shallow_resolve(int);
         if !matches!(
             resolved.kind(),
-            TyKind::BigInt(_) | TyKind::Hole(_) | TyKind::Generic(_)
+            TyKind::BigInt(_) | TyKind::Hole(_) | TyKind::Generic(_) | TyKind::Assoc { .. }
         ) {
             self.error(
                 span,
@@ -6141,7 +6152,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let payload_tys: Vec<Ty<'tcx>> = payload
             .iter()
             .map(|t| {
-                let t = self.infer.instantiate_ty(*t, &inst);
+                let t = self.instantiate_ty(*t, &inst);
                 if arc {
                     self.arc_promote_member_ty(&group, t)
                 } else {
@@ -6374,7 +6385,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         base_flex: Flexivity,
         inst: &Instantiation<'tcx>,
     ) -> Ty<'tcx> {
-        let ty = self.infer.instantiate_ty(decl_ty, inst);
+        let ty = self.instantiate_ty(decl_ty, inst);
         if is_field {
             self.field_link_ty(ty, base_flex)
         } else {
@@ -6483,6 +6494,126 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         Instantiation::from_pairs(pairs)
     }
 
+    /// A definition's type at a use site: its generics replaced by `inst`,
+    /// then its associated types replaced by what they stand for there.
+    pub(super) fn instantiate_ty(
+        &mut self,
+        template: Ty<'tcx>,
+        inst: &Instantiation<'tcx>,
+    ) -> Ty<'tcx> {
+        let ty = self.infer.instantiate_ty(template, inst);
+        self.normalize(ty)
+    }
+
+    /// Unify a definition's type, read through `inst`, with `ambient`.
+    pub(super) fn unify_template(
+        &mut self,
+        template: Ty<'tcx>,
+        inst: &Instantiation<'tcx>,
+        ambient: Ty<'tcx>,
+    ) -> Result<(), crate::semi::infer::Mismatch<'tcx>> {
+        if crate::semi::ty::mentions_assoc(template) {
+            let template = self.instantiate_ty(template, inst);
+            return self.infer.unify(template, ambient);
+        }
+        self.infer.unify_instantiated(template, inst, ambient)
+    }
+
+    /// Replace each associated type in `ty` by the type it stands for. One
+    /// whose trait reference still holds an inference hole becomes a fresh
+    /// hole, solved once the reference is known
+    /// ([`Self::solve_projections`]); one that only a bound in scope proves
+    /// stays as written.
+    pub(super) fn normalize(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
+        if !crate::semi::ty::mentions_assoc(ty) {
+            return ty;
+        }
+        let ty = self.infer.resolve(ty);
+        let mut deferred = Vec::new();
+        let mut failed = None;
+        let tcx = self.tcx;
+        let (infer, traits, generics) = (&mut self.infer, &self.traits, &self.generics);
+        let ty = crate::semi::traits::subst::rebuild(tcx, ty, &mut |_| None, &mut |assoc| {
+            if ty_has_hole(assoc) {
+                let hole = infer.new_hole_ty();
+                deferred.push((assoc, hole));
+                return hole;
+            }
+            traits
+                .normalize(tcx, generics, assoc)
+                .unwrap_or_else(|error| {
+                    failed.get_or_insert(error);
+                    tcx.mk(TyKind::Bottom)
+                })
+        });
+        self.fulfill.projections.extend(deferred);
+        if let Some(failure) = failed
+            && self.fulfill.reported_assoc.insert(failure.0)
+        {
+            self.fulfill.assoc_failures.push(failure);
+        }
+        ty
+    }
+
+    /// Solve the associated types [`Self::normalize`] deferred whose trait
+    /// references are known by now; `span` is blamed where one turns out
+    /// not to be the type it was used as.
+    pub(super) fn solve_projections(&mut self, span: Option<Span>) {
+        self.report_assoc_failures(span);
+        while self
+            .fulfill
+            .projections
+            .iter()
+            .any(|&(assoc, _)| !ty_has_hole(self.infer.resolve(assoc)))
+        {
+            for (assoc, hole) in std::mem::take(&mut self.fulfill.projections) {
+                let assoc = self.infer.resolve(assoc);
+                if ty_has_hole(assoc) {
+                    self.fulfill.projections.push((assoc, hole));
+                    continue;
+                }
+                let ty = self.normalize(assoc);
+                if matches!(ty.kind(), TyKind::Bottom) {
+                    // Already reported; the hole has nothing left to infer.
+                    let mut holes = Vec::new();
+                    collect_holes(self.infer.resolve(hole), &mut holes);
+                    self.reported_holes.extend(holes);
+                }
+                if self.infer.unify(hole, ty).is_err() {
+                    let found = self.infer.resolve(hole);
+                    self.error(
+                        span,
+                        format!(
+                            "type mismatch: expected `{}`, found `{}`",
+                            self.ty_display(ty),
+                            self.ty_display(found)
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Report, at `span`, the associated types [`Self::normalize`] found to
+    /// stand for no type. A missing impl is not reported: the bound that
+    /// requires it is checked where the type parameter is instantiated.
+    fn report_assoc_failures(&mut self, span: Option<Span>) {
+        use crate::semi::traits::{AssocError, SelectError};
+        for (assoc, error) in std::mem::take(&mut self.fulfill.assoc_failures) {
+            let message = match error {
+                AssocError::Select(SelectError::NoImpl(_)) => continue,
+                AssocError::Select(SelectError::DepthLimit(goal)) => {
+                    self.depth_limit_message(&goal)
+                }
+                AssocError::Undeclared | AssocError::Indirect => format!(
+                    "`{}` names no type: its trait is implemented only through a sub-trait",
+                    self.ty_display(assoc)
+                ),
+            };
+            self.error(span, message);
+        }
+    }
+
     fn inst_args(
         &mut self,
         generics: &[(TokenKey, GenericId)],
@@ -6548,6 +6679,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// (the expression the type belongs to). See [`Elaborator::zonk_expr`].
     fn zonk_ty(&mut self, ty: Ty<'tcx>, span: Option<Span>) -> Ty<'tcx> {
         let ty = self.infer.resolve(ty);
+        let ty = self.normalize(ty);
+        self.report_assoc_failures(span);
         if ty_has_hole(ty) {
             let mut holes = Vec::new();
             collect_holes(ty, &mut holes);

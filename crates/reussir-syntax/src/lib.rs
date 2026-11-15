@@ -1075,6 +1075,62 @@ mod tests {
     }
 
     #[test]
+    fn assoc_types_encode_in_traits_and_impls() {
+        let json = json_of(
+            "trait Shift { type Amount; type Wide = Self; fn shl(self: Self, n: Self::Amount) -> Self; }
+             impl Shift for Big {
+                 type Amount = i64;
+                 fn shl(self: Self, n: i64) -> Self { self }
+             }",
+        );
+        let decl = &unwrap_span(&json[0])["contents"];
+        let types = decl["traitTypes"].as_array().expect("trait types");
+        assert_eq!(types.len(), 2);
+        assert_eq!(types[0]["spanValue"]["typeName"], "Amount");
+        assert!(types[0]["spanValue"]["typeValue"].is_null());
+        assert_eq!(types[1]["spanValue"]["typeName"], "Wide");
+        assert!(!types[1]["spanValue"]["typeValue"].is_null());
+        assert_eq!(decl["traitMembers"].as_array().expect("members").len(), 1);
+
+        let block = &unwrap_span(&json[1])["contents"];
+        let types = block["implTypes"].as_array().expect("impl types");
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0]["spanValue"]["typeName"], "Amount");
+        assert!(!types[0]["spanValue"]["typeValue"].is_null());
+        assert_eq!(block["implMembers"].as_array().expect("members").len(), 1);
+    }
+
+    #[test]
+    fn assoc_type_missing_binding_and_attributes_are_rejected() {
+        for (source, message) in [
+            (
+                "impl T for P { type N; fn ok(self: Self) -> i64 { 1 } }",
+                "expected `=` and a type",
+            ),
+            (
+                "impl T for P { #[inline] type N = i64; }",
+                "attributes are not allowed on an associated type",
+            ),
+        ] {
+            let parse = super::parse(source);
+            assert!(
+                parse.errors.iter().any(|e| e.message.contains(message)),
+                "{source}: {:#?}",
+                parse.errors
+            );
+            assert_eq!(parse.root.text(), source);
+            // Recovery keeps the type and the member after it.
+            let item = parse.root.children().next().expect("item");
+            assert!(
+                item.children()
+                    .any(|n| n.kind() == SyntaxKind::AssocTypeStmt)
+            );
+        }
+        // `type` stays an ordinary name wherever no member can start.
+        assert!(super::parse("fn type(type: i64) -> i64 { type }").ok());
+    }
+
+    #[test]
     fn assoc_const_missing_initializer_and_attributes_are_rejected() {
         for (source, message) in [
             (

@@ -44,9 +44,18 @@ pub struct TraitItem {
     /// Super-trait references: qualified path + full argument list
     /// (`args[0]` = `Self`).
     pub supers: Vec<(String, Vec<Ty>)>,
+    pub types: Vec<TraitTypeItem>,
     pub consts: Vec<TraitConstItem>,
     pub methods: Vec<TraitMethodItem>,
     pub file: Option<u32>,
+    pub span: Option<Span>,
+}
+
+/// An associated type declaration.
+#[derive(Clone, Debug)]
+pub struct TraitTypeItem {
+    pub name: String,
+    pub default: Option<Ty>,
     pub span: Option<Span>,
 }
 
@@ -107,6 +116,7 @@ pub struct ImplItem {
     pub generics: Vec<Generic>,
     pub trait_path: String,
     pub args: Vec<Ty>,
+    pub types: Vec<(String, Ty)>,
     pub consts: Vec<(String, ConstValue)>,
     pub methods: Vec<String>,
     pub file: Option<u32>,
@@ -331,6 +341,13 @@ pub enum Ty {
     Unit,
     Bottom,
     Generic(u32),
+    /// An associated type: the trait's qualified path and full argument
+    /// list (`args[0]` is the implementing type), then the type's name.
+    Assoc {
+        path: String,
+        args: Vec<Ty>,
+        name: String,
+    },
     Nullable(Box<Ty>),
     ConstSeq(Box<Ty>),
     BigInt(crate::semi::ty::BigIntTy),

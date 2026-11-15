@@ -215,6 +215,14 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     flex: *flex,
                 })
             }
+            TyKind::Assoc {
+                trait_def,
+                name,
+                args,
+            } => {
+                let resolved: Vec<Ty<'tcx>> = args.iter().map(|a| self.resolve(*a)).collect();
+                self.tcx.mk_assoc(*trait_def, *name, &resolved)
+            }
             TyKind::Closure { params, ret } => {
                 let resolved: Vec<Ty<'tcx>> = params.iter().map(|p| self.resolve(*p)).collect();
                 let ret = self.resolve(*ret);
@@ -410,6 +418,23 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             | (TyKind::Char, TyKind::Char)
             | (TyKind::Unit, TyKind::Unit) => Ok(()),
             (TyKind::Generic(x), TyKind::Generic(y)) if x == y => Ok(()),
+            (
+                TyKind::Assoc {
+                    trait_def: t1,
+                    name: n1,
+                    args: xs,
+                },
+                TyKind::Assoc {
+                    trait_def: t2,
+                    name: n2,
+                    args: ys,
+                },
+            ) if t1 == t2 && n1 == n2 && xs.len() == ys.len() => {
+                for (&x, &y) in xs.iter().zip(ys.iter()) {
+                    self.unify(x, y)?;
+                }
+                Ok(())
+            }
 
             (TyKind::Bottom, _) | (_, TyKind::Bottom) => Ok(()),
 
@@ -447,7 +472,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         }
         match self.shallow_resolve(ty).kind() {
             TyKind::Hole(h2) => self.table.find(key(h)) == self.table.find(key(*h2)),
-            TyKind::Record { args, .. } => {
+            TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
                 for a in args.iter() {
                     if self.occurs(h, *a) {
                         return true;
@@ -584,7 +609,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         let template = self.shallow_resolve(template);
         if matches!(
             template.kind(),
-            TyKind::Tensor { .. } | TyKind::DevArray { .. } | TyKind::Array { .. }
+            TyKind::Tensor { .. }
+                | TyKind::DevArray { .. }
+                | TyKind::Array { .. }
+                | TyKind::Assoc { .. }
         ) {
             let template = self.materialize(template, inst);
             return self.unify(template, ambient);
@@ -691,6 +719,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     args: self.tcx.intern_tys(&built),
                     flex: *flex,
                 })
+            }
+            TyKind::Assoc {
+                trait_def,
+                name,
+                args,
+            } => {
+                let built: Vec<Ty<'tcx>> =
+                    args.iter().map(|a| self.materialize(*a, inst)).collect();
+                self.tcx.mk_assoc(*trait_def, *name, &built)
             }
             TyKind::Closure { params, ret } => {
                 let built: Vec<Ty<'tcx>> =

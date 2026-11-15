@@ -367,9 +367,18 @@ pub struct TraitText<'tcx> {
     pub generics: Vec<(GenericId, Option<String>)>,
     /// Super-references: rendered path + full args (`args[0]` = `Self`).
     pub supers: Vec<(String, Vec<Ty<'tcx>>)>,
+    pub types: Vec<TraitTypeText<'tcx>>,
     pub consts: Vec<TraitConstText<'tcx>>,
     pub methods: Vec<TraitMethodText<'tcx>>,
     pub file: FileId,
+    pub span: Option<Span>,
+}
+
+/// An associated type declaration in print-ready form.
+#[derive(Clone, Debug)]
+pub struct TraitTypeText<'tcx> {
+    pub name: String,
+    pub default: Option<Ty<'tcx>>,
     pub span: Option<Span>,
 }
 
@@ -397,8 +406,9 @@ pub struct TraitMethodText<'tcx> {
 }
 
 /// An impl item in print-ready form: trait path + full args
-/// (`args[0]` = the self type), the associated const values the impl defines
-/// by name in trait-const order, and method paths in trait-method order.
+/// (`args[0]` = the self type), the associated types the impl binds and the
+/// associated const values it defines, by name in trait order, and method
+/// paths in trait-method order.
 #[derive(Clone, Debug)]
 pub struct ImplText<'tcx> {
     /// The implemented trait's def (identity only, like [`TraitText::def`]).
@@ -406,6 +416,7 @@ pub struct ImplText<'tcx> {
     pub generics: Vec<(GenericId, Option<String>)>,
     pub trait_path: String,
     pub args: Vec<Ty<'tcx>>,
+    pub types: Vec<(String, Ty<'tcx>)>,
     pub consts: Vec<(String, crate::semi::const_eval::ConstValue<'tcx>)>,
     pub methods: Vec<String>,
     pub file: FileId,
@@ -430,6 +441,26 @@ impl<'tcx> ImplText<'tcx> {
             .iter()
             .map(|d| match keys.iter().position(|&k| k == d.name) {
                 Some(at) => Some(Some(self.consts[at].1.clone())),
+                None => d.default.is_some().then_some(None),
+            })
+            .collect()
+    }
+
+    /// The type bindings in the order of the trait's declarations `decls`,
+    /// as [`ImplDef::assoc_tys`] stores them; the counterpart of
+    /// [`Self::assoc_consts_in_order`].
+    ///
+    /// [`ImplDef::assoc_tys`]: crate::semi::traits::ImplDef::assoc_tys
+    pub fn assoc_tys_in_order(
+        &self,
+        decls: &[crate::semi::traits::AssocTyDef<'tcx>],
+        mut key: impl FnMut(&str) -> TokenKey,
+    ) -> Option<Vec<Option<Ty<'tcx>>>> {
+        let keys: Vec<TokenKey> = self.types.iter().map(|(name, _)| key(name)).collect();
+        decls
+            .iter()
+            .map(|d| match keys.iter().position(|&k| k == d.name) {
+                Some(at) => Some(Some(self.types[at].1)),
                 None => d.default.is_some().then_some(None),
             })
             .collect()
@@ -480,6 +511,15 @@ pub fn trait_texts<'tcx>(
                 .iter()
                 .map(|s| (path_of(db.trait_def(s.trait_id).def), s.args.clone()))
                 .collect(),
+            types: t
+                .assoc_tys
+                .iter()
+                .map(|a| TraitTypeText {
+                    name: resolver.resolve(a.name).to_string(),
+                    default: a.default,
+                    span: a.span,
+                })
+                .collect(),
             consts: t
                 .assoc_consts
                 .iter()
@@ -525,6 +565,13 @@ pub fn trait_texts<'tcx>(
             generics: imp.generics.iter().map(|&g| (g, None)).collect(),
             trait_path: path_of(db.trait_def(imp.trait_ref.trait_id).def),
             args: imp.trait_ref.args.clone(),
+            types: db
+                .trait_def(imp.trait_ref.trait_id)
+                .assoc_tys
+                .iter()
+                .zip(&imp.assoc_tys)
+                .filter_map(|(a, ty)| Some((resolver.resolve(a.name).to_string(), (*ty)?)))
+                .collect(),
             consts: db
                 .trait_def(imp.trait_ref.trait_id)
                 .assoc_consts

@@ -64,6 +64,8 @@ pub enum Token<'a> {
     Impl,
     #[token("const")]
     Const,
+    #[token("type")]
+    Type,
     #[token("transform_anchor")]
     TransformAnchor,
     #[token("interface")]

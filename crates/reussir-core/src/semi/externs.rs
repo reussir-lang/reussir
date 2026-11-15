@@ -26,9 +26,9 @@ use crate::semi::ctxt::{Elaborator, FuncProto, Record, RecordFields, Variant};
 use crate::semi::hir::build::Parsed;
 use crate::semi::hir::{ClosureExpr, DecisionTree, Expr, ExprKind, Function, SwitchCases};
 use crate::semi::resolve::DefKind;
-use crate::semi::traits::AssocConstDef;
 use crate::semi::traits::coherence::{alpha_renaming, head_key, unify_args};
 use crate::semi::traits::def::MethodSig;
+use crate::semi::traits::{AssocConstDef, AssocTyDef};
 use crate::semi::traits::{ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef};
 use crate::semi::ty::{DefId, GenericId, Ty, TyCtxt, TyKind};
 
@@ -232,6 +232,15 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 keys: &keys,
                 generics: &ids,
             };
+            let assoc_tys: Vec<AssocTyDef<'tcx>> = t
+                .types
+                .iter()
+                .map(|a| AssocTyDef {
+                    name: interner.get_or_intern(&a.name),
+                    default: a.default.map(|ty| remap.ty(ty)),
+                    span: a.span,
+                })
+                .collect();
             let assoc_consts: Vec<AssocConstDef<'tcx>> = t
                 .consts
                 .iter()
@@ -245,6 +254,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
             let def = self.traits.trait_def_mut(id);
             def.supertraits = supertraits;
             def.methods = methods;
+            def.assoc_tys = assoc_tys;
             def.assoc_consts = assoc_consts;
         }
 
@@ -340,6 +350,27 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 );
                 continue;
             };
+            let Some(assoc_tys) = i
+                .assoc_tys_in_order(&self.traits.trait_def(tid).assoc_tys, |n| {
+                    interner.get_or_intern(n)
+                })
+                .map(|tys| {
+                    tys.iter()
+                        .map(|ty| ty.map(|ty| remap.ty(ty)))
+                        .collect::<Vec<_>>()
+                })
+            else {
+                self.error(
+                    None,
+                    format!(
+                        "package `{}` ships an impl of `{}` without all of its \
+                         associated types; the dependency set is inconsistent",
+                        ext.name,
+                        self.trait_display(tid)
+                    ),
+                );
+                continue;
+            };
             let head = head_key(self_ty).expect("shipped impls have ground heads");
             // A method-less impl has no method defs to identify it, so a
             // re-ship is recognized by an alpha-equivalent head with the same
@@ -416,6 +447,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 where_clauses,
                 methods,
                 assoc_consts,
+                assoc_tys,
                 span: i.span,
                 file: file_of(i.file),
             });
@@ -477,6 +509,7 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                 return_ty: function.return_ty,
                 impl_module: None,
                 self_ty: None,
+                self_assoc_tys: Vec::new(),
                 is_regional: function.is_regional,
                 is_kernel: function.is_kernel,
                 span: function.span,
@@ -657,6 +690,15 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
                 self.tcx.mk_record(self.def(def), &args, flex)
             }
             TyKind::Generic(g) => self.tcx.mk_generic(self.generic(g)),
+            TyKind::Assoc {
+                trait_def,
+                name,
+                args,
+            } => {
+                let args: Vec<Ty<'tcx>> = args.iter().map(|&a| self.ty(a)).collect();
+                self.tcx
+                    .mk_assoc(self.def(trait_def), self.key(name), &args)
+            }
             TyKind::Nullable(inner) => {
                 let inner = self.ty(inner);
                 self.tcx.mk_nullable(inner)

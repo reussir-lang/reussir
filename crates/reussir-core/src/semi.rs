@@ -2276,7 +2276,7 @@ mod tests {
     fn assoc_const_lookup_selects_the_impl_value() {
         use crate::literal::Integer;
         use crate::semi::const_eval::{ConstScalar, ConstValue};
-        use crate::semi::traits::{AssocConstError, SelectError, TraitId};
+        use crate::semi::traits::{AssocError, SelectError, TraitId};
         check(
             "pub trait Shape { const SIDES: i64; const ROUND: bool; const DIMS: ConstSeq<u8>; }\n\
              pub struct Square { pub x: i64 }\n\
@@ -2325,13 +2325,13 @@ mod tests {
                 );
                 assert!(matches!(
                     value(record("Line"), sides),
-                    Err(AssocConstError::Select(SelectError::NoImpl(_)))
+                    Err(AssocError::Select(SelectError::NoImpl(_)))
                 ));
                 // The trait's own name is no const of it.
                 let undeclared = elab.defs.path(tdef.def).name();
                 assert_eq!(
                     value(record("Square"), undeclared),
-                    Err(AssocConstError::Undeclared)
+                    Err(AssocError::Undeclared)
                 );
                 // Both spellings defer to monomorphization.
                 for (function, name) in [("concrete", sides), ("generic", round)] {
@@ -3708,9 +3708,48 @@ mod tests {
 
     /// The builtin-impl special form is fenced: reserved to lang-bound
     /// traits of the declaring package (an ordinary local trait takes the
+    /// A builtin impl has no method bodies, but it binds the trait's
+    /// associated types: by name, or by taking the trait's default.
+    #[test]
+    fn builtin_impl_binds_associated_types() {
+        with_tcx(|tcx| {
+            let interner = std::sync::Arc::new(reussir_syntax::new_threaded_interner());
+            let src = r#"
+                #[lang("partial_eq")]
+                pub trait PartialEq {
+                    type Rhs = Self;
+                    fn eq(self: Self, other: Self) -> bool;
+                }
+                impl PartialEq for u8 { }
+                impl PartialEq for u16 { type Rhs = u8; }
+                fn rhs<T: PartialEq>(a: T, b: T::Rhs) -> T::Rhs { b }
+                pub fn defaulted(a: u8) -> u8 { rhs(a, a) }
+                pub fn bound(a: u16, b: u8) -> u8 { rhs(a, b) }
+            "#;
+            let parse = reussir_syntax::parse_with_interner(src, interner.clone());
+            assert!(parse.ok(), "parse errors: {:#?}", parse.errors);
+            let prog = surface::program(&parse.root);
+            let elab = elaborate(tcx, &prog, &interner);
+            assert!(elab.reports.is_empty(), "{:#?}", elab.reports);
+            let bindings: Vec<_> = elab
+                .traits
+                .impls()
+                .filter(|i| i.span.is_some())
+                .map(|i| (i.self_ty, i.assoc_tys.clone()))
+                .collect();
+            let (u8_ty, u16_ty) = (
+                tcx.mk_int(IntTy::Unsigned(8)),
+                tcx.mk_int(IntTy::Unsigned(16)),
+            );
+            assert_eq!(bindings, [(u8_ty, vec![None]), (u16_ty, vec![Some(u8_ty)])]);
+        });
+    }
+
+    /// The builtin-impl special form is fenced: reserved to lang-bound
+    /// traits of the declaring package (an ordinary local trait takes the
     /// general impl path instead, so an empty body reports the missing
-    /// members), body must be empty, duplicates conflict — and a former
-    /// anchor is a declaration site, not a constructible struct.
+    /// members), the body binds associated types only, duplicates conflict —
+    /// and a former anchor is a declaration site, not a constructible struct.
     #[test]
     fn builtin_impl_and_anchor_matrix() {
         with_tcx(|tcx| {

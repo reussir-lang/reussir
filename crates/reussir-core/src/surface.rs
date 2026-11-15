@@ -1146,6 +1146,8 @@ pub struct TraitDecl {
     pub members: Vec<Spanned<Function>>,
     /// Associated const declarations; `value` is the default value, if any.
     pub consts: Vec<Spanned<AssocConst>>,
+    /// Associated type declarations; `ty` is the default, if any.
+    pub types: Vec<Spanned<AssocType>>,
 }
 
 /// An associated const member: `const NAME: Type;` or `const NAME: Type =
@@ -1159,6 +1161,17 @@ pub struct AssocConst {
     pub name: TokenKey,
     pub ty: Type,
     pub value: Option<Expr>,
+}
+
+/// An associated type member: `type Name;` or `type Name = Default;` in a
+/// trait, `type Name = Type;` in an impl. The parser rejects a missing impl
+/// binding, so `ty` is always `Some` in an impl.
+#[derive(Clone, Debug)]
+pub struct AssocType {
+    /// As for [`AssocConst::visibility`].
+    pub visibility: Visibility,
+    pub name: TokenKey,
+    pub ty: Option<Type>,
 }
 
 /// A trait reference in the surface syntax: a qualified path plus its type
@@ -1191,6 +1204,7 @@ pub struct ImplBlock {
     pub target_args: SmallVec<[Type; 2]>,
     pub members: Vec<Spanned<Function>>,
     pub consts: Vec<Spanned<AssocConst>>,
+    pub types: Vec<Spanned<AssocType>>,
 }
 
 /// A statement (a view over a top-level item node).
@@ -1426,6 +1440,7 @@ fn impl_of(node: &ResolvedNode) -> ImplBlock {
         target_args,
         members,
         consts: assoc_consts_of(node),
+        types: assoc_types_of(node),
     }
 }
 
@@ -1447,6 +1462,20 @@ fn assoc_consts_of(node: &ResolvedNode) -> Vec<Spanned<AssocConst>> {
         .collect()
 }
 
+fn assoc_types_of(node: &ResolvedNode) -> Vec<Spanned<AssocType>> {
+    nodes(node)
+        .filter(|n| n.kind() == AssocTypeStmt)
+        .map(|t| {
+            let member = AssocType {
+                visibility: visibility_of(t),
+                name: key(name_after_text(t, "type")),
+                ty: nodes(t).find(|n| is_type_kind(n.kind())).map(Type::new),
+            };
+            spanned(t, member)
+        })
+        .collect()
+}
+
 fn trait_of(node: &ResolvedNode) -> TraitDecl {
     TraitDecl {
         visibility: visibility_of(node),
@@ -1464,6 +1493,7 @@ fn trait_of(node: &ResolvedNode) -> TraitDecl {
             .map(|f| spanned(f, function_of(f)))
             .collect(),
         consts: assoc_consts_of(node),
+        types: assoc_types_of(node),
     }
 }
 
@@ -1772,6 +1802,40 @@ mod tests {
         assert_eq!(resolver.resolve(ib.target.basename), "Vec");
         assert_eq!(ib.target_args.len(), 1);
         assert_eq!(ib.members.len(), 1);
+    }
+
+    #[test]
+    fn assoc_types_project_beside_methods() {
+        let parse = parse(
+            "trait Shift { type Amount; type Wide = Self; fn shl(self: Self, n: Self::Amount) -> Self; }
+             impl Shift for Big { type Amount = i64; fn shl(self: Self, n: i64) -> Self { self } }",
+        );
+        let prog = program(&parse.root);
+        let resolver = parse.resolver();
+        let StmtKind::Trait(decl) = prog[0].kind() else {
+            panic!("expected a trait declaration");
+        };
+        assert_eq!(decl.members.len(), 1);
+        let [declared, defaulted] = decl.types.as_slice() else {
+            panic!("expected two trait types");
+        };
+        assert_eq!(resolver.resolve(declared.value.name), "Amount");
+        assert!(declared.value.ty.is_none());
+        assert_eq!(resolver.resolve(defaulted.value.name), "Wide");
+        assert!(defaulted.value.ty.is_some());
+
+        let StmtKind::Impl(ib) = prog[1].kind() else {
+            panic!("expected an impl block");
+        };
+        assert_eq!(ib.members.len(), 1);
+        let [bound] = ib.types.as_slice() else {
+            panic!("expected one impl type");
+        };
+        assert_eq!(resolver.resolve(bound.value.name), "Amount");
+        assert!(matches!(
+            bound.value.ty.as_ref().expect("binding").kind(),
+            TypeKind::TypeIntegral(IntegralType::Signed(64))
+        ));
     }
 
     #[test]

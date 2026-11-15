@@ -188,6 +188,7 @@ fn classify_reussir(token: &ResolvedToken) -> Option<(SemanticKind, u32)> {
             }
             K::TraitStmt if contextual_name_after(parent, token, "trait") => Some(S::Interface),
             K::ConstStmt if contextual_name_after(parent, token, "const") => Some(S::Variable),
+            K::AssocTypeStmt if contextual_name_after(parent, token, "type") => Some(S::Type),
             K::WhileBinding if first_ident(parent, token) => Some(S::Variable),
             K::LetExpr if name_after(parent, token, |candidate| candidate.kind() == K::LetKw) => {
                 Some(S::Variable)
@@ -221,6 +222,9 @@ fn classify_reussir(token: &ResolvedToken) -> Option<(SemanticKind, u32)> {
                 && first_ident(parent, token)
             || parent.kind() == K::ImplStmt && matches!(token.text(), "impl" | "for")
             || parent.kind() == K::ConstStmt && token.text() == "const"
+            || parent.kind() == K::AssocTypeStmt
+                && token.text() == "type"
+                && first_ident(parent, token)
             || parent.kind() == K::ExternTrampolineStmt && token.text() == "trampoline"
         {
             return Some((S::Keyword, 0));

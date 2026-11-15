@@ -446,6 +446,7 @@ impl Render<'_> {
             }
             // A ground MIR carries no generics or holes; render defensively.
             TyKind::Generic(g) => text(format!("<generic {}>", g.0)),
+            TyKind::Assoc { .. } => text("<associated type>"),
             TyKind::Hole(h) => text(format!("<hole {}>", h.0)),
         }
     }

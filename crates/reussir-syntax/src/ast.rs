@@ -382,6 +382,7 @@ impl Emitter<'_> {
                 "implTarget": self.type_(target),
                 "implMembers": members,
                 "implConsts": self.assoc_consts(node),
+                "implTypes": self.assoc_types(node),
             }),
         )
     }
@@ -411,6 +412,28 @@ impl Emitter<'_> {
             .collect()
     }
 
+    /// The `type Name (= Type)?;` members of a trait or impl body, each
+    /// spanned; `typeValue` is `null` for a trait type without a default.
+    fn assoc_types(&self, node: &ResolvedNode) -> Value {
+        nodes(node)
+            .filter(|n| n.kind() == AssocTypeStmt)
+            .map(|t| {
+                let name = name_after_text(t, "type");
+                let value = nodes(t)
+                    .find(|n| is_type_kind(n.kind()))
+                    .map(|ty| self.type_(ty));
+                self.with_node_span(
+                    t,
+                    json!({
+                        "typeVisibility": self.visibility(t),
+                        "typeName": name.text(),
+                        "typeValue": value,
+                    }),
+                )
+            })
+            .collect()
+    }
+
     fn trait_stmt(&self, node: &ResolvedNode) -> Value {
         let name = name_after_text(node, "trait");
         // Supertrait references are path types, emitted exactly like the
@@ -432,6 +455,7 @@ impl Emitter<'_> {
                 "traitSupers": supers,
                 "traitMembers": members,
                 "traitConsts": self.assoc_consts(node),
+                "traitTypes": self.assoc_types(node),
             }),
         )
     }
