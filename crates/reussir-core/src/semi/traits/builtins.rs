@@ -13,10 +13,11 @@
 //! └── FloatingPoint (impl: f16..f8)
 //! ```
 //!
-//! Each operator but the shifts has its own class, whose method the
-//! operator is sugar for: `Num` is a subclass of `Add Sub Mul Div Rem`,
-//! `Integral` also of `BitAnd BitOr BitXor`, and `bool` is the one member of
-//! `Not`. `Neg` is apart from `Num`, which has members without negatives.
+//! Each operator has a class whose method it is sugar for: `Num` is a
+//! subclass of `Add Sub Mul Div Rem`, `Integral` also of `BitAnd BitOr
+//! BitXor Shift`, and `bool` is the one member of `Not`. `Neg` is apart from
+//! `Num`, which has members without negatives. `Shift` covers both `<<` and
+//! `>>`, and its `Amount` is the type of the shift amount.
 //!
 //! [`TraitDef`]: super::TraitDef
 //! [`ImplDef`]: super::ImplDef
@@ -74,13 +75,20 @@ builtin_traits! {
     trait Not {
         fn not(self: Self) -> Self;
     }
+    /// The left operands of `<<` and `>>`; `Amount` is the type of the
+    /// right one.
+    #[sealed]
+    trait Shift {
+        type Amount = Self;
+        fn shl(self: Self, amount: Self::Amount) -> Self;
+        fn shr(self: Self, amount: Self::Amount) -> Self;
+    }
     /// The root numeric class: arithmetic and numeric literals.
     #[sealed]
     trait Num: Add + Sub + Mul + Div + Rem;
-    /// Whole-number types; `Num` through the super-trait edge. Shifts ask
-    /// for this class directly.
+    /// Whole-number types; `Num` through the super-trait edge.
     #[sealed]
-    trait Integral: Num + BitAnd + BitOr + BitXor;
+    trait Integral: Num + BitAnd + BitOr + BitXor + Shift;
     /// Floating-point types; `Num` through the super-trait edge.
     #[sealed]
     trait FloatingPoint: Num;
@@ -123,6 +131,7 @@ builtin_traits! {
     impl BitOr for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl BitXor for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl Not for bool;
+    impl Shift for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
 }
 
 #[cfg(test)]
@@ -150,24 +159,24 @@ mod tests {
                     b.addr_space
                 ],
                 [
-                    TraitId(10),
                     TraitId(11),
                     TraitId(12),
                     TraitId(13),
                     TraitId(14),
-                    TraitId(15)
+                    TraitId(15),
+                    TraitId(16)
                 ]
             );
             assert_eq!(Builtins::IDS.addr_space, b.addr_space);
-            assert_eq!(db.traits_len(), 16);
+            assert_eq!(db.traits_len(), 17);
             assert_eq!(
                 db.impls_len(),
-                137,
+                147,
                 "10 integral + 5 floating impls + 1 address space, 6 arithmetic \
-                 traits over the 15 numbers, 3 bitwise over the 10 integers, and \
-                 `bool : Not`"
+                 traits over the 15 numbers, 3 bitwise and `Shift` over the 10 \
+                 integers, and `bool : Not`"
             );
-            for i in 0..16u32 {
+            for i in 0..17u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);
             }
             assert!(
@@ -182,7 +191,10 @@ mod tests {
                     .collect()
             };
             assert_eq!(supers(b.num), [b.add, b.sub, b.mul, b.div, b.rem]);
-            assert_eq!(supers(b.integral), [b.num, b.bit_and, b.bit_or, b.bit_xor]);
+            assert_eq!(
+                supers(b.integral),
+                [b.num, b.bit_and, b.bit_or, b.bit_xor, b.shift]
+            );
             assert_eq!(supers(b.floating_point), [b.num]);
             assert!(supers(b.add).is_empty() && supers(b.sync).is_empty());
             // Each operator trait declares the method its operator is sugar
@@ -193,7 +205,23 @@ mod tests {
             };
             assert_eq!(params(b.add), [2]);
             assert_eq!(params(b.neg), [1]);
+            assert_eq!(params(b.shift), [2, 2]);
             assert!(params(b.num).is_empty());
+            // A shift amount has the left operand's type unless an impl
+            // says otherwise, and no impl of the table does.
+            let shift = db.trait_def(b.shift);
+            let amount = &shift.assoc_tys[0];
+            assert_eq!(amount.default, Some(tcx.mk_generic(shift.self_param)));
+            assert_eq!(shift.methods[0].params[1], shift.methods[1].params[1]);
+            assert!(matches!(
+                shift.methods[0].params[1].kind(),
+                crate::semi::ty::TyKind::Assoc { .. }
+            ));
+            assert!(
+                db.impls()
+                    .filter(|imp| imp.trait_ref.trait_id == b.shift)
+                    .all(|imp| imp.assoc_tys == [None])
+            );
         });
     }
 }

@@ -76,6 +76,16 @@ pub trait Not {
     fn not(self: Self) -> Self;
 }
 
+/// `a << n` and `a >> n`. `Amount` is the type of `n`: the type of `a`, or
+/// `i64` where `a` is a `Nat` or an `Int`.
+#[lang("shift")]
+#[sealed]
+pub trait Shift {
+    type Amount = Self;
+    fn shl(self: Self, amount: Self::Amount) -> Self;
+    fn shr(self: Self, amount: Self::Amount) -> Self;
+}
+
 // The numbers: every integer and floating-point type, `Nat` and `Int`.
 
 impl Add for i8 { }
@@ -246,3 +256,19 @@ impl BitXor for Arc<Nat> { }
 impl BitXor for Arc<Int> { }
 
 impl Not for bool { }
+
+impl Shift for i8 { }
+impl Shift for i16 { }
+impl Shift for i32 { }
+impl Shift for i64 { }
+impl Shift for i128 { }
+impl Shift for u8 { }
+impl Shift for u16 { }
+impl Shift for u32 { }
+impl Shift for u64 { }
+impl Shift for u128 { }
+// A built-in integer shifts by a bit count.
+impl Shift for Nat { type Amount = i64; }
+impl Shift for Int { type Amount = i64; }
+impl Shift for Arc<Nat> { type Amount = i64; }
+impl Shift for Arc<Int> { type Amount = i64; }

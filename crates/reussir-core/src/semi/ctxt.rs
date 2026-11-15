@@ -586,9 +586,6 @@ pub struct Elaborator<'a, 'tcx> {
     /// rewrites resolve the active trait's method *by name*, so method
     /// order in `core`'s declarations is not a compiler contract.
     pub(super) cmp_method_names: [TokenKey; 6],
-    /// The method names of the operator traits, in
-    /// [`OperatorTrait::ALL`](crate::semi::lang::OperatorTrait::ALL) order.
-    pub(super) operator_method_names: [TokenKey; 10],
     pub(super) tuple_temp_name: TokenKey,
     pub inside_region: bool,
     pub inside_kernel: bool,
@@ -705,8 +702,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self_name,
             prelude_names,
             cmp_method_names,
-            operator_method_names: crate::semi::lang::OperatorTrait::ALL
-                .map(|op| interner.intern(op.method())),
             tuple_temp_name: interner.intern("_tuple"),
             inside_region: false,
             inside_kernel: false,

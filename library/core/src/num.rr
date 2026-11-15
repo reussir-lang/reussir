@@ -20,7 +20,7 @@ pub trait Signed: Num + Neg {}
 /// Whole numbers: `i8`…`i128`, `u8`…`u128`, `Nat`, and `Int`.
 #[lang("integral")]
 #[sealed]
-pub trait Integral: Num + BitAnd + BitOr + BitXor {}
+pub trait Integral: Num + BitAnd + BitOr + BitXor + Shift {}
 
 /// Floating-point scalars: `f16`, `f32`, `f64`, `bf16`, `f8`.
 #[lang("floating_point")]
