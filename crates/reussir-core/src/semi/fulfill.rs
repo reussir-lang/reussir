@@ -97,14 +97,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         self.resolve_shape_constraints(true);
         for p in pending {
-            self.error(p.span, "type annotations needed: cannot resolve a bound");
             // The unresolved bound is the root cause; suppress the zonk-time
-            // "cannot infer" report for the holes it is stuck on, so each
-            // hole yields exactly one diagnostic.
+            // "cannot infer" report for the holes it is stuck on, and the
+            // later bounds stuck on the same holes, so each hole yields
+            // exactly one diagnostic.
             let Obligation::Trait(tref) = &p.obligation;
             let self_ty = self.infer.resolve(tref.self_ty());
             let mut holes = Vec::new();
             collect_holes(self_ty, &mut holes);
+            if !holes.is_empty() && holes.iter().all(|h| self.reported_holes.contains(h)) {
+                continue;
+            }
+            self.error(p.span, "type annotations needed: cannot resolve a bound");
             self.reported_holes.extend(holes);
         }
         // An associated type still waiting for its implementing type is
