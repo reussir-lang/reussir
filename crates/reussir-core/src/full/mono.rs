@@ -1267,9 +1267,12 @@ enum TraitCallTarget<'tcx> {
         ty_args: &'tcx [Ty<'tcx>],
         regional: bool,
     },
-    /// A method-less compiler impl of an operator trait: the boolean
+    /// A method-less compiler impl of a comparison trait: the boolean
     /// comparison lowers straight to the intrinsic.
     Intrinsic(CmpOp),
+    /// A method-less compiler impl of an operator trait in `core::ops`: the
+    /// call is the built-in operation.
+    Operator(crate::semi::lang::OperatorTrait),
     /// `Ord::cmp` over a scalar: a synthesized three-way comparison
     /// returning `Ordering`.
     ThreeWay,
@@ -1933,6 +1936,11 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     // form — `core`'s source-declared scalar impls and the
                     // compiler's no-`core` fallback twins alike: the call
                     // lowers intrinsically instead of dispatching.
+                    if let Some(crate::semi::lang::LangItem::Operator(op)) =
+                        self.lang.get(&tdef.def)
+                    {
+                        return Some(TraitCallTarget::Operator(*op));
+                    }
                     if self
                         .lang
                         .get(&tdef.def)
@@ -2790,6 +2798,25 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                                 "an operator-trait method takes exactly a receiver and one operand",
                             );
                             M::Poison
+                        }
+                    }
+                    Some(TraitCallTarget::Operator(op)) => {
+                        if self.inside_kernel {
+                            self.error(span, "host trait operations are not allowed in a kernel");
+                            return M::Poison;
+                        }
+                        use crate::semi::lang::OperatorTrait;
+                        match (op.arith(), self.lower_slice(args, subst)) {
+                            (Some(arith), [l, r]) => M::Arith(l, arith, r),
+                            (None, [e]) if op == OperatorTrait::Neg => M::Negate(e),
+                            (None, [e]) => M::Not(e),
+                            _ => {
+                                self.error(
+                                    span,
+                                    "wrong number of operands to an operator-trait method",
+                                );
+                                M::Poison
+                            }
                         }
                     }
                     Some(TraitCallTarget::ThreeWay) => {

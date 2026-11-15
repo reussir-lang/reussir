@@ -202,8 +202,8 @@ impl FormerItem {
     }
 }
 
-/// The class of operands of one operator: what `a + b` asks of the type of
-/// `a`. Declared by `core::ops`, sealed, and wired like the numeric tower.
+/// The trait of one operator: `a + b` is a call of `Add::add`. Declared by
+/// `core::ops`, sealed, and wired like the numeric tower.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum OperatorTrait {
     Add,
@@ -252,6 +252,34 @@ impl OperatorTrait {
             OperatorTrait::Shr => "shr",
             OperatorTrait::Not => "not",
         }
+    }
+
+    /// The trait's method: `a + b` is `Add::add(a, b)`.
+    pub fn method(self) -> &'static str {
+        match self {
+            OperatorTrait::BitAnd => "bitand",
+            OperatorTrait::BitOr => "bitor",
+            OperatorTrait::BitXor => "bitxor",
+            _ => self.name(),
+        }
+    }
+
+    /// The built-in operation of a binary operator.
+    pub fn arith(self) -> Option<crate::semi::hir::ArithOp> {
+        use crate::semi::hir::ArithOp;
+        Some(match self {
+            OperatorTrait::Add => ArithOp::Add,
+            OperatorTrait::Sub => ArithOp::Sub,
+            OperatorTrait::Mul => ArithOp::Mul,
+            OperatorTrait::Div => ArithOp::Div,
+            OperatorTrait::Rem => ArithOp::Mod,
+            OperatorTrait::BitAnd => ArithOp::BitAnd,
+            OperatorTrait::BitOr => ArithOp::BitOr,
+            OperatorTrait::BitXor => ArithOp::BitXor,
+            OperatorTrait::Shl => ArithOp::Shl,
+            OperatorTrait::Shr => ArithOp::Shr,
+            OperatorTrait::Neg | OperatorTrait::Not => return None,
+        })
     }
 
     /// Whether the operator computes on numbers: every one but `!`.
