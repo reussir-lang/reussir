@@ -109,8 +109,15 @@ mod tests {
     use reussir_syntax::SharedInterner;
 
     use super::*;
+
     use crate::semi::ty::{Flexivity, IntTy, TyKind};
     use crate::with_tcx;
+
+    /// The operator classes `Num` inherits from.
+    const ARITHMETIC: [crate::semi::lang::OperatorTrait; 6] = {
+        use crate::semi::lang::OperatorTrait::*;
+        [Add, Sub, Mul, Div, Rem, Neg]
+    };
 
     #[test]
     fn async_blocks_capture_kernel_values_and_check_single_payload_intrinsics() {
@@ -483,7 +490,11 @@ mod tests {
                 .iter()
                 .map(|s| s.trait_id)
                 .collect();
-            assert_eq!(num_supers, [po], "Num gains exactly the PartialOrd edge");
+            assert_eq!(
+                num_supers.split_last(),
+                Some((&po, &ARITHMETIC.map(|op| elab.lang.operator(op))[..])),
+                "Num gains exactly the PartialOrd edge"
+            );
             let count = |id| {
                 elab.traits
                     .impls()
@@ -639,7 +650,7 @@ mod tests {
             assert!(elab.try_extend(&broken).is_err());
             assert!(
                 elab.lang.get(LangItem::PartialEq).is_none()
-                    && elab.traits.trait_def(elab.lang.num).supertraits.is_empty(),
+                    && elab.traits.trait_def(elab.lang.num).supertraits.len() == ARITHMETIC.len(),
                 "a rejected batch retracts the tower and the edge"
             );
             let ok = batch("pub fn g(a: char, b: char) -> bool { a < b }", &interner);
@@ -647,7 +658,7 @@ mod tests {
             assert!(elab.lang.get(LangItem::Ord).is_some());
             assert_eq!(
                 elab.traits.trait_def(elab.lang.num).supertraits.len(),
-                1,
+                ARITHMETIC.len() + 1,
                 "the next batch re-ensures the edge exactly once"
             );
         });
@@ -3639,7 +3650,7 @@ mod tests {
             };
             let declare = batch(
                 r#"
-                #[lang("num")] #[sealed] pub trait MyNum: PartialOrd { }
+                #[lang("num")] #[sealed] pub trait MyNum: PartialOrd + Add { }
                 fn d<T: Num>(a: T, b: T) -> bool { a + a < b }
                 "#,
                 &interner,
