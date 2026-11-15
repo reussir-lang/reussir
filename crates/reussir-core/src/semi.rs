@@ -1932,7 +1932,7 @@ mod tests {
                 let imp = (0..elab.traits.impls_len() as u32)
                     .map(crate::semi::traits::ImplId)
                     .map(|i| elab.traits.impl_def(i))
-                    .find(|i| !i.generics.is_empty())
+                    .find(|i| !i.generics.is_empty() && i.span.is_some())
                     .expect("generic impl registered");
                 assert_eq!(imp.where_clauses.len(), 1, "T: Num recorded");
                 assert_eq!(imp.methods.len(), 1);

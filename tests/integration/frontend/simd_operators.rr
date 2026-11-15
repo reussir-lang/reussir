@@ -1,0 +1,78 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %not %rrc %S/Inputs/simd_operators_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_operators_errors.rr --check-prefix=ERR
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.core.rri
+// RUN: %rrc %s --package-name app --extern core=%t.core.rri --emit mlir --no-source-locations -o %t.core.mlir
+// RUN: %FileCheck %s --check-prefix=CORE < %t.core.mlir
+
+// With `core`, the impls are the ones `core::ops` declares.
+// RRI-DAG: impl<[[T:\$[0-9]+]]: core::ops::Add> #core::ops::Add::<Simd<{{\[}}[[T]]; ..{{\]}}>>
+// RRI-DAG: impl #core::ops::BitAnd::<Simd<{{\[}}bool; ..{{\]}}>>
+// CORE-DAG: arith.mulf %arg0, %arg1 : vector<4xf32>
+// CORE-DAG: arith.andi %{{.*}}, %{{.*}} : vector<8xi1>
+// CORE-DAG: arith.shrui %{{.*}}, %{{.*}} : vector<4xi32>
+// CORE-DAG: arith.negf %{{.*}} : vector<2xf64>
+// CORE-DAG: arith.addi %arg0, %arg1 : vector<2x8xi8>
+
+import core::simd;
+
+// A vector implements the trait of an operator, so the operator is typed as
+// on a number; the call lowers to the lanewise function of the same meaning.
+// HIR-DAG: ((v0 : Simd<[f32; 4]> * v1 : Simd<[f32; 4]>) : Simd<[f32; 4]> + v2 : Simd<[f32; 4]>) : Simd<[f32; 4]>
+// MIR-DAG: intrinsic#simd#add#0(intrinsic#simd#mul#0(v0 : Simd<[f32; 4]>, v1 : Simd<[f32; 4]>) : Simd<[f32; 4]>, v2 : Simd<[f32; 4]>) : Simd<[f32; 4]>
+// CHECK-LABEL: func.func @{{.*}}axpy
+// CHECK: %[[P:.*]] = arith.mulf %arg0, %arg1 : vector<4xf32>
+// CHECK: arith.addf %[[P]], %arg2 : vector<4xf32>
+pub fn axpy(a: Simd<[f32; 4]>, x: Simd<[f32; 4]>, y: Simd<[f32; 4]>) -> Simd<[f32; 4]> { a * x + y }
+
+// `&`, `|`, `^` and `!` also work on masks.
+// CHECK-LABEL: func.func @{{.*}}both
+// CHECK: arith.andi %{{.*}}, %{{.*}} : vector<8xi1>
+// CHECK: arith.xori %{{.*}}, %{{.*}} : vector<8xi1>
+pub fn both(a: Simd<[i16; 8]>, b: Simd<[i16; 8]>) -> Simd<[bool; 8]> {
+    !(simd::lt(a, b) & simd::ne(a, b))
+}
+
+// A shift takes a vector of amounts, one for each lane.
+// CHECK-LABEL: func.func @{{.*}}mixed
+// CHECK: arith.subi
+// CHECK: arith.divui
+// CHECK: arith.remui
+// CHECK: arith.shli
+// CHECK: arith.shrui
+// CHECK: arith.ori
+// CHECK: arith.xori
+// CHECK: arith.xori
+pub fn mixed(a: Simd<[u32; 4]>, b: Simd<[u32; 4]>) -> Simd<[u32; 4]> {
+    !((((a - b) / b % b) << b >> b | a) ^ b)
+}
+
+// A scalar `!` is unchanged.
+// CHECK-LABEL: func.func @{{.*}}scalar
+pub fn scalar(x: bool) -> bool { !x }
+
+// A vector is an operand like any other: generic code reaches the lanewise
+// function through the bound, whatever the extents.
+// CHECK-LABEL: func.func @{{.*}}generic
+// CHECK-LABEL: func.func @{{.*}}negated
+// CHECK: arith.subi
+// CHECK: arith.negf
+// CHECK-LABEL: func.func private @{{.*}}3sum
+// CHECK: arith.addi %arg0, %arg1 : vector<2xi64>
+// CHECK-LABEL: func.func private @{{.*}}3sum
+// CHECK: arith.addi %arg0, %arg1 : vector<2x8xi8>
+fn sum<T: Add>(a: T, b: T) -> T { a + b }
+pub fn generic(a: Simd<[i64; 2]>, b: Simd<[i8; 2, 8]>) -> (Simd<[i64; 2]>, Simd<[i8; 2, 8]>) {
+    (sum(a, a), sum(b, b))
+}
+
+pub fn negated(a: Simd<[i32; 4]>, x: Simd<[f64; 2]>) -> (Simd<[i32; 4]>, Simd<[f64; 2]>) {
+    (-a, -x)
+}

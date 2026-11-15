@@ -272,3 +272,32 @@ impl Shift for Nat { type Amount = i64; }
 impl Shift for Int { type Amount = i64; }
 impl Shift for Arc<Nat> { type Amount = i64; }
 impl Shift for Arc<Int> { type Amount = i64; }
+
+// Vectors. `Simd<[T; ..]>` is every vector whose elements are `T`, whatever
+// its extents (`Simd<[T; 4]>`, `Simd<[T; 2, [8]]>`, ...): `..` leaves the
+// extents out. It can be written only as the target of these impls. Nothing
+// else about them is special: an operator on a vector looks its trait up like
+// any other, and the call is the `core::simd` function that applies the
+// operation to each element.
+
+// A vector supports an operator when its element type does.
+impl<T: Add> Add for Simd<[T; ..]> { }
+impl<T: Sub> Sub for Simd<[T; ..]> { }
+impl<T: Mul> Mul for Simd<[T; ..]> { }
+impl<T: Div> Div for Simd<[T; ..]> { }
+impl<T: Rem> Rem for Simd<[T; ..]> { }
+impl<T: BitAnd> BitAnd for Simd<[T; ..]> { }
+impl<T: BitOr> BitOr for Simd<[T; ..]> { }
+impl<T: BitXor> BitXor for Simd<[T; ..]> { }
+// The amount is a vector too: each element shifts by its own amount.
+impl<T: Shift> Shift for Simd<[T; ..]> { }
+
+// Beyond their elements, as `core::simd` has it: a mask, a vector of `bool`,
+// takes `&`, `|` and `^`; `!` complements an integer vector bit by bit; and
+// only signed and floating-point vectors negate.
+impl BitAnd for Simd<[bool; ..]> { }
+impl BitOr for Simd<[bool; ..]> { }
+impl BitXor for Simd<[bool; ..]> { }
+impl Not for Simd<[bool; ..]> { }
+impl<T: Integral> Not for Simd<[T; ..]> { }
+impl<T: core::num::Signed> Neg for Simd<[T; ..]> { }

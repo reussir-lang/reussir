@@ -132,6 +132,28 @@ builtin_traits! {
     impl BitXor for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl Not for bool;
     impl Shift for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
+
+    // Vectors: `Simd<[T; ..]>` is every vector whose elements are `T`, whatever
+    // its extents. A vector supports an operator when its element type does.
+    impl<T: Add> Add for Simd<[T; ..]>;
+    impl<T: Sub> Sub for Simd<[T; ..]>;
+    impl<T: Mul> Mul for Simd<[T; ..]>;
+    impl<T: Div> Div for Simd<[T; ..]>;
+    impl<T: Rem> Rem for Simd<[T; ..]>;
+    impl<T: BitAnd> BitAnd for Simd<[T; ..]>;
+    impl<T: BitOr> BitOr for Simd<[T; ..]>;
+    impl<T: BitXor> BitXor for Simd<[T; ..]>;
+    impl<T: Shift> Shift for Simd<[T; ..]>;
+    // Beyond their elements, as `core::simd` has it: masks take `&`, `|`
+    // and `^`, `!` complements an integer vector, and only signed and
+    // floating-point vectors negate.
+    impl BitAnd for Simd<[bool; ..]>;
+    impl BitOr for Simd<[bool; ..]>;
+    impl BitXor for Simd<[bool; ..]>;
+    impl Not for Simd<[bool; ..]>;
+    impl<T: Integral> Not for Simd<[T; ..]>;
+    impl Neg for Simd<[i8; ..]> | Simd<[i16; ..]> | Simd<[i32; ..]> | Simd<[i64; ..]>
+        | Simd<[f32; ..]> | Simd<[f64; ..]>;
 }
 
 #[cfg(test)]
@@ -171,10 +193,10 @@ mod tests {
             assert_eq!(db.traits_len(), 17);
             assert_eq!(
                 db.impls_len(),
-                162,
+                182,
                 "15 numeric + 10 integral + 5 floating impls + 1 address space, \
                  6 arithmetic traits over the 15 numbers, 3 bitwise and `Shift` \
-                 over the 10 integers, and `bool : Not`"
+                 over the 10 integers, `bool : Not`, and 20 for vectors"
             );
             for i in 0..17u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);

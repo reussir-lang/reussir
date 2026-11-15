@@ -1266,6 +1266,44 @@ struct Driver<'a, 'tcx> {
     lifted: FxHashSet<DefId>,
 }
 
+/// A built-in operator node of the HIR.
+#[derive(Clone, Copy)]
+enum Operator {
+    Arith(hir::ArithOp),
+    Negate,
+    Not,
+}
+
+impl Operator {
+    fn arity(self) -> usize {
+        match self {
+            Operator::Arith(_) => 2,
+            Operator::Negate | Operator::Not => 1,
+        }
+    }
+
+    /// The `core::simd` function that applies the operator to each lane.
+    fn lanewise(self) -> Option<crate::intrinsic::SimdFn> {
+        use crate::intrinsic::SimdFn;
+        use hir::ArithOp;
+        Some(match self {
+            Operator::Arith(ArithOp::Add) => SimdFn::Add,
+            Operator::Arith(ArithOp::Sub) => SimdFn::Sub,
+            Operator::Arith(ArithOp::Mul) => SimdFn::Mul,
+            Operator::Arith(ArithOp::Div) => SimdFn::Div,
+            Operator::Arith(ArithOp::Mod) => SimdFn::Rem,
+            Operator::Arith(ArithOp::BitAnd) => SimdFn::And,
+            Operator::Arith(ArithOp::BitOr) => SimdFn::Or,
+            Operator::Arith(ArithOp::BitXor) => SimdFn::Xor,
+            Operator::Arith(ArithOp::Shl) => SimdFn::Shl,
+            Operator::Arith(ArithOp::Shr) => SimdFn::Shr,
+            Operator::Arith(ArithOp::And | ArithOp::Or) => return None,
+            Operator::Negate => SimdFn::Neg,
+            Operator::Not => SimdFn::Not,
+        })
+    }
+}
+
 /// What a [`hir::ExprKind::TraitCall`] resolves to at instance time.
 enum TraitCallTarget<'tcx> {
     /// An impl method body: an ordinary call.
@@ -2086,6 +2124,30 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         self.error(span, message);
     }
 
+    /// The built-in operation `operator` on `operands`, which are as many
+    /// as its arity. On a vector (the result type `ty`) it is the lanewise
+    /// `core::simd` function of the same meaning.
+    fn operator_node(
+        &self,
+        operator: Operator,
+        operands: &'tcx [mir::Expr<'tcx>],
+        ty: Ty<'tcx>,
+    ) -> mir::ExprKind<'tcx> {
+        use mir::ExprKind as M;
+        if let (TyKind::Simd { .. }, Some(func)) = (ty.kind(), operator.lanewise()) {
+            return M::Intrinsic {
+                op: crate::intrinsic::IntrinsicOp::Simd { func },
+                args: operands,
+            };
+        }
+        match (operator, operands) {
+            (Operator::Arith(op), [l, r]) => M::Arith(l, op, r),
+            (Operator::Negate, [e]) => M::Negate(e),
+            (Operator::Not, [e]) => M::Not(e),
+            _ => unreachable!("an operator takes as many operands as its arity"),
+        }
+    }
+
     /// A lifted method's body may mention built-in integers only where the
     /// atomic coloring maps them structurally (see [`Ty::is_liftable`]): an
     /// integer stored in a record, closure, array or cell would keep its
@@ -2831,18 +2893,20 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                             return M::Poison;
                         }
                         use crate::semi::lang::OperatorMethod;
-                        match (method, method.arith(), self.lower_slice(args, subst)) {
-                            (_, Some(arith), [l, r]) => M::Arith(l, arith, r),
-                            (OperatorMethod::Neg, None, [e]) => M::Negate(e),
-                            (OperatorMethod::Not, None, [e]) => M::Not(e),
-                            _ => {
-                                self.error(
-                                    span,
-                                    "wrong number of operands to an operator-trait method",
-                                );
-                                M::Poison
-                            }
+                        let operator = match (method, method.arith()) {
+                            (_, Some(arith)) => Operator::Arith(arith),
+                            (OperatorMethod::Neg, None) => Operator::Negate,
+                            (_, None) => Operator::Not,
+                        };
+                        let operands = self.lower_slice(args, subst);
+                        if operands.len() != operator.arity() {
+                            self.error(
+                                span,
+                                "wrong number of operands to an operator-trait method",
+                            );
+                            return M::Poison;
                         }
+                        self.operator_node(operator, operands, result_ty)
                     }
                     Some(TraitCallTarget::ThreeWay) => {
                         if self.inside_kernel {
@@ -2909,11 +2973,19 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 ExprKind::ConstFloat(f) if *f.mantissa() != 0 => {
                     M::ConstFloat(self.tcx.alloc(f.neg()))
                 }
-                _ => M::Negate(self.lower_ref(e, subst)),
+                _ => {
+                    let operands = self.tcx.alloc_slice(&[self.lower_expr(e, subst)]);
+                    self.operator_node(Operator::Negate, operands, result_ty)
+                }
             },
-            ExprKind::Not(e) => M::Not(self.lower_ref(e, subst)),
+            ExprKind::Not(e) => {
+                let operands = self.tcx.alloc_slice(&[self.lower_expr(e, subst)]);
+                self.operator_node(Operator::Not, operands, result_ty)
+            }
             ExprKind::Arith(l, op, r) => {
-                M::Arith(self.lower_ref(l, subst), *op, self.lower_ref(r, subst))
+                let operands = [self.lower_expr(l, subst), self.lower_expr(r, subst)];
+                let operands = self.tcx.alloc_slice(&operands);
+                self.operator_node(Operator::Arith(*op), operands, result_ty)
             }
             ExprKind::Cmp(l, op, r) => {
                 // Only scalars lower intrinsically. A non-scalar can reach
