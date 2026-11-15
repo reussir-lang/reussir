@@ -1907,11 +1907,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// tower is active — `core` declares no scalar impls (an `impl` target
     /// must be a named type), so every session completes its own here and
     /// monomorphization lowers their selections intrinsically.
-    /// `PartialEq`/`PartialOrd` cover every scalar *directly* — super-trait
-    /// projection would satisfy the bounds, but method dispatch needs a
-    /// direct impl — while `Ord` covers only the totally ordered ones (NaN
-    /// keeps the floats out of `Eq`/`Ord`; the super-trait closure answers
-    /// `Eq`, which is method-less everywhere and needs no impls). Runs
+    /// `PartialEq`/`PartialOrd` cover every scalar, while `Eq`/`Ord` cover
+    /// only the totally ordered ones (NaN keeps the floats out). Runs
     /// after the trait-stub scan so a tower the batch itself declares —
     /// `core` compiling itself, a hand-declared REPL tower — completes the
     /// same way as the fallback's or a loaded interface's.
@@ -1923,8 +1920,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .get(item)
                 .and_then(|def| el.traits.trait_by_def(def))
         };
-        let (Some(pe), Some(po), Some(ord)) = (
+        let (Some(pe), Some(eq), Some(po), Some(ord)) = (
             resolve(self, LangItem::PartialEq),
+            resolve(self, LangItem::Eq),
             resolve(self, LangItem::PartialOrd),
             resolve(self, LangItem::Ord),
         ) else {
@@ -1958,7 +1956,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         all()
             .map(|ty| (pe, ty))
             .chain(all().map(|ty| (po, ty)))
+            .chain(ordered.iter().copied().map(|ty| (eq, ty)))
             .chain(ordered.iter().copied().map(|ty| (ord, ty)))
+            .chain(
+                ints()
+                    .chain(floats.iter().copied())
+                    .map(|ty| (self.lang.num, ty)),
+            )
             .chain(ints().map(|ty| (self.lang.integral, ty)))
             .chain(
                 floats
@@ -2078,6 +2082,35 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 trait_id: po,
                 args: vec![arg],
             });
+    }
+
+    /// Require the self type of each impl registered since `first` to
+    /// implement the supertraits of the impl's trait.
+    fn check_impl_supertraits(&mut self, first: usize) {
+        let required: Vec<_> = self
+            .traits
+            .impls()
+            .skip(first)
+            .flat_map(|imp| {
+                self.traits
+                    .supertrait_refs(self.tcx, &imp.trait_ref)
+                    .into_iter()
+                    .map(move |sup| (imp.trait_ref.trait_id, sup, imp.span, imp.file))
+            })
+            .collect();
+        for (trait_id, sup, span, file) in required {
+            if let Some(reason) = self.bound_failure(&sup) {
+                self.set_current_file(file);
+                self.error(
+                    span,
+                    format!(
+                        "an impl of `{}` requires `{}`: {reason}",
+                        self.trait_display(trait_id),
+                        self.trait_display(sup.trait_id)
+                    ),
+                );
+            }
+        }
     }
 
     fn run_files(&mut self, files: &[(FileId, Vec<TokenKey>, &surface::Program)]) {
@@ -2344,6 +2377,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // entries, all covered by the REPL Checkpoint's truncate-and-retain
         // rollback — no new state to track.
         let mut methods: Vec<(&surface::Function, Option<Span>, Option<DefId>)> = Vec::new();
+        let first_impl = self.traits.impls_len();
         for (ib, span, scope) in &impls {
             self.set_current_file(scope.file);
             self.defs.set_module(scope.module.to_vec());
@@ -2485,6 +2519,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             })
             .collect();
         self.register_main_entry(&mains);
+        self.check_impl_supertraits(first_impl);
         self.check_pending_record_bounds();
         // Post-populate sweep: signatures and record members were evaluated
         // before fields existed, so their `Arc` nodes wf-check only now.

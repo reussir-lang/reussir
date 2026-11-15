@@ -814,6 +814,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     fn report_record_bounds(&mut self, ty: Ty<'tcx>, span: Option<surface::Span>) {
+        use crate::semi::traits::TraitRef;
         let TyKind::Record { def, args, .. } = *ty.kind() else {
             return;
         };
@@ -834,7 +835,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             if matches!(arg.kind(), TyKind::Bottom) {
                 continue;
             }
-            if let Some(reason) = self.bound_failure(trait_id, arg) {
+            let bound = TraitRef {
+                trait_id,
+                args: vec![arg],
+            };
+            if let Some(reason) = self.bound_failure(&bound) {
                 self.error(
                     span,
                     format!("`{}` is ill-formed: {reason}", self.ty_display(ty)),

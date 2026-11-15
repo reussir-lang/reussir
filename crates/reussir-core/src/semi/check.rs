@@ -2491,21 +2491,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 };
                 self.infer_method_call(receiver, head, def, mname, args, span)
             }
-            Ok(_) => {
-                // Super-projected evidence proves the bound, but only a
-                // direct impl carries the method body.
-                let shown = self.trait_display(tid);
-                self.error(
-                    span,
-                    format!(
-                        "`{ty}` reaches `{shown}` only through a sub-trait; calling `{m}` \
-                         needs a direct `impl {shown} for {ty}`",
-                        ty = self.ty_display(peeled),
-                        m = self.sym(mname),
-                    ),
-                );
-                self.poison(span)
-            }
+            Ok(_) => unreachable!("a type that is no parameter satisfies a bound only by an impl"),
             Err(SelectError::NoImpl(inner)) => {
                 let msg = self.no_impl_message(peeled, tid, &inner);
                 self.error(span, msg);
@@ -6601,8 +6587,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 AssocError::Select(SelectError::DepthLimit(goal)) => {
                     self.depth_limit_message(&goal)
                 }
-                AssocError::Undeclared | AssocError::Indirect => format!(
-                    "`{}` names no type: its trait is implemented only through a sub-trait",
+                AssocError::Undeclared => format!(
+                    "`{}` names no type: no impl binds it and its trait gives no default",
                     self.ty_display(assoc)
                 ),
             };

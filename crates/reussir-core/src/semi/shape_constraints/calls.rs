@@ -113,27 +113,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             // A rigid generic can satisfy a declared bound without choosing an
             // implementation. Preserve the residual for a later grounded call.
-            Ok(Evidence::Param { .. }) => Ok(RuleStatus::Deferred),
-            Ok(Evidence::Super { of, .. }) if evidence_is_parameter(&of) => {
-                Ok(RuleStatus::Deferred)
-            }
-            Ok(Evidence::Super { .. }) => Err(format!(
-                "calling a method of `{}` requires a direct impl, not only a super-trait proof",
-                self.trait_display(tid)
-            )),
+            Ok(Evidence::Param { .. } | Evidence::Super { .. }) => Ok(RuleStatus::Deferred),
             Err(SelectError::NoImpl(inner)) => {
                 Err(self.no_impl_message(trait_args[0], tid, &inner))
             }
             Err(SelectError::DepthLimit(goal)) => Err(self.depth_limit_message(&goal)),
         }
-    }
-}
-
-fn evidence_is_parameter(evidence: &Evidence<'_>) -> bool {
-    match evidence {
-        Evidence::Param { .. } => true,
-        Evidence::Super { of, .. } => evidence_is_parameter(of),
-        Evidence::Impl { .. } => false,
     }
 }
 

@@ -503,9 +503,9 @@ mod tests {
             };
             assert_eq!(
                 (count(pe), count(po), count(ord), count(eq)),
-                (18, 18, 13, 0),
+                (18, 18, 13, 13),
                 "impl completion: every scalar plus `str` for PartialEq/PartialOrd, \
-                 the ordered thirteen for Ord, none for Eq"
+                 the ordered thirteen for Ord and Eq"
             );
             assert!(
                 elab.traits
@@ -2712,6 +2712,7 @@ mod tests {
                 (&[], include_str!("../../../library/core/src/lib.rr")),
                 (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
                 (&["num"], include_str!("../../../library/core/src/num.rr")),
+                (&["ops"], include_str!("../../../library/core/src/ops.rr")),
                 (
                     &["marker"],
                     include_str!("../../../library/core/src/marker.rr"),
