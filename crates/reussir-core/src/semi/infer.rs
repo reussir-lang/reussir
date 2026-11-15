@@ -124,6 +124,9 @@ pub struct InferCtxt<'a, 'tcx> {
     table: InPlaceUnificationTable<HoleKey<'tcx>>,
     level: Level,
     shapes: shape::ShapeStore<'tcx>,
+    /// The holes unified with another hole or solved since
+    /// [`Self::take_touched`], under the names they had until then.
+    touched: Vec<HoleId>,
 }
 
 impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
@@ -133,7 +136,19 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             table: InPlaceUnificationTable::new(),
             level: Level(0),
             shapes: shape::ShapeStore::default(),
+            touched: Vec::new(),
         }
+    }
+
+    /// The holes unified with another hole or solved since the last call.
+    /// A type that mentions none of them resolves as it did then.
+    pub fn take_touched(&mut self) -> Vec<HoleId> {
+        std::mem::take(&mut self.touched)
+    }
+
+    /// Forget them: nothing needs to hear about the holes touched so far.
+    pub fn clear_touched(&mut self) {
+        self.touched.clear();
     }
 
     pub fn level(&self) -> Level {
@@ -353,7 +368,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     self.set_hole_view(*h1, view);
                 }
                 self.shapes.progress += 1;
-                self.shapes.unions += 1;
+                self.touched.extend([*h1, *h2]);
                 Ok(())
             }
             (TyKind::Hole(h), _) => self.solve(*h, b),
@@ -454,6 +469,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.lower_levels(h, ty);
         self.table.union_value(key(h), HoleValue::Known(ty));
         self.shapes.progress += 1;
+        self.touched.push(h);
         Ok(())
     }
 
@@ -801,16 +817,27 @@ mod tests {
     }
 
     #[test]
-    fn unifying_two_holes_solves_neither() {
+    fn unified_and_solved_holes_are_touched() {
         with_tcx(|tcx| {
             let mut infer = InferCtxt::new(tcx);
-            let (a, b) = (infer.new_hole_ty(), infer.new_hole_ty());
-            let before = (infer.progress(), infer.solved());
+            let (a, b, c) = (
+                infer.new_hole_ty(),
+                infer.new_hole_ty(),
+                infer.new_hole_ty(),
+            );
+            let id = |ty: Ty<'_>| match ty.kind() {
+                TyKind::Hole(h) => *h,
+                _ => unreachable!("a fresh hole"),
+            };
+            assert!(infer.take_touched().is_empty());
             infer.unify(a, b).unwrap();
-            assert_eq!((infer.progress(), infer.solved()), (before.0 + 1, before.1));
-            infer.unify(a, tcx.mk_bool()).unwrap();
-            assert_eq!(infer.solved(), before.1 + 1);
-            assert_eq!(infer.resolve(b), tcx.mk_bool());
+            assert_eq!(infer.take_touched(), [id(a), id(b)]);
+            // Solving the pair names whichever of the two stands for it.
+            infer.unify(b, tcx.mk_bool()).unwrap();
+            let solved = infer.take_touched();
+            assert!(solved == [id(a)] || solved == [id(b)], "{solved:?}");
+            assert!(infer.take_touched().is_empty());
+            assert_eq!(infer.resolve(c), c);
         });
     }
 

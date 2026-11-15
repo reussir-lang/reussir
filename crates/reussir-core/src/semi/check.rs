@@ -6507,15 +6507,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return ty;
         }
         let ty = self.infer.resolve(ty);
-        let mut deferred = Vec::new();
         let mut failed = None;
         let tcx = self.tcx;
         let (infer, traits, generics) = (&mut self.infer, &self.traits, &self.generics);
+        let deferred = &mut self.fulfill.deferred;
         let ty = crate::semi::traits::subst::rebuild(tcx, ty, &mut |_| None, &mut |assoc| {
             if ty_has_hole(assoc) {
-                let hole = infer.new_hole_ty();
-                deferred.push((assoc, hole));
-                return hole;
+                return deferred.stand_in(assoc, || infer.new_hole_ty());
             }
             traits
                 .normalize(tcx, generics, assoc)
@@ -6524,7 +6522,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     tcx.mk(TyKind::Bottom)
                 })
         });
-        self.fulfill.projections.extend(deferred);
         if let Some(failure) = failed
             && self.fulfill.reported_assoc.insert(failure.0)
         {
@@ -6533,48 +6530,62 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         ty
     }
 
-    /// Solve the associated types [`Self::normalize`] deferred whose trait
-    /// references are known by now; `span` is blamed where one turns out
-    /// not to be the type it was used as.
+    /// Look again at the associated types [`Self::normalize`] deferred that
+    /// mention a hole unified or solved since the last call; `span` is
+    /// blamed where one turns out not to be the type it was used as.
     pub(super) fn solve_projections(&mut self, span: Option<Span>) {
         self.report_assoc_failures(span);
-        // One loses its last hole only when a hole is solved.
-        if self.fulfill.projections_solved == self.infer.solved() {
+        if self.fulfill.deferred.is_empty() {
+            self.infer.clear_touched();
             return;
         }
-        while self
-            .fulfill
-            .projections
-            .iter()
-            .any(|&(assoc, _)| !ty_has_hole(self.infer.resolve(assoc)))
-        {
-            for (assoc, hole) in std::mem::take(&mut self.fulfill.projections) {
-                let assoc = self.infer.resolve(assoc);
-                if ty_has_hole(assoc) {
-                    self.fulfill.projections.push((assoc, hole));
-                    continue;
-                }
-                let ty = self.normalize(assoc);
-                if matches!(ty.kind(), TyKind::Bottom) {
-                    // Already reported; the hole has nothing left to infer.
-                    let mut holes = Vec::new();
-                    collect_holes(self.infer.resolve(hole), &mut holes);
-                    self.reported_holes.extend(holes);
-                }
-                if self.infer.unify(hole, ty).is_err() {
-                    let found = self.infer.resolve(hole);
-                    self.error(
-                        span,
-                        format!(
-                            "type mismatch: expected `{}`, found `{}`",
-                            self.ty_display(ty),
-                            self.ty_display(found)
-                        ),
-                    );
+        // Looking at one may unify or solve more holes.
+        loop {
+            let touched = self.infer.take_touched();
+            if touched.is_empty() {
+                return;
+            }
+            for hole in touched {
+                for (assoc, stand_in) in self.fulfill.deferred.take_waiting(hole) {
+                    self.revisit_deferred(assoc, stand_in, span);
                 }
             }
         }
-        self.fulfill.projections_solved = self.infer.solved();
+    }
+
+    /// Give the deferred `assoc` its type if its trait reference is known
+    /// by now. If it is not, defer it again as it resolves now, which
+    /// unifies its stand-in hole with that of an equal one.
+    pub(super) fn revisit_deferred(
+        &mut self,
+        assoc: Ty<'tcx>,
+        stand_in: Ty<'tcx>,
+        span: Option<Span>,
+    ) {
+        let assoc = self.infer.resolve(assoc);
+        let ty = if ty_has_hole(assoc) {
+            self.fulfill.deferred.stand_in(assoc, || stand_in)
+        } else {
+            let ty = self.normalize(assoc);
+            if matches!(ty.kind(), TyKind::Bottom) {
+                // Already reported; the hole has nothing left to infer.
+                let mut holes = Vec::new();
+                collect_holes(self.infer.resolve(stand_in), &mut holes);
+                self.reported_holes.extend(holes);
+            }
+            ty
+        };
+        if self.infer.unify(stand_in, ty).is_err() {
+            let (expected, found) = (self.infer.resolve(ty), self.infer.resolve(stand_in));
+            self.error(
+                span,
+                format!(
+                    "type mismatch: expected `{}`, found `{}`",
+                    self.ty_display(expected),
+                    self.ty_display(found)
+                ),
+            );
+        }
     }
 
     /// Report, at `span`, the associated types [`Self::normalize`] found to
