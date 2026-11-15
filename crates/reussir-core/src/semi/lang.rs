@@ -202,6 +202,64 @@ impl FormerItem {
     }
 }
 
+/// The class of operands of one operator: what `a + b` asks of the type of
+/// `a`. Declared by `core::ops`, sealed, and wired like the numeric tower.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum OperatorTrait {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Neg,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    Not,
+}
+
+impl OperatorTrait {
+    /// In `Builtins` field order.
+    pub const ALL: [OperatorTrait; 12] = [
+        OperatorTrait::Add,
+        OperatorTrait::Sub,
+        OperatorTrait::Mul,
+        OperatorTrait::Div,
+        OperatorTrait::Rem,
+        OperatorTrait::Neg,
+        OperatorTrait::BitAnd,
+        OperatorTrait::BitOr,
+        OperatorTrait::BitXor,
+        OperatorTrait::Shl,
+        OperatorTrait::Shr,
+        OperatorTrait::Not,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OperatorTrait::Add => "add",
+            OperatorTrait::Sub => "sub",
+            OperatorTrait::Mul => "mul",
+            OperatorTrait::Div => "div",
+            OperatorTrait::Rem => "rem",
+            OperatorTrait::Neg => "neg",
+            OperatorTrait::BitAnd => "bit_and",
+            OperatorTrait::BitOr => "bit_or",
+            OperatorTrait::BitXor => "bit_xor",
+            OperatorTrait::Shl => "shl",
+            OperatorTrait::Shr => "shr",
+            OperatorTrait::Not => "not",
+        }
+    }
+
+    /// Whether the operator computes on numbers: every one but `!`.
+    pub fn is_numeric(self) -> bool {
+        self != OperatorTrait::Not
+    }
+}
+
 /// Every language item the compiler recognizes. Closed: an unknown
 /// `#[lang("…")]` name is a diagnostic, so the set is versioned with the
 /// compiler.
@@ -214,6 +272,8 @@ pub enum LangItem {
     PtrLike,
     Sync,
     AddrSpace,
+    /// An operator's class of operands — wired, fallback-registered.
+    Operator(OperatorTrait),
     /// The comparison tower — declared by `core` (a later PR in this
     /// series); the slots exist so its source can land without a compiler
     /// release in between.
@@ -287,6 +347,7 @@ impl LangItem {
             LangItem::PtrLike => "ptr_like".into(),
             LangItem::Sync => "sync".into(),
             LangItem::AddrSpace => "addr_space".into(),
+            LangItem::Operator(op) => op.name().into(),
             LangItem::PartialEq => "partial_eq".into(),
             LangItem::Eq => "eq".into(),
             LangItem::PartialOrd => "partial_ord".into(),
@@ -332,7 +393,16 @@ impl LangItem {
         if let Some(former) = FormerItem::ALL.into_iter().find(|f| f.name() == name) {
             return Some(LangItem::Former(former));
         }
+        if let Some(op) = OperatorTrait::ALL.into_iter().find(|op| op.name() == name) {
+            return Some(LangItem::Operator(op));
+        }
         Self::FIXED.into_iter().find(|item| item.name() == name)
+    }
+
+    /// Whether the item is a trait the checker reaches through a
+    /// [`LangItems`] field, which a declaration repoints.
+    pub fn is_wired(self) -> bool {
+        matches!(self, LangItem::Operator(_)) || Self::TOWER.contains(&self)
     }
 
     /// The comparison tower's traits, in declaration (and fallback
@@ -377,33 +447,61 @@ pub struct LangItems {
     /// The address spaces of opaque pointers; its impls decide which types
     /// may be the `A` of `Ptr<A>`.
     pub addr_space: TraitId,
-    /// The construction-time builtin ids, in [`LangItem::TOWER`] order —
-    /// retained after the wired fields repoint, so bare-name resolution
-    /// can recognize (and substitute) a builtin hit.
-    builtin: [TraitId; 6],
+    /// The operator classes, in [`OperatorTrait::ALL`] order.
+    operators: [TraitId; 12],
+    /// The construction-time builtin ids, in [`LangItem::TOWER`] order
+    /// followed by [`OperatorTrait::ALL`] order — retained after the wired
+    /// fields repoint, so bare-name resolution can recognize (and
+    /// substitute) a builtin hit.
+    builtin: [TraitId; 18],
     declared: Vec<(LangItem, DefId)>,
 }
+
+/// The wired trait ids: [`LangItem::TOWER`] order, then
+/// [`OperatorTrait::ALL`] order.
+pub(crate) type WiredTraits = [TraitId; 18];
 
 impl LangItems {
     /// A registry over the fallback-registered tower.
     pub fn new(fallback: Builtins) -> Self {
-        LangItems {
+        let mut lang = LangItems {
             num: fallback.num,
             integral: fallback.integral,
             floating_point: fallback.floating_point,
             ptr_like: fallback.ptr_like,
             sync: fallback.sync,
             addr_space: fallback.addr_space,
-            builtin: [
-                fallback.num,
-                fallback.integral,
-                fallback.floating_point,
-                fallback.ptr_like,
-                fallback.sync,
-                fallback.addr_space,
+            operators: [
+                fallback.add,
+                fallback.sub,
+                fallback.mul,
+                fallback.div,
+                fallback.rem,
+                fallback.neg,
+                fallback.bit_and,
+                fallback.bit_or,
+                fallback.bit_xor,
+                fallback.shl,
+                fallback.shr,
+                fallback.not,
             ],
+            builtin: [fallback.num; 18],
             declared: Vec::new(),
-        }
+        };
+        lang.builtin = lang.fields();
+        lang
+    }
+
+    /// The class of operands of `op`.
+    pub fn operator(&self, op: OperatorTrait) -> TraitId {
+        self.operators[op as usize]
+    }
+
+    /// The operator whose class `id` is.
+    pub fn operator_of(&self, id: TraitId) -> Option<OperatorTrait> {
+        OperatorTrait::ALL
+            .into_iter()
+            .find(|&op| self.operator(op) == id)
     }
 
     /// Point a wired tower field at `id` — the declared trait (`core`'s)
@@ -419,25 +517,28 @@ impl LangItems {
             LangItem::PtrLike => self.ptr_like = id,
             LangItem::Sync => self.sync = id,
             LangItem::AddrSpace => self.addr_space = id,
+            LangItem::Operator(op) => self.operators[op as usize] = id,
             _ => {}
         }
     }
 
-    /// The wired fields, in [`LangItem::TOWER`] order — the REPL
-    /// checkpoint's snapshot (a rejected batch that repointed them must
-    /// restore the builtins).
-    pub(crate) fn fields(&self) -> [TraitId; 6] {
-        [
+    /// The wired fields — the REPL checkpoint's snapshot (a rejected batch
+    /// that repointed them must restore the builtins).
+    pub(crate) fn fields(&self) -> WiredTraits {
+        let mut fields = [self.num; 18];
+        fields[..6].copy_from_slice(&[
             self.num,
             self.integral,
             self.floating_point,
             self.ptr_like,
             self.sync,
             self.addr_space,
-        ]
+        ]);
+        fields[6..].copy_from_slice(&self.operators);
+        fields
     }
 
-    pub(crate) fn restore_fields(&mut self, fields: [TraitId; 6]) {
+    pub(crate) fn restore_fields(&mut self, fields: WiredTraits) {
         [
             self.num,
             self.integral,
@@ -445,7 +546,8 @@ impl LangItems {
             self.ptr_like,
             self.sync,
             self.addr_space,
-        ] = fields;
+        ] = fields[..6].try_into().expect("six tower traits");
+        self.operators = fields[6..].try_into().expect("twelve operator traits");
     }
 
     /// Substitute a bare-name hit on a *construction builtin* with the
@@ -455,10 +557,11 @@ impl LangItems {
     /// Module-local shadows are their own defs and pass through untouched.
     pub fn override_builtin(&self, def: DefId, db: &crate::semi::traits::TraitDb<'_>) -> DefId {
         LangItem::TOWER
-            .iter()
+            .into_iter()
+            .chain(OperatorTrait::ALL.map(LangItem::Operator))
             .zip(self.builtin)
             .find(|&(_, builtin_id)| db.trait_def(builtin_id).def == def)
-            .and_then(|(&item, _)| self.get(item))
+            .and_then(|(item, _)| self.get(item))
             .unwrap_or(def)
     }
 

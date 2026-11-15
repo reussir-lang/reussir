@@ -3,7 +3,7 @@
 use reussir_syntax::kind::TokenKey;
 
 use crate::semi::infer::Instantiation;
-use crate::semi::lang::IntrinsicItem;
+use crate::semi::lang::{IntrinsicItem, OperatorTrait};
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::{
     Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
@@ -528,7 +528,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Register the obligation `ty : Trait<trait_id>` — a single-parameter bound,
     /// written `Trait ⊳ ty` in the rules — for the fulfillment pass to discharge.
     pub(super) fn register_bound(&mut self, trait_id: TraitId, ty: Ty<'tcx>, span: Option<Span>) {
-        if [self.lang.num, self.lang.integral, self.lang.floating_point].contains(&trait_id) {
+        if [self.lang.num, self.lang.integral, self.lang.floating_point].contains(&trait_id)
+            || self
+                .lang
+                .operator_of(trait_id)
+                .is_some_and(OperatorTrait::is_numeric)
+        {
             self.fulfill.shapes.register_scalar(ty);
         }
         self.fulfill.register(
@@ -1077,8 +1082,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     /// Binary operators synthesize:
-    /// (ARITH) `op∈{+,-,*,/,%}`: `l ⇒ T`, `Num ⊳ T`, `r ⇐ T`, result `T`.
-    /// (BIT) `op∈{&,|,^,<<,>>}`: `l ⇒ T`, `Integral ⊳ T`, `r ⇐ T`, result `T`.
+    /// (ARITH) `op∈{+,-,*,/,%}`: `l ⇒ T`, `Op ⊳ T`, `r ⇐ T`, result `T`, where
+    /// `Op` is the operator's class in `core::ops` (`Add` for `+`).
+    /// (BIT) `op∈{&,|,^,<<,>>}`: `l ⇒ T`, `Op ⊳ T`, `r ⇐ T`, result `T`.
     /// (LOGIC) `op∈{&&,||}`: `l ⇐ Bool`, `r ⇐ Bool`, result `Bool`, and the
     /// pair desugars to (IF) so it short-circuits — `l && r` elaborates to
     /// `if l { r } else { false }` and `l || r` to `if l { true } else { r }`,
@@ -1133,13 +1139,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         span,
                     );
                 } else {
-                    self.register_bound(self.lang.num, ty, span);
+                    self.register_bound(self.lang.operator(operator_trait(op)), ty, span);
                 }
                 let aop = arith_op(op);
                 self.mk_expr(ExprKind::Arith(Box::new(l), aop, Box::new(r)), ty, span)
             }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
-                // (BIT) like (ARITH) but integers only, `Integral ⊳ T`.
+                // (BIT) like (ARITH); the classes hold the integers.
                 // Both operands share `T` — a shift amount is the operand
                 // type, not a separate width.
                 // (SHIFT-BIGINT) the exception: when `l ⇒ Nat` or `l ⇒ Int`,
@@ -1150,7 +1156,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 // monomorphization.
                 let l = self.infer_expr(l);
                 let ty = l.ty;
-                self.register_bound(self.lang.integral, ty, span);
+                self.register_bound(self.lang.operator(operator_trait(op)), ty, span);
                 let shifts_bigint = matches!(op, BinOp::Shl | BinOp::Shr)
                     && self.infer.shallow_resolve(ty).bigint().is_some();
                 let amount_ty = if shifts_bigint {
@@ -1362,7 +1368,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     /// Unary operators synthesize: (NEG) `-e ⇒ (Negate he : T)` with `e ⇒ T` and
-    /// `Num ⊳ T`; (NOT) `!e ⇒ (Not he : Bool)` with `e ⇐ Bool`.
+    /// `Neg ⊳ T`; (NOT) `!e ⇒ (Not he : T)` with `e ⇒ T` and `Not ⊳ T`.
     fn infer_unop(&mut self, op: UnaryOp, e: &surface::Expr, span: Option<Span>) -> Expr<'tcx> {
         match op {
             UnaryOp::Negate => {
@@ -1389,9 +1395,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         span,
                     );
                 } else {
-                    self.register_bound(self.lang.num, ty, span);
+                    self.register_bound(self.lang.operator(OperatorTrait::Neg), ty, span);
                 }
-                // `Nat` satisfies `Num` for `+` and `*`, but has no negatives.
+                // `Nat` is a `Num`, and so in `Neg`, but has no negatives.
                 if matches!(
                     self.infer.shallow_resolve(ty).bigint(),
                     Some((BigIntTy::Nat, _))
@@ -1402,9 +1408,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.mk_expr(ExprKind::Negate(Box::new(e)), ty, span)
             }
             UnaryOp::Not => {
+                let e = self.infer_expr(e);
                 let bool_ty = self.tcx.mk_bool();
-                let e = self.check_expr(e, bool_ty);
-                self.mk_expr(ExprKind::Not(Box::new(e)), bool_ty, span)
+                // An operand of unknown type is a `bool`.
+                let ty = match self.infer.shallow_resolve(e.ty) {
+                    ty if matches!(ty.kind(), TyKind::Hole(_) | TyKind::Bottom) => {
+                        self.expect(ty, bool_ty, e.span);
+                        bool_ty
+                    }
+                    ty => {
+                        self.register_bound(self.lang.operator(OperatorTrait::Not), ty, span);
+                        ty
+                    }
+                };
+                self.mk_expr(ExprKind::Not(Box::new(e)), ty, span)
             }
         }
     }
@@ -6692,6 +6709,23 @@ fn arith_op(op: BinOp) -> ArithOp {
         BinOp::BitXor => ArithOp::BitXor,
         BinOp::Shl => ArithOp::Shl,
         BinOp::Shr => ArithOp::Shr,
+        _ => unreachable!("not an arithmetic operator"),
+    }
+}
+
+/// The class an arithmetic or bitwise operator asks of its left operand.
+fn operator_trait(op: BinOp) -> OperatorTrait {
+    match op {
+        BinOp::Add => OperatorTrait::Add,
+        BinOp::Sub => OperatorTrait::Sub,
+        BinOp::Mul => OperatorTrait::Mul,
+        BinOp::Div => OperatorTrait::Div,
+        BinOp::Mod => OperatorTrait::Rem,
+        BinOp::BitAnd => OperatorTrait::BitAnd,
+        BinOp::BitOr => OperatorTrait::BitOr,
+        BinOp::BitXor => OperatorTrait::BitXor,
+        BinOp::Shl => OperatorTrait::Shl,
+        BinOp::Shr => OperatorTrait::Shr,
         _ => unreachable!("not an arithmetic operator"),
     }
 }

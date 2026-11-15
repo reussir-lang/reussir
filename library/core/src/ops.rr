@@ -1,0 +1,71 @@
+//! The operator traits: what each arithmetic, bitwise and logical operator
+//! asks of the type of its operand.
+//!
+//! `a + b` requires `Add` of the type of `a`, takes `b` of the same type and
+//! yields that type; the other binary operators follow the same rule, and
+//! `-a` and `!a` require `Neg` and `Not`. `#[sealed]`: membership is fixed
+//! and the compiler lowers each operation by the operand type. The numbers
+//! are members through `core::num` (`Num` for the arithmetic operators,
+//! `Integral` for the bitwise ones).
+
+/// `a + b`.
+#[lang("add")]
+#[sealed]
+pub trait Add {}
+
+/// `a - b`.
+#[lang("sub")]
+#[sealed]
+pub trait Sub {}
+
+/// `a * b`.
+#[lang("mul")]
+#[sealed]
+pub trait Mul {}
+
+/// `a / b`.
+#[lang("div")]
+#[sealed]
+pub trait Div {}
+
+/// `a % b`.
+#[lang("rem")]
+#[sealed]
+pub trait Rem {}
+
+/// `-a`.
+#[lang("neg")]
+#[sealed]
+pub trait Neg {}
+
+/// `a & b`.
+#[lang("bit_and")]
+#[sealed]
+pub trait BitAnd {}
+
+/// `a | b`.
+#[lang("bit_or")]
+#[sealed]
+pub trait BitOr {}
+
+/// `a ^ b`.
+#[lang("bit_xor")]
+#[sealed]
+pub trait BitXor {}
+
+/// `a << b`.
+#[lang("shl")]
+#[sealed]
+pub trait Shl {}
+
+/// `a >> b`.
+#[lang("shr")]
+#[sealed]
+pub trait Shr {}
+
+/// `!a`.
+#[lang("not")]
+#[sealed]
+pub trait Not {}
+
+impl Not for bool { }

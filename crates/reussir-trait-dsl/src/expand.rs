@@ -34,6 +34,7 @@ fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
         "f64" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Ieee(64))),
         "bf16" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::BFloat16)),
         "f8" => quote!(tcx.mk_fp(crate::semi::ty::FpTy::Float8)),
+        "bool" => quote!(tcx.mk_bool()),
         "Generic" => quote!(tcx.mk(crate::semi::ty::TyKind::GenericAddrSpace)),
         _ => return None,
     };
@@ -41,7 +42,7 @@ fn scalar_ctor(ident: &syn::Ident) -> Option<TokenStream> {
 }
 
 const KNOWN_SCALARS: &str =
-    "i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f16, f32, f64, bf16, f8, Generic";
+    "i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f16, f32, f64, bf16, f8, bool, Generic";
 
 pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let input: Input = syn::parse2(input)?;

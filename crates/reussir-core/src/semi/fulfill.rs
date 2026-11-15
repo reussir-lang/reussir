@@ -99,7 +99,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 
     /// REPL defaulting: solve numeric holes that only literal/arithmetic
     /// bounds constrain. A hole pending a `FloatingPoint` obligation defaults
-    /// to `f64`; a hole pending `Integral` or `Num` defaults to `i64` (the
+    /// to `f64`; a hole pending `Integral`, `Num` or the class of an
+    /// arithmetic operator defaults to `i64` (the
     /// generalization of GHCi-style defaulting the old REPL applied to the
     /// root type only). Obligations stay registered — the subsequent
     /// [`resolve_obligations`](Elaborator::resolve_obligations) discharges
@@ -113,11 +114,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.resolve_shape_constraints(false);
         let f64_ty = self.tcx.mk_fp(FpTy::Ieee(64));
         let i64_ty = self.tcx.mk_int(IntTy::Signed(64));
+        let operators = crate::semi::lang::OperatorTrait::ALL
+            .into_iter()
+            .filter(|op| op.is_numeric())
+            .map(|op| (self.lang.operator(op), i64_ty));
         let passes = [
             (self.lang.floating_point, f64_ty),
             (self.lang.integral, i64_ty),
             (self.lang.num, i64_ty),
-        ];
+        ]
+        .into_iter()
+        .chain(operators)
+        .collect::<Vec<_>>();
         for (want, default) in passes {
             self.fulfill
                 .pending

@@ -13,18 +13,58 @@
 //! └── FloatingPoint (impl: f16..f8)
 //! ```
 //!
+//! Each operator has its own class, which is what the operator asks of its
+//! operand: `Num` is a subclass of `Add Sub Mul Div Rem Neg`, `Integral` also
+//! of `BitAnd BitOr BitXor Shl Shr`, and `bool` is the one member of `Not`.
+//!
 //! [`TraitDef`]: super::TraitDef
 //! [`ImplDef`]: super::ImplDef
 
 use reussir_trait_dsl::builtin_traits;
 
 builtin_traits! {
+    /// The operands of `+`.
+    #[sealed]
+    trait Add;
+    /// The operands of binary `-`.
+    #[sealed]
+    trait Sub;
+    /// The operands of `*`.
+    #[sealed]
+    trait Mul;
+    /// The operands of `/`.
+    #[sealed]
+    trait Div;
+    /// The operands of `%`.
+    #[sealed]
+    trait Rem;
+    /// The operands of unary `-`.
+    #[sealed]
+    trait Neg;
+    /// The operands of `&`.
+    #[sealed]
+    trait BitAnd;
+    /// The operands of `|`.
+    #[sealed]
+    trait BitOr;
+    /// The operands of `^`.
+    #[sealed]
+    trait BitXor;
+    /// The operands of `<<`.
+    #[sealed]
+    trait Shl;
+    /// The operands of `>>`.
+    #[sealed]
+    trait Shr;
+    /// The operands of `!`.
+    #[sealed]
+    trait Not;
     /// The root numeric class: arithmetic and numeric literals.
     #[sealed]
-    trait Num;
+    trait Num: Add + Sub + Mul + Div + Rem + Neg;
     /// Whole-number types; `Num` through the super-trait edge.
     #[sealed]
-    trait Integral: Num;
+    trait Integral: Num + BitAnd + BitOr + BitXor + Shl + Shr;
     /// Floating-point types; `Num` through the super-trait edge.
     #[sealed]
     trait FloatingPoint: Num;
@@ -48,6 +88,7 @@ builtin_traits! {
     impl Integral for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl FloatingPoint for f16 | f32 | f64 | bf16 | f8;
     impl AddrSpace for Generic;
+    impl Not for bool;
 }
 
 #[cfg(test)]
@@ -56,9 +97,9 @@ mod tests {
     use crate::semi::traits::{TraitDb, TraitId};
     use crate::with_tcx;
 
-    /// The generated table is the old hand-written one, exactly: dense
-    /// declaration-ordered trait ids, 10 integral + 5 floating impls and the
-    /// generic address space, all sealed, `Sync` impl-less.
+    /// Dense declaration-ordered trait ids, 10 integral + 5 floating impls,
+    /// the generic address space and `bool : Not`, all sealed, `Sync`
+    /// impl-less.
     #[test]
     fn generated_table_matches_the_handwritten_contract() {
         with_tcx(|tcx| {
@@ -76,21 +117,21 @@ mod tests {
                     b.addr_space
                 ],
                 [
-                    TraitId(0),
-                    TraitId(1),
-                    TraitId(2),
-                    TraitId(3),
-                    TraitId(4),
-                    TraitId(5)
+                    TraitId(12),
+                    TraitId(13),
+                    TraitId(14),
+                    TraitId(15),
+                    TraitId(16),
+                    TraitId(17)
                 ]
             );
-            assert_eq!(db.traits_len(), 6);
+            assert_eq!(db.traits_len(), 18);
             assert_eq!(
                 db.impls_len(),
-                16,
-                "10 integral + 5 floating impls + 1 address space"
+                17,
+                "10 integral + 5 floating impls + 1 address space + `bool : Not`"
             );
-            for i in 0..6u32 {
+            for i in 0..18u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);
             }
             assert!(
@@ -104,9 +145,13 @@ mod tests {
                     .map(|s| s.trait_id)
                     .collect()
             };
-            assert_eq!(supers(b.integral), [b.num]);
+            assert_eq!(supers(b.num), [b.add, b.sub, b.mul, b.div, b.rem, b.neg]);
+            assert_eq!(
+                supers(b.integral),
+                [b.num, b.bit_and, b.bit_or, b.bit_xor, b.shl, b.shr]
+            );
             assert_eq!(supers(b.floating_point), [b.num]);
-            assert!(supers(b.num).is_empty() && supers(b.sync).is_empty());
+            assert!(supers(b.add).is_empty() && supers(b.sync).is_empty());
         });
     }
 }
