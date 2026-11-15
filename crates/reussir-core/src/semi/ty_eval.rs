@@ -116,6 +116,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             }
             TypeKind::TypeExpr(path, args) => self.eval_type_expr(path, args, ty.span()),
             TypeKind::TypeArray(elem, extents) => self.eval_array_type(elem, extents, ty.span()),
+            TypeKind::TypeArrayAny(_) => {
+                self.error(Some(ty.span()), ANY_EXTENTS_OUTSIDE_BUILTIN_IMPL);
+                self.tcx.mk(TyKind::Bottom)
+            }
         }
     }
 
@@ -670,12 +674,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.tcx.mk(TyKind::Bottom);
         };
-        let TypeKind::TypeArray(elem, extents) = inner.kind() else {
-            self.error(
-                Some(span),
-                "`Simd` takes the element type and the extents: `Simd<[f32; 4]>`",
-            );
-            return self.tcx.mk(TyKind::Bottom);
+        let (elem, extents) = match inner.kind() {
+            TypeKind::TypeArray(elem, extents) => (elem, extents),
+            TypeKind::TypeArrayAny(_) => return self.eval_type(inner),
+            _ => {
+                self.error(
+                    Some(span),
+                    "`Simd` takes the element type and the extents: `Simd<[f32; 4]>`",
+                );
+                return self.tcx.mk(TyKind::Bottom);
+            }
         };
         let elem = self.eval_type(&elem);
         if let Some(reason) = crate::semi::ty::simd_elem_rejection(elem) {
@@ -1464,6 +1472,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 }
 
+pub(super) const ANY_EXTENTS_OUTSIDE_BUILTIN_IMPL: &str = "the extents can be left out with `..` \
+     only in the target of a builtin impl for vectors: `impl Add for Simd<[T; ..]>`";
+
 /// Collect source dimension holes recursively, including those hidden in
 /// function types, structural products, and applications of named type formers.
 fn inferred_dimension_spans(ty: &surface::Type, out: &mut Vec<surface::Span>) {
@@ -1491,6 +1502,7 @@ fn inferred_dimension_spans(ty: &surface::Type, out: &mut Vec<surface::Span>) {
             }
             inferred_dimension_spans(&ret, out);
         }
+        TypeKind::TypeArrayAny(elem) => inferred_dimension_spans(&elem, out),
         TypeKind::TypeIntegral(_)
         | TypeKind::TypeFp(_)
         | TypeKind::TypeBool

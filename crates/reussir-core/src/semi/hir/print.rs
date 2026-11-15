@@ -730,12 +730,12 @@ impl<'a> Printer<'a> {
                 dims,
                 scalable,
             } => {
-                text("Simd<[")
-                    + self.ty(elem)
-                    + text(format!(
-                        "; {}]>",
-                        crate::semi::ty::simd_extents_text(dims, scalable)
-                    ))
+                // Without extents, the target of a builtin impl.
+                let extents = match dims.is_empty() {
+                    true => "..".to_string(),
+                    false => crate::semi::ty::simd_extents_text(dims, scalable),
+                };
+                text("Simd<[") + self.ty(elem) + text(format!("; {extents}]>"))
             }
             TyKind::Ptr { space, kind } => {
                 text(kind.surface_name()) + text("<") + self.ty(space) + text(">")

@@ -12,7 +12,8 @@
 //! method     ::= 'fn' ident '(' (ident ':' tyref) (',' ident ':' tyref)* ')'
 //!                ('->' tyref)? ';'
 //! tyref      ::= 'Self' | 'Self' '::' ident | ident
-//! impl-item  ::= 'impl' ident 'for' ident ('|' ident)* ';'
+//! impl-item  ::= 'impl' ('<' ident ':' ident '>')? ident 'for' target ('|' target)* ';'
+//! target     ::= ident | 'Simd' '<' '[' ident ';' '..' ']' '>'
 //! attr       ::= '#[sealed]' | '#[structural]' | doc comment
 //! ```
 
@@ -62,8 +63,51 @@ pub(crate) enum TypeRef {
 }
 
 pub(crate) struct ImplDecl {
+    /// `<T: Bound>`: the element type of a vector target, and the trait it
+    /// must implement.
+    pub generic: Option<(syn::Ident, syn::Ident)>,
     pub trait_name: syn::Ident,
-    pub self_tys: Vec<syn::Ident>,
+    pub self_tys: Vec<ImplTarget>,
+}
+
+pub(crate) enum ImplTarget {
+    Scalar(syn::Ident),
+    /// `Simd<[E; ..]>`: every vector whose element type is `E`, a scalar or
+    /// the impl's parameter.
+    Simd(syn::Ident),
+}
+
+impl ImplTarget {
+    /// The spelling, for diagnostics and duplicate detection.
+    pub fn spelling(&self) -> String {
+        match self {
+            ImplTarget::Scalar(ident) => ident.to_string(),
+            ImplTarget::Simd(elem) => format!("Simd<[{elem}; ..]>"),
+        }
+    }
+
+    pub fn ident(&self) -> &syn::Ident {
+        match self {
+            ImplTarget::Scalar(ident) | ImplTarget::Simd(ident) => ident,
+        }
+    }
+}
+
+impl Parse for ImplTarget {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident: syn::Ident = input.parse()?;
+        if ident == "Simd" && input.peek(Token![<]) {
+            input.parse::<Token![<]>()?;
+            let array;
+            syn::bracketed!(array in input);
+            let elem: syn::Ident = array.parse()?;
+            array.parse::<Token![;]>()?;
+            array.parse::<Token![..]>()?;
+            input.parse::<Token![>]>()?;
+            return Ok(ImplTarget::Simd(elem));
+        }
+        Ok(ImplTarget::Scalar(ident))
+    }
 }
 
 impl Parse for Input {
@@ -199,6 +243,16 @@ impl Parse for TypeRef {
 impl Parse for ImplDecl {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         input.parse::<Token![impl]>()?;
+        let generic = if input.peek(Token![<]) {
+            input.parse::<Token![<]>()?;
+            let name: syn::Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let bound: syn::Ident = input.parse()?;
+            input.parse::<Token![>]>()?;
+            Some((name, bound))
+        } else {
+            None
+        };
         let trait_name: syn::Ident = input.parse()?;
         input.parse::<Token![for]>()?;
         let mut self_tys = vec![input.parse()?];
@@ -208,6 +262,7 @@ impl Parse for ImplDecl {
         }
         input.parse::<Token![;]>()?;
         Ok(ImplDecl {
+            generic,
             trait_name,
             self_tys,
         })

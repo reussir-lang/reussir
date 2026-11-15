@@ -243,6 +243,8 @@ pub enum SyntaxKind {
     /// or, with a default, `type Name = Type;` in a trait, `type Name =
     /// Type;` in an impl.
     AssocTypeStmt,
+    /// `..` in place of an array type's extents: any extents (`[T; ..]`).
+    AnyExtents,
 
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,

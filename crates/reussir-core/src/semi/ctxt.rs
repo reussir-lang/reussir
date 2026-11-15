@@ -1064,6 +1064,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 dims,
                 scalable,
             } => {
+                // Without extents: the target of a builtin impl.
+                if dims.is_empty() {
+                    out.push_str("Simd<[");
+                    self.push_ty_display(out, elem);
+                    out.push_str("; ..]>");
+                    return;
+                }
                 out.push_str("Simd<[");
                 self.push_ty_display(out, elem);
                 let _ = write!(
@@ -3272,7 +3279,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         ib: &surface::ImplBlock,
         tid: TraitId,
         targs_surface: &[surface::Type],
-        self_ty: Ty<'tcx>,
+        scalar: Option<Ty<'tcx>>,
         span: Option<Span>,
     ) -> Vec<Option<DefId>> {
         let nones = vec![None; ib.members.len()];
@@ -3309,10 +3316,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return nones;
         }
-        if !ib.generics.is_empty() {
-            self.error(span, "a builtin impl takes no generic parameters");
-            return nones;
-        }
+        // A vector target takes one parameter, its element type; a scalar
+        // target takes none.
+        let (self_ty, generics) = match scalar {
+            Some(scalar) if ib.generics.is_empty() => (scalar, Vec::new()),
+            Some(_) => {
+                self.error(span, "a builtin impl takes no generic parameters");
+                return nones;
+            }
+            None => match self.scan_simd_impl_target(ib, span) {
+                Some(target) => target,
+                None => return nones,
+            },
+        };
         let trait_args: Vec<Ty<'tcx>> = targs_surface
             .iter()
             .map(|a| self.eval_decl_type(a))
@@ -3330,19 +3346,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return nones;
         }
         let Some((assoc_tys, _)) =
-            self.scan_impl_assoc_tys(ib, tid, &[], self_ty, &trait_args, span)
+            self.scan_impl_assoc_tys(ib, tid, &generics, self_ty, &trait_args, span)
         else {
             return nones;
         };
-        // Builtin impls are ground, so an existing impl conflicts exactly when
+        // A scalar impl is ground, so an existing impl conflicts exactly when
         // it has the same self type (`Arc<Nat>` and `Arc<Int>` share a head).
         let head = crate::semi::traits::coherence::head_key(self_ty).expect("scalars have heads");
-        if self
-            .traits
-            .impls_for(tid, head)
-            .iter()
-            .any(|&other| self.traits.impl_def(other).self_ty == self_ty)
-        {
+        if self.traits.impls_for(tid, head).iter().any(|&other| {
+            let other = self.traits.impl_def(other).self_ty;
+            crate::semi::traits::coherence::vector_impls_overlap(other, self_ty)
+                .unwrap_or(other == self_ty)
+        }) {
             self.error(
                 span,
                 format!(
@@ -3357,15 +3372,27 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut args = Vec::with_capacity(1 + trait_args.len());
         args.push(self_ty);
         args.extend(trait_args.iter().copied());
+        let where_clauses = generics
+            .iter()
+            .flat_map(|&(_, g)| {
+                let gt = self.tcx.mk_generic(g);
+                self.generic_bounds(g).iter().map(move |&b| {
+                    crate::semi::traits::Obligation::Trait(crate::semi::traits::TraitRef {
+                        trait_id: b,
+                        args: vec![gt],
+                    })
+                })
+            })
+            .collect();
         self.traits.add_impl(crate::semi::traits::def::ImplDef {
             id,
-            generics: Vec::new(),
+            generics: generics.iter().map(|&(_, g)| g).collect(),
             trait_ref: crate::semi::traits::TraitRef {
                 trait_id: tid,
                 args,
             },
             self_ty,
-            where_clauses: Vec::new(),
+            where_clauses,
             methods: Vec::new(),
             assoc_consts: Vec::new(),
             assoc_tys,
@@ -3373,6 +3400,70 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             file: self.current_file,
         });
         nones
+    }
+
+    /// The element type a vector impl-target names, `Simd<[T; ..]>`: the
+    /// vector type former with the extents left out.
+    fn simd_impl_elem(
+        &self,
+        target: &surface::Path,
+        target_args: &[surface::Type],
+    ) -> Option<surface::Type> {
+        let [arg] = target_args else {
+            return None;
+        };
+        let surface::TypeKind::TypeArrayAny(elem) = arg.kind() else {
+            return None;
+        };
+        let names_simd = self.sym(target.basename) == "Simd"
+            && match target.segments.is_empty() {
+                true => self.defs.resolve_record(target.basename).is_none(),
+                false => self.is_core_prefix(&target.segments, "simd"),
+            };
+        names_simd.then_some(elem)
+    }
+
+    /// The self type and block generics of a builtin impl for vectors,
+    /// `impl<T: Bound> Trait for Simd<[T; ..]> { }` or `impl Trait for
+    /// Simd<[bool; ..]> { }`. The target stands for every vector of the
+    /// element type: the self type is the vector type without extents,
+    /// which impl matching reads as any.
+    fn scan_simd_impl_target(
+        &mut self,
+        ib: &surface::ImplBlock,
+        span: Option<Span>,
+    ) -> Option<(Ty<'tcx>, Vec<(TokenKey, GenericId)>)> {
+        let elem = self.simd_impl_elem(&ib.target, &ib.target_args)?;
+        let generics = self.collect_generics(&ib.generics, span);
+        self.generic_names = generics.iter().copied().collect();
+        let elem_ty = self.eval_decl_type(&elem);
+        self.generic_names.clear();
+        let parameter = match *elem_ty.kind() {
+            TyKind::Generic(g) => Some(g),
+            _ => None,
+        };
+        if let (None, Some(reason)) = (parameter, crate::semi::ty::simd_elem_rejection(elem_ty)) {
+            self.error(
+                Some(elem.span()),
+                format!(
+                    "`{}` cannot be a vector lane ({reason})",
+                    self.ty_display(elem_ty)
+                ),
+            );
+            return None;
+        }
+        if let Some(&(name, _)) = generics.iter().find(|&&(_, g)| Some(g) != parameter) {
+            self.error(
+                span,
+                format!(
+                    "impl generic `{}` is not constrained by the trait \
+                     reference or the self type",
+                    self.sym(name)
+                ),
+            );
+            return None;
+        }
+        Some((self.tcx.mk_simd(elem_ty, &[], false), generics))
     }
 
     fn scan_trait_impl(
@@ -3425,12 +3516,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // flows through the general path below with the scalar as its self
         // type, where the orphan rule demands the local trait.
         let scalar_target = self.prim_impl_target(&ib.target, &ib.target_args);
-        if let Some(scalar) = scalar_target {
+        let vector_target =
+            scalar_target.is_none() && self.simd_impl_elem(&ib.target, &ib.target_args).is_some();
+        if scalar_target.is_some() || vector_target {
             let tdef = self.traits.trait_def(tid);
             let lang_bound = self.lang.item_of(tdef.def).is_some();
             let local = !self.extern_defs.contains_key(&tdef.def);
             if lang_bound && local {
-                return self.scan_builtin_impl(ib, tid, targs_surface, scalar, span);
+                return self.scan_builtin_impl(ib, tid, targs_surface, scalar_target, span);
             }
         }
         if self.traits.trait_def(tid).sealed {
@@ -3442,6 +3535,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     self.trait_display(tid)
                 ),
             );
+            return nones;
+        }
+        if vector_target {
+            self.error(span, super::ty_eval::ANY_EXTENTS_OUTSIDE_BUILTIN_IMPL);
             return nones;
         }
         // The operator-dispatch traits are implementable only through

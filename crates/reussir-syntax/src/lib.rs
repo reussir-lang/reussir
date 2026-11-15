@@ -557,6 +557,17 @@ mod tests {
     }
 
     #[test]
+    fn extents_can_be_left_out_as_a_whole() {
+        let source = "impl<T: Add> Add for Simd<[T; ..]> { }";
+        let json = parse_ok(source).to_json(&CharMap::new(source)).to_string();
+        assert_eq!(json.matches("AnyExtents").count(), 1, "{json}");
+        // `..` replaces the extent list; it is not one extent among others.
+        for source in ["fn f(x: [f32; 4, ..]) {}", "fn f(x: [f32; .., 4]) {}"] {
+            assert!(!super::parse(source).ok(), "{source}");
+        }
+    }
+
+    #[test]
     fn inferred_dimensions_are_distinct_from_runtime_dimensions() {
         let source = "fn f(x: Tensor<[f32; _, ?, 4]>, y: [i32; _]) { let z: DevArray<[f32; _, 4]> = g<Tensor<[f32; _, _]>>(); }";
         let parsed = parse_ok(source);

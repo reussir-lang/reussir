@@ -565,6 +565,12 @@ impl Emitter<'_> {
                 // same convention as `_` in a type argument list. An inferred
                 // dimension has its own tag: runtime `?` and inference `_`
                 // must not become indistinguishable in the AST projection.
+                if node.children().any(|n| n.kind() == AnyExtents) {
+                    return tagged(
+                        "TypeArray",
+                        json!([self.type_(elem), tagged0("AnyExtents")]),
+                    );
+                }
                 let extents: Vec<Value> = node
                     .children()
                     .filter(|n| {

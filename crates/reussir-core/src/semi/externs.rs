@@ -403,7 +403,12 @@ impl<'tcx> Elaborator<'_, 'tcx> {
                     other.generics.iter().copied().collect();
                 vars.extend(binder.iter().map(|&(_, g)| g));
                 let mut subst = FxHashMap::default();
-                if unify_args(&other.trait_ref.args, &args, &vars, &mut subst) {
+                let overlap =
+                    crate::semi::traits::coherence::vector_impls_overlap(other.self_ty, self_ty)
+                        .unwrap_or_else(|| {
+                            unify_args(&other.trait_ref.args, &args, &vars, &mut subst)
+                        });
+                if overlap {
                     conflict = true;
                     break;
                 }
@@ -751,6 +756,14 @@ impl<'tcx> Remapper<'_, '_, 'tcx> {
             }
             // Scalars carry no defs or generics; holes cannot occur in a
             // fully elaborated interface.
+            TyKind::Simd {
+                elem,
+                dims,
+                scalable,
+            } => {
+                let elem = self.ty(elem);
+                self.tcx.mk_simd(elem, dims, scalable)
+            }
             _ => ty,
         }
     }

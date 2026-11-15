@@ -1,0 +1,24 @@
+#[lang("add")]
+pub trait Plus { fn add(self: Self, other: Self) -> Self; }
+trait Named { fn name(self: Self) -> i32; }
+
+impl Plus for i32 { }
+impl<T: Plus> Plus for Simd<[T; ..]> { }
+
+fn added<V: Plus>(a: V) -> V { a }
+
+// The impl applies when the element type meets its bound.
+// CHECK-DAG: `Simd<[bool; 4]>` does not implement `Plus`: `bool` does not implement `Plus`
+fn element(a: Simd<[bool; 4]>) -> Simd<[bool; 4]> { added(a) }
+// Two impls that leave the element type to a parameter cover the same vectors.
+// CHECK-DAG: conflicting implementations of trait `Plus` for `Simd<[U; ..]>`
+impl<U: Plus> Plus for Simd<[U; ..]> { }
+// CHECK-DAG: `str` cannot be a vector lane
+impl Plus for Simd<[str; ..]> { }
+// `..` is the target of a builtin impl, not a type of its own.
+// CHECK-DAG: the extents can be left out with `..` only in the target of a builtin impl for vectors
+fn parameter(a: Simd<[f32; ..]>) { }
+// CHECK-DAG: the extents can be left out with `..` only in the target of a builtin impl for vectors
+fn array(a: [f32; ..]) { }
+// CHECK-DAG: the extents can be left out with `..` only in the target of a builtin impl for vectors
+impl<T> Named for Simd<[T; ..]> { fn name(self: Self) -> i32 { 0 } }

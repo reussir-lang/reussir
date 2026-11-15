@@ -1,0 +1,5 @@
+// The impls of a dependency apply to this package's vectors.
+// CHECK-DAG: pub fn @_RINvC3ops5added{{.*}}(v0 (a): Simd<[f32; 2, 4]>)
+// CHECK-DAG: pub fn @_RINvC3ops6masked{{.*}}(v0 (a): Simd<[bool; 16]>)
+pub fn sum(a: Simd<[f32; 2, 4]>) -> Simd<[f32; 2, 4]> { ops::added(a) }
+pub fn mask(a: Simd<[bool; 16]>) -> Simd<[bool; 16]> { ops::masked(a) }
