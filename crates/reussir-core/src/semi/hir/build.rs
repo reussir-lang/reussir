@@ -138,6 +138,9 @@ impl<'tcx> Parsed<'tcx> {
         };
 
         let mut db = crate::semi::traits::TraitDb::new();
+        // The builtins live at the crate root, whatever module the dump's
+        // last item left current.
+        self.defs.set_module(Vec::new());
         let _ = Builtins::register(&mut db, &mut self.defs, &mut self.names, tcx);
         let lookup_trait = |names: &mut Names, defs: &DefTable, path: &str| {
             let segs: Vec<TokenKey> = path.split("::").map(|s| names.intern(s)).collect();

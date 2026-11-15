@@ -104,6 +104,24 @@ builtin_traits! {
     impl Integral for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl FloatingPoint for f16 | f32 | f64 | bf16 | f8;
     impl AddrSpace for Generic;
+
+    // A method call needs an impl of the method's own trait: the edges from
+    // `Num` and `Integral` satisfy bounds only.
+    impl Add for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Sub for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Mul for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Div for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Rem for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Neg for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl BitAnd for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
+    impl BitOr for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
+    impl BitXor for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl Not for bool;
 }
 
@@ -113,9 +131,8 @@ mod tests {
     use crate::semi::traits::{TraitDb, TraitId};
     use crate::with_tcx;
 
-    /// Dense declaration-ordered trait ids, 10 integral + 5 floating impls,
-    /// the generic address space and `bool : Not`, all sealed, `Sync`
-    /// impl-less.
+    /// Dense declaration-ordered trait ids, the scalar impls, all sealed,
+    /// `Sync` impl-less.
     #[test]
     fn generated_table_matches_the_handwritten_contract() {
         with_tcx(|tcx| {
@@ -145,8 +162,10 @@ mod tests {
             assert_eq!(db.traits_len(), 16);
             assert_eq!(
                 db.impls_len(),
-                17,
-                "10 integral + 5 floating impls + 1 address space + `bool : Not`"
+                137,
+                "10 integral + 5 floating impls + 1 address space, 6 arithmetic \
+                 traits over the 15 numbers, 3 bitwise over the 10 integers, and \
+                 `bool : Not`"
             );
             for i in 0..16u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);

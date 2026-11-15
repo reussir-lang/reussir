@@ -9,9 +9,7 @@ use crate::semi::traits::{
     Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
 };
 use crate::semi::ty::CellKind;
-use crate::semi::ty::{
-    BigIntTy, DefId, Flexivity, GenericId, IntTy, Ty, TyKind, bigint_cast_rejection,
-};
+use crate::semi::ty::{DefId, Flexivity, GenericId, IntTy, Ty, TyKind, bigint_cast_rejection};
 use crate::surface::{self, BinOp, Const, Span, UnaryOp};
 
 use super::ctxt::{Elaborator, FuncProto, RecordFields};
@@ -2539,6 +2537,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .filter(|imp| imp.self_ty == recv_ty)
             .filter_map(|imp| {
                 let tid = imp.trait_ref.trait_id;
+                if self.lang.is_superseded(tid) {
+                    return None;
+                }
                 self.traits
                     .trait_def(tid)
                     .methods

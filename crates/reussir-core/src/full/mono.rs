@@ -4084,6 +4084,7 @@ mod tests {
         let text = mir_text(
             r#"#[lang("add")] #[sealed]
             pub trait Plus { fn add(self: Self, other: Self) -> Self; }
+            impl Plus for i64 { }
             fn twice<T: Plus>(a: T) -> T { a + a }
             pub fn go(x: i64) -> i64 { twice(x).add(x) }"#,
         );

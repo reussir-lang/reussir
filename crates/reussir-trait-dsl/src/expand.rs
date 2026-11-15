@@ -206,7 +206,12 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 let #field = crate::semi::traits::TraitId(#i);
                 {
                     let key = interner.get_or_intern(#name);
-                    let def = defs.declare_trait(key).expect("builtins precede user defs");
+                    // A re-entered dump names a builtin trait before the
+                    // table registers when it calls one of its methods.
+                    let def = defs
+                        .lookup_trait(&[key])
+                        .or_else(|| defs.declare_trait(key))
+                        .expect("builtins precede user defs");
                     let methods = vec![#(#methods),*];
                     db.add_trait(crate::semi::traits::def::TraitDef {
                         id: #field,

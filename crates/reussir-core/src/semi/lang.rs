@@ -583,6 +583,15 @@ impl LangItems {
         self.operators = fields[6..].try_into().expect("ten operator traits");
     }
 
+    /// Whether `id` is a construction builtin whose lang item a declaration
+    /// has taken over: the declared trait stands for it everywhere.
+    pub fn is_superseded(&self, id: TraitId) -> bool {
+        self.builtin
+            .iter()
+            .zip(self.fields())
+            .any(|(&builtin, active)| builtin == id && active != id)
+    }
+
     /// Substitute a bare-name hit on a *construction builtin* with the
     /// declared tower item, when one is bound: `T: Num` keeps resolving at
     /// the crate root in plain sessions, and resolves to `core`'s
