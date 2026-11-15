@@ -18,41 +18,41 @@
 
 // MIR-NOT: trait#
 
-// HIR: pub [shared] struct #Pending<[[P:\$[0-9]+]] (T): Shift> { "value": [[P]], "by": trait#Shift::<[[P]]>#Amount };
-// HIR: pub trait #Shift<[[SELF:\$[0-9]+]] (Self)> {
+// HIR: pub [shared] struct #Pending<[[P:\$[0-9]+]] (T): Shifter> { "value": [[P]], "by": trait#Shifter::<[[P]]>#Amount };
+// HIR: pub trait #Shifter<[[SELF:\$[0-9]+]] (Self)> {
 // HIR-NEXT: type Amount = [[SELF]];
-// HIR-NEXT: type Wide = trait#Shift::<[[SELF]]>#Amount;
-// HIR-NEXT: fn shl ([[SELF]], trait#Shift::<[[SELF]]>#Amount) -> [[SELF]];
-// HIR-NEXT: fn widen ([[SELF]]) -> trait#Shift::<[[SELF]]>#Wide;
-pub trait Shift {
+// HIR-NEXT: type Wide = trait#Shifter::<[[SELF]]>#Amount;
+// HIR-NEXT: fn shift_by ([[SELF]], trait#Shifter::<[[SELF]]>#Amount) -> [[SELF]];
+// HIR-NEXT: fn widen ([[SELF]]) -> trait#Shifter::<[[SELF]]>#Wide;
+pub trait Shifter {
     type Amount = Self;
     type Wide = Self::Amount;
-    fn shl(self: Self, amount: Self::Amount) -> Self;
+    fn shift_by(self: Self, amount: Self::Amount) -> Self;
     fn widen(self: Self) -> Self::Wide;
 }
 
-pub trait Rotate: Shift {
+pub trait Rotate: Shifter {
     fn rot(self: Self) -> Self;
 }
 
 pub struct Big { v: i64 }
 pub struct Wrap<T> { inner: T }
-pub struct Pending<T: Shift> { value: T, by: T::Amount }
+pub struct Pending<T: Shifter> { value: T, by: T::Amount }
 
 // Both defaults apply: `Amount` and `Wide` are `i32`.
-// HIR-DAG: impl #Shift::<i32> { #Shift::i32::shl, #Shift::i32::widen }
-impl Shift for i32 {
-    fn shl(self: i32, amount: i32) -> i32 { self << amount }
+// HIR-DAG: impl #Shifter::<i32> { #Shifter::i32::shift_by, #Shifter::i32::widen }
+impl Shifter for i32 {
+    fn shift_by(self: i32, amount: i32) -> i32 { self << amount }
     fn widen(self: i32) -> i32 { self }
 }
 
 // `Wide` defaults to the `Amount` this impl binds.
-// HIR-DAG: impl #Shift::<#Big> { type Amount = i64; #Shift::Big::shl, #Shift::Big::widen }
-// HIR-DAG: pub fn #Shift::Big::shl(v0 (self): #Big, v1 (amount): i64) -> #Big {
-// HIR-DAG: pub fn #Shift::Big::widen(v0 (self): #Big) -> i64 {
-impl Shift for Big {
+// HIR-DAG: impl #Shifter::<#Big> { type Amount = i64; #Shifter::Big::shift_by, #Shifter::Big::widen }
+// HIR-DAG: pub fn #Shifter::Big::shift_by(v0 (self): #Big, v1 (amount): i64) -> #Big {
+// HIR-DAG: pub fn #Shifter::Big::widen(v0 (self): #Big) -> i64 {
+impl Shifter for Big {
     type Amount = i64;
-    fn shl(self: Big, amount: Self::Amount) -> Big {
+    fn shift_by(self: Big, amount: Self::Amount) -> Big {
         let by: Self::Amount = amount;
         Big { v: self.v << by }
     }
@@ -64,33 +64,33 @@ impl Rotate for Big {
 }
 
 // A generic impl may bind a type to its parameter's associated type.
-// HIR-DAG: impl<[[W:\$[0-9]+]]: Shift> #Shift::<#Wrap::<[[W]]>> { type Amount = trait#Shift::<[[W]]>#Amount; type Wide = [[W]]; #Shift::Wrap::shl, #Shift::Wrap::widen }
-impl<T: Shift> Shift for Wrap<T> {
+// HIR-DAG: impl<[[W:\$[0-9]+]]: Shifter> #Shifter::<#Wrap::<[[W]]>> { type Amount = trait#Shifter::<[[W]]>#Amount; type Wide = [[W]]; #Shifter::Wrap::shift_by, #Shifter::Wrap::widen }
+impl<T: Shifter> Shifter for Wrap<T> {
     type Amount = T::Amount;
     type Wide = T;
-    fn shl(self: Wrap<T>, amount: T::Amount) -> Wrap<T> { Wrap { inner: self.inner.shl(amount) } }
+    fn shift_by(self: Wrap<T>, amount: T::Amount) -> Wrap<T> { Wrap { inner: self.inner.shift_by(amount) } }
     fn widen(self: Wrap<T>) -> T { self.inner }
 }
 
-// HIR-DAG: fn #shift<[[T:\$[0-9]+]] (T): Shift>(v0 (a): [[T]], v1 (n): trait#Shift::<[[T]]>#Amount) -> [[T]] {
+// HIR-DAG: fn #shift<[[T:\$[0-9]+]] (T): Shifter>(v0 (a): [[T]], v1 (n): trait#Shifter::<[[T]]>#Amount) -> [[T]] {
 // MIR-DAG: fn @{{.*}}5shift{{.*}}(v0 (a): i32, v1 (n): i32) -> i32 {
 // MIR-DAG: fn @{{.*}}5shift{{.*}}(v0 (a): #Big, v1 (n): i64) -> #Big {
-fn shift<T: Shift>(a: T, n: T::Amount) -> T { a.shl(n) }
+fn shift<T: Shifter>(a: T, n: T::Amount) -> T { a.shift_by(n) }
 
 // The amount is checked before the implementing type is known.
 // MIR-DAG: fn @{{.*}}9shift_rev{{.*}}(v0 (n): i64, v1 (a): #Big) -> #Big {
-fn shift_rev<T: Shift>(n: T::Amount, a: T) -> T { a.shl(n) }
+fn shift_rev<T: Shifter>(n: T::Amount, a: T) -> T { a.shift_by(n) }
 
 // `Amount` is declared by a supertrait of the bound.
-fn through_super<T: Rotate>(a: T, n: T::Amount) -> T { a.rot().shl(n) }
+fn through_super<T: Rotate>(a: T, n: T::Amount) -> T { a.rot().shift_by(n) }
 
 // MIR-DAG: fn @{{.*}}3run{{.*}}(v0 (p): #Pending::<#Wrap::<#Big>>) -> #Wrap::<#Big> {
-fn run<T: Shift>(p: Pending<T>) -> T { p.value.shl(p.by) }
+fn run<T: Shifter>(p: Pending<T>) -> T { p.value.shift_by(p.by) }
 
 // MIR-DAG: fn @{{.*}}4wide{{.*}}(v0 (a): #Wrap::<#Big>) -> #Big {
-fn wide<T: Shift>(a: T) -> T::Wide { a.widen() }
+fn wide<T: Shifter>(a: T) -> T::Wide { a.widen() }
 
-fn keep<T: Shift>(a: T, n: T::Amount) -> T::Amount {
+fn keep<T: Shifter>(a: T, n: T::Amount) -> T::Amount {
     let m: T::Amount = n;
     m
 }
@@ -104,7 +104,7 @@ pub fn checksum() -> i64 {
     let e = run(Pending { value: Wrap { inner: Big { v: 1 } }, by: 5 });
     let f = wide(Big { v: 7 }) + wide(Wrap { inner: Big { v: 9 } }).v;
     let g = keep(Big { v: 0 }, 11);
-    let h = wide(three).shl(1);
+    let h = wide(three).shift_by(1);
     (a as i64) + b.v + c.v + d.v + e.inner.v + f + g + (h as i64)
 }
 

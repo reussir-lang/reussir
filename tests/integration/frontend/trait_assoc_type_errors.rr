@@ -17,7 +17,7 @@ pub trait Cyclic {
     type Other = Self::Missing;
 }
 
-pub trait Shift {
+pub trait Shifter {
     type Amount;
     fn shl(self: Self, amount: Self::Amount) -> Self;
 }
@@ -34,34 +34,34 @@ pub struct W<T> { v: T }
 
 // An impl binds every associated type without a default exactly once,
 // nothing the trait does not declare, and its methods take the bound type.
-// CHECK-DAG: impl of trait `Shift` for `A` is missing associated type(s) `Amount`
-impl Shift for A {
+// CHECK-DAG: impl of trait `Shifter` for `A` is missing associated type(s) `Amount`
+impl Shifter for A {
     fn shl(self: A, amount: i64) -> A { self }
 }
 
 // CHECK-DAG: associated type `Amount` is bound more than once
-// CHECK-DAG: `Extra` is not an associated type of trait `Shift`
-impl Shift for B {
+// CHECK-DAG: `Extra` is not an associated type of trait `Shifter`
+impl Shifter for B {
     type Amount = i64;
     type Amount = i32;
     type Extra = i64;
     fn shl(self: B, amount: i64) -> B { self }
 }
 
-// CHECK-DAG: parameter 1 of method `shl` has type `i32` but trait `Shift` requires `i64`
-impl Shift for C {
+// CHECK-DAG: parameter 1 of method `shl` has type `i32` but trait `Shifter` requires `i64`
+impl Shifter for C {
     type Amount = i64;
     fn shl(self: C, amount: i32) -> C { self }
 }
 
 // CHECK-DAG: visibility is not allowed on a trait impl type; the trait's visibility applies
-impl Shift for D {
+impl Shifter for D {
     pub type Amount = i64;
     fn shl(self: D, amount: i64) -> D { self }
 }
 
 // CHECK-DAG: an associated type cannot appear in the trait reference or the self type of an `impl`
-impl<T: Shift> Scale for W<T::Amount> {
+impl<T: Shifter> Scale for W<T::Amount> {
     type Amount = T;
 }
 
@@ -73,16 +73,16 @@ impl A {
 // `T::Name` needs exactly one bound of `T` that declares `Name`.
 // CHECK-DAG: no associated type `Amount` on `T`: no bound of `T` declares it
 fn unbounded<T>(a: T, n: T::Amount) -> T { a }
-// CHECK-DAG: multiple bounds of `T` declare associated type `Amount`: `Shift` and `Scale`
-fn ambiguous<T: Shift + Scale>(a: T, n: T::Amount) -> T { a }
+// CHECK-DAG: multiple bounds of `T` declare associated type `Amount`: `Shifter` and `Scale`
+fn ambiguous<T: Shifter + Scale>(a: T, n: T::Amount) -> T { a }
 // CHECK-DAG: an associated type takes no type arguments
-fn applied<T: Shift>(a: T, n: T::Amount<i64>) -> T { a }
+fn applied<T: Shifter>(a: T, n: T::Amount<i64>) -> T { a }
 
 // Nothing is known about an associated type of a type parameter.
 // CHECK-DAG: `T::Amount` does not implement `Add`
-fn doubled<T: Shift>(a: T, n: T::Amount) -> T::Amount { n + n }
+fn doubled<T: Shifter>(a: T, n: T::Amount) -> T::Amount { n + n }
 
-fn shift<T: Shift>(a: T, n: T::Amount) -> T { a.shl(n) }
+fn shift<T: Shifter>(a: T, n: T::Amount) -> T { a.shl(n) }
 
 // At a call the associated type is the one the argument's impl binds.
 // CHECK-DAG: type mismatch: expected `i64`, found `i32`
@@ -94,11 +94,11 @@ pub fn narrow() -> i64 {
 // A sub-trait's impl satisfies a bound on the supertrait but binds none of
 // the supertrait's types.
 // CHECK-DAG: `E::Amount` names no type: its trait is implemented only through a sub-trait
-pub trait Rotate: Shift { }
+pub trait Rotate: Shifter { }
 pub struct E { v: i64 }
 impl Rotate for E { }
 
-fn amount<T: Shift>(a: T, n: T::Amount) -> T::Amount { n }
+fn amount<T: Shifter>(a: T, n: T::Amount) -> T::Amount { n }
 
 pub fn indirect(a: E, b: E) -> E {
     amount(a, b)
