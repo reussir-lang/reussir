@@ -1278,9 +1278,8 @@ enum TraitCallTarget<'tcx> {
     /// comparison lowers straight to the intrinsic.
     Intrinsic(CmpOp),
     /// A method-less compiler impl of an operator trait in `core::ops`: the
-    /// call is the built-in operation of the trait's method, by its index
-    /// in [`OperatorTrait::methods`](crate::semi::lang::OperatorTrait::methods).
-    Operator(crate::semi::lang::OperatorTrait, usize),
+    /// call is the built-in operation of the method.
+    Operator(crate::semi::lang::OperatorMethod),
     /// `Ord::cmp` over a scalar: a synthesized three-way comparison
     /// returning `Ordering`.
     ThreeWay,
@@ -1947,8 +1946,8 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         _ => crate::semi::lang::OperatorTrait::of_builtin(tid),
                     };
                     if let Some(op) = operator {
-                        return match op.methods().iter().position(|&m| m == mname) {
-                            Some(index) => Some(TraitCallTarget::Operator(op, index)),
+                        return match op.method(&mname) {
+                            Some(method) => Some(TraitCallTarget::Operator(method)),
                             None => {
                                 self.error(
                                     span,
@@ -2826,16 +2825,16 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                             M::Poison
                         }
                     }
-                    Some(TraitCallTarget::Operator(op, method)) => {
+                    Some(TraitCallTarget::Operator(method)) => {
                         if self.inside_kernel {
                             self.error(span, "host trait operations are not allowed in a kernel");
                             return M::Poison;
                         }
-                        use crate::semi::lang::OperatorTrait;
-                        match (op.arith(method), self.lower_slice(args, subst)) {
-                            (Some(arith), [l, r]) => M::Arith(l, arith, r),
-                            (None, [e]) if op == OperatorTrait::Neg => M::Negate(e),
-                            (None, [e]) => M::Not(e),
+                        use crate::semi::lang::OperatorMethod;
+                        match (method, method.arith(), self.lower_slice(args, subst)) {
+                            (_, Some(arith), [l, r]) => M::Arith(l, arith, r),
+                            (OperatorMethod::Neg, None, [e]) => M::Negate(e),
+                            (OperatorMethod::Not, None, [e]) => M::Not(e),
                             _ => {
                                 self.error(
                                     span,
