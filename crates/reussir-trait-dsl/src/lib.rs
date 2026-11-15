@@ -23,6 +23,7 @@
 //!
 //! * `pub struct Builtins` with one snake-cased `TraitId` field per declared
 //!   trait, in declaration order (doc comments forwarded);
+//! * `Builtins::IDS`, the same handles as a constant;
 //! * `impl Builtins { pub fn register(db, defs, interner, tcx) -> Builtins }`
 //!   declaring each trait in the `DefTable`'s trait namespace at the crate
 //!   root and registering `TraitDef`s/`ImplDef`s with dense, declaration-
@@ -31,9 +32,10 @@
 //! Declaration order **is** the id assignment: reordering the invocation
 //! renumbers `TraitId`/`ImplId`. `#[sealed]` marks a trait unimplementable
 //! by user code; `#[structural]` additionally forbids impls *in this table*
-//! (the checker answers such traits structurally — `Sync`). Method
-//! signatures inside a `trait { … }` body parse (the grammar is reserved for
-//! the method-carrying future) but are rejected in expansion for now.
+//! (the checker answers such traits structurally — `Sync`). A method
+//! signature inside a `trait { … }` body becomes a method of the trait; the
+//! impls stay method-less, which is the form the compiler provides the
+//! operation for.
 
 mod ast;
 mod expand;

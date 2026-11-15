@@ -29,10 +29,11 @@ fn jit_run_each(source: &str, run: impl Fn(&OrcJit)) {
     if features::enabled("tpde") {
         levels.push(OptLevel::Tpde);
     }
-    let files: [(&[&str], &str); 4] = [
-        (&[], "pub mod cmp;\npub mod num;\npub mod t;"),
+    let files: [(&[&str], &str); 5] = [
+        (&[], "pub mod cmp;\npub mod num;\npub mod ops;\npub mod t;"),
         (&["cmp"], include_str!("../../../library/core/src/cmp.rr")),
         (&["num"], include_str!("../../../library/core/src/num.rr")),
+        (&["ops"], include_str!("../../../library/core/src/ops.rr")),
         (&["t"], source),
     ];
     for level in levels {

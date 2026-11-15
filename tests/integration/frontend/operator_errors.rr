@@ -1,0 +1,24 @@
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+
+// Each operator asks its own trait of the operand type.
+
+pub struct P { x: i32 }
+
+// CHECK-DAG: `P` does not implement `Add`
+pub fn sum(a: P, b: P) -> P { a + b }
+
+// CHECK-DAG: `P` does not implement `Rem`
+pub fn rest(a: P, b: P) -> P { a % b }
+
+// CHECK-DAG: `P` does not implement `Neg`
+pub fn opposite(a: P) -> P { -a }
+
+// CHECK-DAG: `i32` does not implement `Not`
+pub fn flip(a: i32) -> i32 { !a }
+
+// A number has the binary arithmetic operators through `Num`. Negation is
+// apart, since not every number has negatives.
+pub fn generic<T: Num + Neg>(a: T, b: T) -> T { -(a + b) * a / b % a }
+
+// CHECK-DAG: the bound `Neg` is not satisfied by this generic
+pub fn unsigned<T: Num>(a: T) -> T { -a }

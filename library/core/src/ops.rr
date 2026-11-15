@@ -1,0 +1,248 @@
+//! The operator traits: each arithmetic, bitwise and logical operator is
+//! sugar for a call of its trait's method, `a + b` for `Add::add(a, b)`.
+//!
+//! `#[sealed]`: only the impls below exist. They take the builtin form, an
+//! empty body, and the compiler makes a call through one the built-in
+//! operation. `Num` and `Integral` in `core::num` inherit from the traits,
+//! so `T: Num` code can use the arithmetic operators.
+
+/// `a + b`.
+#[lang("add")]
+#[sealed]
+pub trait Add {
+    fn add(self: Self, other: Self) -> Self;
+}
+
+/// `a - b`.
+#[lang("sub")]
+#[sealed]
+pub trait Sub {
+    fn sub(self: Self, other: Self) -> Self;
+}
+
+/// `a * b`.
+#[lang("mul")]
+#[sealed]
+pub trait Mul {
+    fn mul(self: Self, other: Self) -> Self;
+}
+
+/// `a / b`.
+#[lang("div")]
+#[sealed]
+pub trait Div {
+    fn div(self: Self, other: Self) -> Self;
+}
+
+/// `a % b`.
+#[lang("rem")]
+#[sealed]
+pub trait Rem {
+    fn rem(self: Self, other: Self) -> Self;
+}
+
+/// `-a`.
+#[lang("neg")]
+#[sealed]
+pub trait Neg {
+    fn neg(self: Self) -> Self;
+}
+
+/// `a & b`.
+#[lang("bit_and")]
+#[sealed]
+pub trait BitAnd {
+    fn bitand(self: Self, other: Self) -> Self;
+}
+
+/// `a | b`.
+#[lang("bit_or")]
+#[sealed]
+pub trait BitOr {
+    fn bitor(self: Self, other: Self) -> Self;
+}
+
+/// `a ^ b`.
+#[lang("bit_xor")]
+#[sealed]
+pub trait BitXor {
+    fn bitxor(self: Self, other: Self) -> Self;
+}
+
+/// `!a`.
+#[lang("not")]
+#[sealed]
+pub trait Not {
+    fn not(self: Self) -> Self;
+}
+
+// The numbers: every integer and floating-point type, `Nat` and `Int`.
+
+impl Add for i8 { }
+impl Add for i16 { }
+impl Add for i32 { }
+impl Add for i64 { }
+impl Add for i128 { }
+impl Add for u8 { }
+impl Add for u16 { }
+impl Add for u32 { }
+impl Add for u64 { }
+impl Add for u128 { }
+impl Add for f16 { }
+impl Add for f32 { }
+impl Add for f64 { }
+impl Add for bfloat16 { }
+impl Add for float8 { }
+impl Add for Nat { }
+impl Add for Int { }
+impl Add for Arc<Nat> { }
+impl Add for Arc<Int> { }
+
+impl Sub for i8 { }
+impl Sub for i16 { }
+impl Sub for i32 { }
+impl Sub for i64 { }
+impl Sub for i128 { }
+impl Sub for u8 { }
+impl Sub for u16 { }
+impl Sub for u32 { }
+impl Sub for u64 { }
+impl Sub for u128 { }
+impl Sub for f16 { }
+impl Sub for f32 { }
+impl Sub for f64 { }
+impl Sub for bfloat16 { }
+impl Sub for float8 { }
+impl Sub for Nat { }
+impl Sub for Int { }
+impl Sub for Arc<Nat> { }
+impl Sub for Arc<Int> { }
+
+impl Mul for i8 { }
+impl Mul for i16 { }
+impl Mul for i32 { }
+impl Mul for i64 { }
+impl Mul for i128 { }
+impl Mul for u8 { }
+impl Mul for u16 { }
+impl Mul for u32 { }
+impl Mul for u64 { }
+impl Mul for u128 { }
+impl Mul for f16 { }
+impl Mul for f32 { }
+impl Mul for f64 { }
+impl Mul for bfloat16 { }
+impl Mul for float8 { }
+impl Mul for Nat { }
+impl Mul for Int { }
+impl Mul for Arc<Nat> { }
+impl Mul for Arc<Int> { }
+
+impl Div for i8 { }
+impl Div for i16 { }
+impl Div for i32 { }
+impl Div for i64 { }
+impl Div for i128 { }
+impl Div for u8 { }
+impl Div for u16 { }
+impl Div for u32 { }
+impl Div for u64 { }
+impl Div for u128 { }
+impl Div for f16 { }
+impl Div for f32 { }
+impl Div for f64 { }
+impl Div for bfloat16 { }
+impl Div for float8 { }
+impl Div for Nat { }
+impl Div for Int { }
+impl Div for Arc<Nat> { }
+impl Div for Arc<Int> { }
+
+impl Rem for i8 { }
+impl Rem for i16 { }
+impl Rem for i32 { }
+impl Rem for i64 { }
+impl Rem for i128 { }
+impl Rem for u8 { }
+impl Rem for u16 { }
+impl Rem for u32 { }
+impl Rem for u64 { }
+impl Rem for u128 { }
+impl Rem for f16 { }
+impl Rem for f32 { }
+impl Rem for f64 { }
+impl Rem for bfloat16 { }
+impl Rem for float8 { }
+impl Rem for Nat { }
+impl Rem for Int { }
+impl Rem for Arc<Nat> { }
+impl Rem for Arc<Int> { }
+
+// `Nat` has no negatives.
+
+impl Neg for i8 { }
+impl Neg for i16 { }
+impl Neg for i32 { }
+impl Neg for i64 { }
+impl Neg for i128 { }
+impl Neg for u8 { }
+impl Neg for u16 { }
+impl Neg for u32 { }
+impl Neg for u64 { }
+impl Neg for u128 { }
+impl Neg for f16 { }
+impl Neg for f32 { }
+impl Neg for f64 { }
+impl Neg for bfloat16 { }
+impl Neg for float8 { }
+impl Neg for Int { }
+impl Neg for Arc<Int> { }
+
+// The integers.
+
+impl BitAnd for i8 { }
+impl BitAnd for i16 { }
+impl BitAnd for i32 { }
+impl BitAnd for i64 { }
+impl BitAnd for i128 { }
+impl BitAnd for u8 { }
+impl BitAnd for u16 { }
+impl BitAnd for u32 { }
+impl BitAnd for u64 { }
+impl BitAnd for u128 { }
+impl BitAnd for Nat { }
+impl BitAnd for Int { }
+impl BitAnd for Arc<Nat> { }
+impl BitAnd for Arc<Int> { }
+
+impl BitOr for i8 { }
+impl BitOr for i16 { }
+impl BitOr for i32 { }
+impl BitOr for i64 { }
+impl BitOr for i128 { }
+impl BitOr for u8 { }
+impl BitOr for u16 { }
+impl BitOr for u32 { }
+impl BitOr for u64 { }
+impl BitOr for u128 { }
+impl BitOr for Nat { }
+impl BitOr for Int { }
+impl BitOr for Arc<Nat> { }
+impl BitOr for Arc<Int> { }
+
+impl BitXor for i8 { }
+impl BitXor for i16 { }
+impl BitXor for i32 { }
+impl BitXor for i64 { }
+impl BitXor for i128 { }
+impl BitXor for u8 { }
+impl BitXor for u16 { }
+impl BitXor for u32 { }
+impl BitXor for u64 { }
+impl BitXor for u128 { }
+impl BitXor for Nat { }
+impl BitXor for Int { }
+impl BitXor for Arc<Nat> { }
+impl BitXor for Arc<Int> { }
+
+impl Not for bool { }

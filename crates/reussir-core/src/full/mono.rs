@@ -1267,9 +1267,12 @@ enum TraitCallTarget<'tcx> {
         ty_args: &'tcx [Ty<'tcx>],
         regional: bool,
     },
-    /// A method-less compiler impl of an operator trait: the boolean
+    /// A method-less compiler impl of a comparison trait: the boolean
     /// comparison lowers straight to the intrinsic.
     Intrinsic(CmpOp),
+    /// A method-less compiler impl of an operator trait in `core::ops`: the
+    /// call is the built-in operation.
+    Operator(crate::semi::lang::OperatorTrait),
     /// `Ord::cmp` over a scalar: a synthesized three-way comparison
     /// returning `Ordering`.
     ThreeWay,
@@ -1933,6 +1936,13 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     // form — `core`'s source-declared scalar impls and the
                     // compiler's no-`core` fallback twins alike: the call
                     // lowers intrinsically instead of dispatching.
+                    let operator = match self.lang.get(&tdef.def) {
+                        Some(crate::semi::lang::LangItem::Operator(op)) => Some(*op),
+                        _ => crate::semi::lang::OperatorTrait::of_builtin(tid),
+                    };
+                    if let Some(op) = operator {
+                        return Some(TraitCallTarget::Operator(op));
+                    }
                     if self
                         .lang
                         .get(&tdef.def)
@@ -2790,6 +2800,25 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                                 "an operator-trait method takes exactly a receiver and one operand",
                             );
                             M::Poison
+                        }
+                    }
+                    Some(TraitCallTarget::Operator(op)) => {
+                        if self.inside_kernel {
+                            self.error(span, "host trait operations are not allowed in a kernel");
+                            return M::Poison;
+                        }
+                        use crate::semi::lang::OperatorTrait;
+                        match (op.arith(), self.lower_slice(args, subst)) {
+                            (Some(arith), [l, r]) => M::Arith(l, arith, r),
+                            (None, [e]) if op == OperatorTrait::Neg => M::Negate(e),
+                            (None, [e]) => M::Not(e),
+                            _ => {
+                                self.error(
+                                    span,
+                                    "wrong number of operands to an operator-trait method",
+                                );
+                                M::Poison
+                            }
                         }
                     }
                     Some(TraitCallTarget::ThreeWay) => {
@@ -4045,6 +4074,25 @@ mod tests {
             inst.contains(" < ") && !text.contains("PartialOrd"),
             "expected an intrinsic `<` and no trait symbols:\n{text}"
         );
+    }
+
+    /// An operator is sugar for its trait's method: on a generic operand it
+    /// is a call through the trait, which an instance at a number makes the
+    /// built-in operation, and the method is callable by name on a number.
+    #[test]
+    fn operator_selection_lowers_intrinsically() {
+        let text = mir_text(
+            r#"#[lang("add")] #[sealed]
+            pub trait Plus { fn add(self: Self, other: Self) -> Self; }
+            impl Plus for i64 { }
+            fn twice<T: Plus>(a: T) -> T { a + a }
+            pub fn go(x: i64) -> i64 { twice(x).add(x) }"#,
+        );
+        for symbol in ["_RIC5twicexE", "_RC2go"] {
+            let item = mir_item(&text, symbol);
+            assert!(item.contains(" + "), "expected a built-in `+`:\n{item}");
+        }
+        assert!(!text.contains("Plus"), "no trait symbols:\n{text}");
     }
 
     /// `Ord::cmp` over a scalar synthesizes one private three-way helper

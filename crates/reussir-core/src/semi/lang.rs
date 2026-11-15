@@ -202,6 +202,110 @@ impl FormerItem {
     }
 }
 
+/// The trait of one operator: `a + b` is a call of `Add::add`. Declared by
+/// `core::ops`, sealed, and wired like the numeric tower.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum OperatorTrait {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Neg,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Not,
+}
+
+impl OperatorTrait {
+    /// In `Builtins` field order.
+    pub const ALL: [OperatorTrait; 10] = [
+        OperatorTrait::Add,
+        OperatorTrait::Sub,
+        OperatorTrait::Mul,
+        OperatorTrait::Div,
+        OperatorTrait::Rem,
+        OperatorTrait::Neg,
+        OperatorTrait::BitAnd,
+        OperatorTrait::BitOr,
+        OperatorTrait::BitXor,
+        OperatorTrait::Not,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OperatorTrait::Add => "add",
+            OperatorTrait::Sub => "sub",
+            OperatorTrait::Mul => "mul",
+            OperatorTrait::Div => "div",
+            OperatorTrait::Rem => "rem",
+            OperatorTrait::Neg => "neg",
+            OperatorTrait::BitAnd => "bit_and",
+            OperatorTrait::BitOr => "bit_or",
+            OperatorTrait::BitXor => "bit_xor",
+            OperatorTrait::Not => "not",
+        }
+    }
+
+    /// The trait's method: `a + b` is `Add::add(a, b)`.
+    pub fn method(self) -> &'static str {
+        match self {
+            OperatorTrait::BitAnd => "bitand",
+            OperatorTrait::BitOr => "bitor",
+            OperatorTrait::BitXor => "bitxor",
+            _ => self.name(),
+        }
+    }
+
+    /// The built-in operation of a binary operator.
+    pub fn arith(self) -> Option<crate::semi::hir::ArithOp> {
+        use crate::semi::hir::ArithOp;
+        Some(match self {
+            OperatorTrait::Add => ArithOp::Add,
+            OperatorTrait::Sub => ArithOp::Sub,
+            OperatorTrait::Mul => ArithOp::Mul,
+            OperatorTrait::Div => ArithOp::Div,
+            OperatorTrait::Rem => ArithOp::Mod,
+            OperatorTrait::BitAnd => ArithOp::BitAnd,
+            OperatorTrait::BitOr => ArithOp::BitOr,
+            OperatorTrait::BitXor => ArithOp::BitXor,
+            OperatorTrait::Neg | OperatorTrait::Not => return None,
+        })
+    }
+
+    /// The operator traits of the compiler's own table, in [`Self::ALL`]
+    /// order.
+    fn builtin_ids(table: &Builtins) -> [TraitId; 10] {
+        [
+            table.add,
+            table.sub,
+            table.mul,
+            table.div,
+            table.rem,
+            table.neg,
+            table.bit_and,
+            table.bit_or,
+            table.bit_xor,
+            table.not,
+        ]
+    }
+
+    /// The operator whose trait in the compiler's own table is `id`, which
+    /// is the trait in use where no source declares the lang item.
+    pub fn of_builtin(id: TraitId) -> Option<OperatorTrait> {
+        Self::ALL
+            .into_iter()
+            .zip(Self::builtin_ids(&Builtins::IDS))
+            .find_map(|(op, builtin)| (builtin == id).then_some(op))
+    }
+
+    /// Whether the operator computes on numbers: every one but `!`.
+    pub fn is_numeric(self) -> bool {
+        self != OperatorTrait::Not
+    }
+}
+
 /// Every language item the compiler recognizes. Closed: an unknown
 /// `#[lang("…")]` name is a diagnostic, so the set is versioned with the
 /// compiler.
@@ -214,6 +318,8 @@ pub enum LangItem {
     PtrLike,
     Sync,
     AddrSpace,
+    /// An operator's class of operands — wired, fallback-registered.
+    Operator(OperatorTrait),
     /// The comparison tower — declared by `core` (a later PR in this
     /// series); the slots exist so its source can land without a compiler
     /// release in between.
@@ -287,6 +393,7 @@ impl LangItem {
             LangItem::PtrLike => "ptr_like".into(),
             LangItem::Sync => "sync".into(),
             LangItem::AddrSpace => "addr_space".into(),
+            LangItem::Operator(op) => op.name().into(),
             LangItem::PartialEq => "partial_eq".into(),
             LangItem::Eq => "eq".into(),
             LangItem::PartialOrd => "partial_ord".into(),
@@ -332,7 +439,16 @@ impl LangItem {
         if let Some(former) = FormerItem::ALL.into_iter().find(|f| f.name() == name) {
             return Some(LangItem::Former(former));
         }
+        if let Some(op) = OperatorTrait::ALL.into_iter().find(|op| op.name() == name) {
+            return Some(LangItem::Operator(op));
+        }
         Self::FIXED.into_iter().find(|item| item.name() == name)
+    }
+
+    /// Whether the item is a trait the checker reaches through a
+    /// [`LangItems`] field, which a declaration repoints.
+    pub fn is_wired(self) -> bool {
+        matches!(self, LangItem::Operator(_)) || Self::TOWER.contains(&self)
     }
 
     /// The comparison tower's traits, in declaration (and fallback
@@ -377,33 +493,48 @@ pub struct LangItems {
     /// The address spaces of opaque pointers; its impls decide which types
     /// may be the `A` of `Ptr<A>`.
     pub addr_space: TraitId,
-    /// The construction-time builtin ids, in [`LangItem::TOWER`] order —
-    /// retained after the wired fields repoint, so bare-name resolution
-    /// can recognize (and substitute) a builtin hit.
-    builtin: [TraitId; 6],
+    /// The operator classes, in [`OperatorTrait::ALL`] order.
+    operators: [TraitId; 10],
+    /// The construction-time builtin ids, in [`LangItem::TOWER`] order
+    /// followed by [`OperatorTrait::ALL`] order — retained after the wired
+    /// fields repoint, so bare-name resolution can recognize (and
+    /// substitute) a builtin hit.
+    builtin: [TraitId; 16],
     declared: Vec<(LangItem, DefId)>,
 }
+
+/// The wired trait ids: [`LangItem::TOWER`] order, then
+/// [`OperatorTrait::ALL`] order.
+pub(crate) type WiredTraits = [TraitId; 16];
 
 impl LangItems {
     /// A registry over the fallback-registered tower.
     pub fn new(fallback: Builtins) -> Self {
-        LangItems {
+        let mut lang = LangItems {
             num: fallback.num,
             integral: fallback.integral,
             floating_point: fallback.floating_point,
             ptr_like: fallback.ptr_like,
             sync: fallback.sync,
             addr_space: fallback.addr_space,
-            builtin: [
-                fallback.num,
-                fallback.integral,
-                fallback.floating_point,
-                fallback.ptr_like,
-                fallback.sync,
-                fallback.addr_space,
-            ],
+            operators: OperatorTrait::builtin_ids(&fallback),
+            builtin: [fallback.num; 16],
             declared: Vec::new(),
-        }
+        };
+        lang.builtin = lang.fields();
+        lang
+    }
+
+    /// The class of operands of `op`.
+    pub fn operator(&self, op: OperatorTrait) -> TraitId {
+        self.operators[op as usize]
+    }
+
+    /// The operator whose class `id` is.
+    pub fn operator_of(&self, id: TraitId) -> Option<OperatorTrait> {
+        OperatorTrait::ALL
+            .into_iter()
+            .find(|&op| self.operator(op) == id)
     }
 
     /// Point a wired tower field at `id` — the declared trait (`core`'s)
@@ -419,25 +550,28 @@ impl LangItems {
             LangItem::PtrLike => self.ptr_like = id,
             LangItem::Sync => self.sync = id,
             LangItem::AddrSpace => self.addr_space = id,
+            LangItem::Operator(op) => self.operators[op as usize] = id,
             _ => {}
         }
     }
 
-    /// The wired fields, in [`LangItem::TOWER`] order — the REPL
-    /// checkpoint's snapshot (a rejected batch that repointed them must
-    /// restore the builtins).
-    pub(crate) fn fields(&self) -> [TraitId; 6] {
-        [
+    /// The wired fields — the REPL checkpoint's snapshot (a rejected batch
+    /// that repointed them must restore the builtins).
+    pub(crate) fn fields(&self) -> WiredTraits {
+        let mut fields = [self.num; 16];
+        fields[..6].copy_from_slice(&[
             self.num,
             self.integral,
             self.floating_point,
             self.ptr_like,
             self.sync,
             self.addr_space,
-        ]
+        ]);
+        fields[6..].copy_from_slice(&self.operators);
+        fields
     }
 
-    pub(crate) fn restore_fields(&mut self, fields: [TraitId; 6]) {
+    pub(crate) fn restore_fields(&mut self, fields: WiredTraits) {
         [
             self.num,
             self.integral,
@@ -445,7 +579,17 @@ impl LangItems {
             self.ptr_like,
             self.sync,
             self.addr_space,
-        ] = fields;
+        ] = fields[..6].try_into().expect("six tower traits");
+        self.operators = fields[6..].try_into().expect("ten operator traits");
+    }
+
+    /// Whether `id` is a construction builtin whose lang item a declaration
+    /// has taken over: the declared trait stands for it everywhere.
+    pub fn is_superseded(&self, id: TraitId) -> bool {
+        self.builtin
+            .iter()
+            .zip(self.fields())
+            .any(|(&builtin, active)| builtin == id && active != id)
     }
 
     /// Substitute a bare-name hit on a *construction builtin* with the
@@ -455,10 +599,11 @@ impl LangItems {
     /// Module-local shadows are their own defs and pass through untouched.
     pub fn override_builtin(&self, def: DefId, db: &crate::semi::traits::TraitDb<'_>) -> DefId {
         LangItem::TOWER
-            .iter()
+            .into_iter()
+            .chain(OperatorTrait::ALL.map(LangItem::Operator))
             .zip(self.builtin)
             .find(|&(_, builtin_id)| db.trait_def(builtin_id).def == def)
-            .and_then(|(&item, _)| self.get(item))
+            .and_then(|(item, _)| self.get(item))
             .unwrap_or(def)
     }
 

@@ -13,18 +13,74 @@
 //! └── FloatingPoint (impl: f16..f8)
 //! ```
 //!
+//! Each operator but the shifts has its own class, whose method the
+//! operator is sugar for: `Num` is a subclass of `Add Sub Mul Div Rem`,
+//! `Integral` also of `BitAnd BitOr BitXor`, and `bool` is the one member of
+//! `Not`. `Neg` is apart from `Num`, which has members without negatives.
+//!
 //! [`TraitDef`]: super::TraitDef
 //! [`ImplDef`]: super::ImplDef
 
 use reussir_trait_dsl::builtin_traits;
 
 builtin_traits! {
+    /// The operands of `+`.
+    #[sealed]
+    trait Add {
+        fn add(self: Self, other: Self) -> Self;
+    }
+    /// The operands of binary `-`.
+    #[sealed]
+    trait Sub {
+        fn sub(self: Self, other: Self) -> Self;
+    }
+    /// The operands of `*`.
+    #[sealed]
+    trait Mul {
+        fn mul(self: Self, other: Self) -> Self;
+    }
+    /// The operands of `/`.
+    #[sealed]
+    trait Div {
+        fn div(self: Self, other: Self) -> Self;
+    }
+    /// The operands of `%`.
+    #[sealed]
+    trait Rem {
+        fn rem(self: Self, other: Self) -> Self;
+    }
+    /// The operands of unary `-`.
+    #[sealed]
+    trait Neg {
+        fn neg(self: Self) -> Self;
+    }
+    /// The operands of `&`.
+    #[sealed]
+    trait BitAnd {
+        fn bitand(self: Self, other: Self) -> Self;
+    }
+    /// The operands of `|`.
+    #[sealed]
+    trait BitOr {
+        fn bitor(self: Self, other: Self) -> Self;
+    }
+    /// The operands of `^`.
+    #[sealed]
+    trait BitXor {
+        fn bitxor(self: Self, other: Self) -> Self;
+    }
+    /// The operands of `!`.
+    #[sealed]
+    trait Not {
+        fn not(self: Self) -> Self;
+    }
     /// The root numeric class: arithmetic and numeric literals.
     #[sealed]
-    trait Num;
-    /// Whole-number types; `Num` through the super-trait edge.
+    trait Num: Add + Sub + Mul + Div + Rem;
+    /// Whole-number types; `Num` through the super-trait edge. Shifts ask
+    /// for this class directly.
     #[sealed]
-    trait Integral: Num;
+    trait Integral: Num + BitAnd + BitOr + BitXor;
     /// Floating-point types; `Num` through the super-trait edge.
     #[sealed]
     trait FloatingPoint: Num;
@@ -48,6 +104,25 @@ builtin_traits! {
     impl Integral for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
     impl FloatingPoint for f16 | f32 | f64 | bf16 | f8;
     impl AddrSpace for Generic;
+
+    // A method call needs an impl of the method's own trait: the edges from
+    // `Num` and `Integral` satisfy bounds only.
+    impl Add for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Sub for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Mul for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Div for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Rem for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl Neg for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128
+        | f16 | f32 | f64 | bf16 | f8;
+    impl BitAnd for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
+    impl BitOr for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
+    impl BitXor for i8 | u8 | i16 | u16 | i32 | u32 | i64 | u64 | i128 | u128;
+    impl Not for bool;
 }
 
 #[cfg(test)]
@@ -56,9 +131,8 @@ mod tests {
     use crate::semi::traits::{TraitDb, TraitId};
     use crate::with_tcx;
 
-    /// The generated table is the old hand-written one, exactly: dense
-    /// declaration-ordered trait ids, 10 integral + 5 floating impls and the
-    /// generic address space, all sealed, `Sync` impl-less.
+    /// Dense declaration-ordered trait ids, the scalar impls, all sealed,
+    /// `Sync` impl-less.
     #[test]
     fn generated_table_matches_the_handwritten_contract() {
         with_tcx(|tcx| {
@@ -76,21 +150,24 @@ mod tests {
                     b.addr_space
                 ],
                 [
-                    TraitId(0),
-                    TraitId(1),
-                    TraitId(2),
-                    TraitId(3),
-                    TraitId(4),
-                    TraitId(5)
+                    TraitId(10),
+                    TraitId(11),
+                    TraitId(12),
+                    TraitId(13),
+                    TraitId(14),
+                    TraitId(15)
                 ]
             );
-            assert_eq!(db.traits_len(), 6);
+            assert_eq!(Builtins::IDS.addr_space, b.addr_space);
+            assert_eq!(db.traits_len(), 16);
             assert_eq!(
                 db.impls_len(),
-                16,
-                "10 integral + 5 floating impls + 1 address space"
+                137,
+                "10 integral + 5 floating impls + 1 address space, 6 arithmetic \
+                 traits over the 15 numbers, 3 bitwise over the 10 integers, and \
+                 `bool : Not`"
             );
-            for i in 0..6u32 {
+            for i in 0..16u32 {
                 assert!(db.trait_def(TraitId(i)).sealed);
             }
             assert!(
@@ -104,9 +181,19 @@ mod tests {
                     .map(|s| s.trait_id)
                     .collect()
             };
-            assert_eq!(supers(b.integral), [b.num]);
+            assert_eq!(supers(b.num), [b.add, b.sub, b.mul, b.div, b.rem]);
+            assert_eq!(supers(b.integral), [b.num, b.bit_and, b.bit_or, b.bit_xor]);
             assert_eq!(supers(b.floating_point), [b.num]);
-            assert!(supers(b.num).is_empty() && supers(b.sync).is_empty());
+            assert!(supers(b.add).is_empty() && supers(b.sync).is_empty());
+            // Each operator trait declares the method its operator is sugar
+            // for; the binary ones take the other operand.
+            let params = |t: TraitId| -> Vec<usize> {
+                let methods = &db.trait_def(t).methods;
+                methods.iter().map(|m| m.params.len()).collect()
+            };
+            assert_eq!(params(b.add), [2]);
+            assert_eq!(params(b.neg), [1]);
+            assert!(params(b.num).is_empty());
         });
     }
 }
