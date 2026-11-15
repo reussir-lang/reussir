@@ -96,3 +96,19 @@ pub fn narrow() -> i64 {
 pub trait Rotate: Shifter { }
 pub struct E { v: i64 }
 impl Rotate for E { }
+
+// A binding may name the impl's other bindings, but not itself.
+// CHECK-DAG: the binding of associated type `Amount` names itself
+// CHECK-DAG: the binding of associated type `Wide` names itself
+// CHECK-DAG: the binding of associated type `Narrow` names itself
+pub trait Sized3 {
+    type Amount;
+    type Wide;
+    type Narrow;
+}
+pub struct F { v: i64 }
+impl Sized3 for F {
+    type Amount = Self::Amount;
+    type Wide = (Self::Narrow, i64);
+    type Narrow = Self::Wide;
+}

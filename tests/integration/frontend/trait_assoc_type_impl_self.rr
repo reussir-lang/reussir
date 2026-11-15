@@ -1,0 +1,54 @@
+// `Self::Name` in an impl's `type` binding names the impl's own binding of
+// `Name`, or the trait's default for it, whatever the order they are
+// written in. The bindings are stored with those names replaced.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.a.hir
+// RUN: %rrc %t.a.hir --emit hir --no-source-locations -o %t.b.hir
+// RUN: diff %t.a.hir %t.b.hir
+// RUN: %FileCheck %s --check-prefix=HIR --input-file=%t.a.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.direct.mir
+// RUN: %rrc %t.a.hir --emit mir --no-source-locations -o %t.via.mir
+// RUN: diff %t.direct.mir %t.via.mir
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/trait_assoc_type_impl_self.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+
+pub trait Codec {
+    type Stored;
+    type Decoded;
+    type Pair = (Self::Stored, Self::Decoded);
+    fn decode(self: Self, raw: Self::Stored) -> Self::Decoded;
+    fn pair(self: Self, raw: Self::Stored) -> Self::Pair;
+}
+
+pub struct Gray { scale: i64 }
+
+// A binding names one written after it.
+// HIR-DAG: impl #Codec::<#Gray> { type Stored = i64; type Decoded = i64; #Codec::Gray::decode, #Codec::Gray::pair }
+impl Codec for Gray {
+    type Decoded = Self::Stored;
+    type Stored = i64;
+    fn decode(self: Gray, raw: Self::Stored) -> Self::Decoded { raw * self.scale }
+    fn pair(self: Gray, raw: i64) -> (i64, i64) { (raw, raw * self.scale) }
+}
+
+pub struct Wrap<T> { inner: T }
+
+// A binding names the default, which names the bindings; a generic impl
+// names its parameter's type through a bound.
+// HIR-DAG: impl<$[[T:[0-9]+]]: Codec> #Codec::<#Wrap::<$[[T]]>> { type Stored = trait#Codec::<$[[T]]>#Stored; type Decoded = (trait#Codec::<$[[T]]>#Stored, i64); type Pair = (trait#Codec::<$[[T]]>#Stored, (trait#Codec::<$[[T]]>#Stored, i64));
+impl<T: Codec> Codec for Wrap<T> {
+    type Stored = T::Stored;
+    type Decoded = (Self::Stored, i64);
+    type Pair = (Self::Stored, Self::Decoded);
+    fn decode(self: Wrap<T>, raw: T::Stored) -> (T::Stored, i64) { (raw, 7) }
+    fn pair(self: Wrap<T>, raw: T::Stored) -> Self::Pair { (raw, (raw, 9)) }
+}
+
+pub fn checksum() -> i64 {
+    let gray = Gray { scale: 3 }.decode(14);
+    let wrapped = Wrap { inner: Gray { scale: 1 } }.pair(5);
+    gray + wrapped.0 + wrapped.1.1
+}
+
+extern "C" trampoline "reussir_impl_self_checksum" = checksum;
