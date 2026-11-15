@@ -794,19 +794,97 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// exactly the `pub` surface as nameable, so a private record there would
     /// be unusable at every foreign point of use.
     fn check_private_in_public(&mut self, tys: &[Ty<'tcx>], item: &str, span: Option<Span>) {
+        for message in self.private_in_public(tys, item) {
+            self.error(span, message);
+        }
+    }
+
+    /// One message per private record `tys` mention, for the public `item`.
+    fn private_in_public(&self, tys: &[Ty<'tcx>], item: &str) -> Vec<String> {
         let mut private = Vec::new();
         for &t in tys {
             collect_private_records(&self.records, t, &mut private);
         }
-        for def in private {
-            let path = self.defs.path(def).display(self.resolver);
-            self.error(
-                span,
+        private
+            .into_iter()
+            .map(|def| {
+                let path = self.defs.path(def).display(self.resolver);
                 format!(
                     "private record `{path}` in the public interface of {item}; \
                      mark the record `pub` or make the item private"
-                ),
+                )
+            })
+            .collect()
+    }
+
+    /// The private-in-public discipline for the traits in `traits` and the
+    /// impls registered since `first_impl`. An associated type must not be
+    /// a private record where a `pub` trait defaults it or an impl of a
+    /// `pub` trait for a public type binds it. A `pub` trait's method that
+    /// names a private record is warned about: every impl of it is checked
+    /// as a `pub fn`.
+    fn check_trait_privacy(&mut self, traits: &[TraitId], first_impl: usize) {
+        use surface::Visibility::Public;
+        for &id in traits {
+            let tdef = self.traits.trait_def(id);
+            if tdef.visibility != Public {
+                continue;
+            }
+            let shown = self.trait_display(id);
+            let file = tdef.file;
+            let defaults: Vec<_> = tdef
+                .assoc_tys
+                .iter()
+                .filter_map(|assoc| Some((assoc.default?, assoc.span)))
+                .collect();
+            let methods: Vec<_> = tdef
+                .methods
+                .iter()
+                .map(|m| {
+                    let tys: Vec<_> = m.params.iter().copied().chain([m.ret]).collect();
+                    (tys, m.name, m.span)
+                })
+                .collect();
+            self.set_current_file(file);
+            let item = format!("`pub trait {shown}`");
+            for (default, span) in defaults {
+                self.check_private_in_public(&[default], &item, span);
+            }
+            for (tys, name, span) in methods {
+                let item = format!("`{shown}::{}`", self.sym(name));
+                for message in self.private_in_public(&tys, &item) {
+                    self.warn(span, message);
+                }
+            }
+        }
+        let impls: Vec<_> = self
+            .traits
+            .impls()
+            .skip(first_impl)
+            .map(|imp| {
+                let bound: Vec<_> = imp.assoc_tys.iter().flatten().copied().collect();
+                (
+                    imp.trait_ref.trait_id,
+                    imp.self_ty,
+                    bound,
+                    imp.span,
+                    imp.file,
+                )
+            })
+            .collect();
+        for (trait_id, self_ty, bound, span, file) in impls {
+            let mut private_self = Vec::new();
+            collect_private_records(&self.records, self_ty, &mut private_self);
+            if self.traits.trait_def(trait_id).visibility != Public || !private_self.is_empty() {
+                continue;
+            }
+            self.set_current_file(file);
+            let item = format!(
+                "`impl {} for {}`",
+                self.trait_display(trait_id),
+                self.ty_display(self_ty)
             );
+            self.check_private_in_public(&bound, &item, span);
         }
     }
 
@@ -2568,6 +2646,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.check_private_in_public(&tys, &item, span);
             }
         }
+        let batch_traits: Vec<TraitId> = trait_ids.iter().flatten().copied().collect();
+        self.check_trait_privacy(&batch_traits, first_impl);
         self.records_complete = true;
         // Register every source body before checking any of them. A forward
         // call can then demand the callee's typed body without depending on file
