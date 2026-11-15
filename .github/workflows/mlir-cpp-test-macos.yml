@@ -23,9 +23,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Skips the push run for a commit the merge queue has already tested.
+  # Skips the push run for a commit the merge queue has already tested. Only
+  # the queue's own pushes can have such a run, so other pushes do not wait
+  # for the lookup.
   merge-queue:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.actor == 'github-merge-queue[bot]'
     permissions:
       actions: read
     uses: ./.github/workflows/merge-queue-tested.yml
