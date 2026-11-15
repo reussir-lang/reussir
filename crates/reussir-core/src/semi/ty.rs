@@ -19,6 +19,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
+use reussir_syntax::kind::TokenKey;
 use rustc_hash::FxHashMap;
 use stumpalo::ArenaRef;
 
@@ -395,6 +396,16 @@ pub enum TyKind<'tcx> {
     Arc(Ty<'tcx>),
     /// A rigid type parameter in scope.
     Generic(GenericId),
+    /// An associated type of a trait whose implementing type is not known
+    /// yet: `T::Name` for a type parameter `T` bounded by the trait. `args`
+    /// are the trait reference's arguments, the implementing type first.
+    /// Once that type is known, the type its impl binds replaces this one,
+    /// so none remains after monomorphization.
+    Assoc {
+        trait_def: DefId,
+        name: TokenKey,
+        args: &'tcx [Ty<'tcx>],
+    },
     /// A unification variable.
     Hole(HoleId),
     /// The error-recovery type; unifies with anything.
@@ -553,6 +564,31 @@ pub fn mentions_scalable_simd(ty: Ty<'_>) -> bool {
     }
 }
 
+/// Whether an associated type occurs anywhere in `ty`.
+pub fn mentions_assoc(ty: Ty<'_>) -> bool {
+    match *ty.kind() {
+        TyKind::Assoc { .. } => true,
+        TyKind::Record { args, .. } | TyKind::Tuple(args) | TyKind::Future(args) => {
+            args.iter().any(|&a| mentions_assoc(a))
+        }
+        TyKind::Closure { params, ret } => {
+            params.iter().any(|&p| mentions_assoc(p)) || mentions_assoc(ret)
+        }
+        TyKind::DevArray {
+            elem, placement, ..
+        } => mentions_assoc(elem) || mentions_assoc(placement),
+        TyKind::Array { elem, .. }
+        | TyKind::Tensor { elem, .. }
+        | TyKind::Simd { elem, .. }
+        | TyKind::Cell { elem, .. }
+        | TyKind::Ptr { space: elem, .. }
+        | TyKind::Nullable(elem)
+        | TyKind::ConstSeq(elem)
+        | TyKind::Arc(elem) => mentions_assoc(elem),
+        _ => false,
+    }
+}
+
 /// Why `ty` is not a legal type because of a scalable vector in it, if it is
 /// not. The size of a scalable vector is unknown when the program is
 /// compiled, so it has no place in a layout: it is a value on its own, and
@@ -649,6 +685,15 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn mk_generic(&self, generic: GenericId) -> Ty<'tcx> {
         self.mk(TyKind::Generic(generic))
+    }
+
+    pub fn mk_assoc(&self, trait_def: DefId, name: TokenKey, args: &[Ty<'tcx>]) -> Ty<'tcx> {
+        let args = self.intern_tys(args);
+        self.mk(TyKind::Assoc {
+            trait_def,
+            name,
+            args,
+        })
     }
 
     pub fn mk_hole(&self, hole: HoleId) -> Ty<'tcx> {

@@ -52,11 +52,16 @@ impl<'tcx> MethodSig<'tcx> {
     }
 }
 
-/// An associated type declaration. Reserved so the IR can grow into projections
-/// without churn; unused in Phase 0.
+/// An associated type declared by a trait (`type Name;`, or `type Name =
+/// Default;`). An impl binds it ([`ImplDef::assoc_tys`]) or, when the trait
+/// gives a default, may omit it.
 #[derive(Clone, Debug)]
-pub struct AssocTyDef {
-    pub name: String,
+pub struct AssocTyDef<'tcx> {
+    pub name: TokenKey,
+    /// The type an impl that omits the binding takes, over the trait's
+    /// `Self` and type parameters.
+    pub default: Option<Ty<'tcx>>,
+    pub span: Option<Span>,
 }
 
 /// An associated const declared by a trait (`const NAME: Ty;`, or `const
@@ -100,7 +105,7 @@ pub struct TraitDef<'tcx> {
     /// DAG: `Integral: Num` is just a super-trait edge.
     pub supertraits: Vec<TraitRef<'tcx>>,
     pub methods: Vec<MethodSig<'tcx>>,
-    pub assoc_tys: Vec<AssocTyDef>,
+    pub assoc_tys: Vec<AssocTyDef<'tcx>>,
     pub assoc_consts: Vec<AssocConstDef<'tcx>>,
     pub span: Option<Span>,
     pub file: FileId,
@@ -126,6 +131,10 @@ pub struct ImplDef<'tcx> {
     /// order*; `None` where the impl omits a const and the trait's default
     /// value applies.
     pub assoc_consts: Vec<Option<ConstValue<'tcx>>>,
+    /// The associated types the impl binds, in *trait-type order* and over
+    /// the impl's generics; `None` where the impl omits a binding and the
+    /// trait's default applies.
+    pub assoc_tys: Vec<Option<Ty<'tcx>>>,
     pub span: Option<Span>,
     pub file: FileId,
 }

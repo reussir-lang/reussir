@@ -201,11 +201,13 @@ pub fn export_closure(input: &MonoInput<'_, '_>) -> ExportClosure {
         for c in &t.assoc_consts {
             tys.insert(c.ty);
         }
+        tys.extend(t.assoc_tys.iter().filter_map(|a| a.default));
         for imp in db.impls() {
             if imp.trait_ref.trait_id != id {
                 continue;
             }
             tys.extend(imp.trait_ref.args.iter().copied());
+            tys.extend(imp.assoc_tys.iter().flatten().copied());
             for &m in &imp.methods {
                 let Some(func) = by_def.get(&m) else {
                     continue;
@@ -282,7 +284,7 @@ fn note_records<'tcx>(ty: Ty<'tcx>, records: &mut FxHashSet<DefId>, queue: &mut 
             note_records(elem, records, queue);
             note_records(placement, records, queue);
         }
-        TyKind::Future(ps) | TyKind::Tuple(ps) => {
+        TyKind::Future(ps) | TyKind::Tuple(ps) | TyKind::Assoc { args: ps, .. } => {
             ps.iter().for_each(|&p| note_records(p, records, queue))
         }
         TyKind::Array { elem, .. } | TyKind::Tensor { elem, .. } | TyKind::Cell { elem, .. } => {

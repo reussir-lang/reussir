@@ -239,6 +239,10 @@ pub enum SyntaxKind {
     /// `const NAME: Type;` or, with a default value, `const NAME: Type =
     /// expr;` in a trait, `const NAME: Type = expr;` in an impl.
     ConstStmt,
+    /// An associated type member of a `trait` or `impl` body: `type Name;`
+    /// or, with a default, `type Name = Type;` in a trait, `type Name =
+    /// Type;` in an impl.
+    AssocTypeStmt,
 
     /// End-of-file sentinel used by the parser; never stored in the tree.
     Eof,

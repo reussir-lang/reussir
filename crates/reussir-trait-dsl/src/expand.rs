@@ -254,6 +254,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                             where_clauses: vec![],
                             methods: vec![],
                             assoc_consts: vec![],
+                            assoc_tys: vec![],
                             span: None,
                             file: reussir_syntax::source::FileId::ROOT,
                         });

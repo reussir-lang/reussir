@@ -363,7 +363,7 @@ impl<'a, 'tcx> FfiCtx<'a, 'tcx> {
             TyKind::Tensor { .. } => Err("a tensor cannot cross the FFI boundary".into()),
             TyKind::Tuple(_) => Err("an anonymous tuple cannot cross the FFI boundary; value aggregates are not supported".into()),
             TyKind::Closure { .. } => Err("a closure cannot cross the FFI boundary yet".into()),
-            TyKind::Bottom | TyKind::Generic(_) | TyKind::Hole(_) => {
+            TyKind::Bottom | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => {
                 Err("the type is not ground".into())
             }
         }

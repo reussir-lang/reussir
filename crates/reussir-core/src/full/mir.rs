@@ -159,6 +159,7 @@ fn contains_bigint(ty: Ty<'_>) -> bool {
         | TyKind::GenericAddrSpace
         | TyKind::Simd { .. }
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_)
         | TyKind::Bottom => false,
     }

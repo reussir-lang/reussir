@@ -253,7 +253,7 @@ impl<'a> Mangler<'a> {
                 out.push('E');
                 self.ty(out, ret);
             }
-            TyKind::Generic(_) => {
+            TyKind::Generic(_) | TyKind::Assoc { .. } => {
                 panic!("v0 mangle: a generic survived into the Full phase (type is not ground)")
             }
             TyKind::Hole(_) => {

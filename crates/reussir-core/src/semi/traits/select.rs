@@ -400,6 +400,7 @@ mod tests {
             where_clauses,
             methods: vec![],
             assoc_consts: vec![],
+            assoc_tys: vec![],
             span: None,
             file: reussir_syntax::source::FileId::ROOT,
         }

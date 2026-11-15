@@ -32,6 +32,9 @@ pub struct PendingObligation<'tcx> {
 #[derive(Default)]
 pub struct FulfillCtxt<'tcx> {
     pending: Vec<PendingObligation<'tcx>>,
+    /// Associated types whose trait reference still held an inference hole
+    /// where they were instantiated, each with the hole standing in for it.
+    pub(super) projections: Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)>,
     pub(super) shapes: super::shape_constraints::ShapeConstraints<'tcx>,
 }
 
@@ -57,6 +60,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut pending = Vec::new();
         loop {
             let revision = self.infer.progress();
+            self.solve_projections(None);
             self.resolve_shape_constraints(false);
             pending.append(&mut self.fulfill.pending);
             let mut progress = false;
@@ -307,7 +311,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
 pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
     match ty.kind() {
         TyKind::Hole(_) => true,
-        TyKind::Record { args, .. } => args.iter().any(|a| ty_has_hole(*a)),
+        TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
+            args.iter().any(|a| ty_has_hole(*a))
+        }
         TyKind::Closure { params, ret } => {
             params.iter().any(|p| ty_has_hole(*p)) || ty_has_hole(*ret)
         }
@@ -331,7 +337,9 @@ pub(super) fn ty_has_hole(ty: crate::semi::ty::Ty<'_>) -> bool {
 pub(super) fn collect_holes(ty: crate::semi::ty::Ty<'_>, out: &mut Vec<HoleId>) {
     match ty.kind() {
         TyKind::Hole(h) => out.push(*h),
-        TyKind::Record { args, .. } => args.iter().for_each(|a| collect_holes(*a, out)),
+        TyKind::Record { args, .. } | TyKind::Assoc { args, .. } => {
+            args.iter().for_each(|a| collect_holes(*a, out))
+        }
         TyKind::Closure { params, ret } => {
             params.iter().for_each(|p| collect_holes(*p, out));
             collect_holes(*ret, out);

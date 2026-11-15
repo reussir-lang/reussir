@@ -56,6 +56,14 @@ impl<'tcx> FreshSubstitution<'_, '_, '_, 'tcx> {
         let mapped = match *template.kind() {
             TyKind::Generic(generic) => self.generics.get(&generic).copied().unwrap_or(template),
             TyKind::Hole(_) => self.infer.new_hole_ty(),
+            TyKind::Assoc {
+                trait_def,
+                name,
+                args,
+            } => {
+                let args: Vec<_> = args.iter().map(|&ty| self.ty(ty)).collect();
+                tcx.mk_assoc(trait_def, name, &args)
+            }
             TyKind::Record { def, args, flex } => {
                 let args: Vec<_> = args.iter().map(|&ty| self.ty(ty)).collect();
                 tcx.mk_record(def, &args, flex)

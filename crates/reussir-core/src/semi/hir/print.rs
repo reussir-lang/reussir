@@ -382,6 +382,16 @@ impl<'a> Printer<'a> {
             head = head + text(" : ") + comma_sep(supers);
         }
         head = head + self.item_loc(t.file, t.span);
+        let types = t.types.iter().map(|a| {
+            let default = match a.default {
+                Some(ty) => text(" = ") + self.ty(ty),
+                None => Doc::Null,
+            };
+            text(format!("type {}", spell_name(&a.name)))
+                + default
+                + self.span_doc(a.span)
+                + text(";")
+        });
         let consts = t.consts.iter().map(|c| {
             let default = match &c.default {
                 Some(value) => text(" = ") + self.const_value(value),
@@ -418,29 +428,31 @@ impl<'a> Printer<'a> {
                     + text(";")
             })
             .collect();
-        let body = consts
+        let body = types
+            .chain(consts)
             .chain(methods)
             .fold(Doc::Null, |body, m| body + hardline() + m);
         head + text(" {") + indent(body) + hardline() + text("}")
     }
 
     fn impl_item(&self, i: &super::ImplText<'_>) -> Doc<'static> {
-        // `{ const A = 1; const B = ConstSeq[2] : ConstSeq<i64>; #m, #n }`.
-        let mut consts = Doc::Null;
-        for (k, (name, value)) in i.consts.iter().enumerate() {
-            if k > 0 {
-                consts = consts + text(" ");
-            }
-            consts = consts
-                + text(format!("const {} = ", spell_name(name)))
-                + self.const_value(value)
-                + text(";");
+        // `{ type T = i64; const A = 1; const B = ConstSeq[2] : ConstSeq<i64>; #m, #n }`.
+        let types = i
+            .types
+            .iter()
+            .map(|(name, ty)| text(format!("type {} = ", spell_name(name))) + self.ty(*ty));
+        let consts = i.consts.iter().map(|(name, value)| {
+            text(format!("const {} = ", spell_name(name))) + self.const_value(value)
+        });
+        let mut members = Doc::Null;
+        let mut gap = "";
+        for member in types.chain(consts) {
+            members = members + text(gap) + member + text(";");
+            gap = " ";
         }
-        let gap = if i.consts.is_empty() || i.methods.is_empty() {
-            ""
-        } else {
-            " "
-        };
+        if i.methods.is_empty() {
+            gap = "";
+        }
         let methods: Vec<Doc<'static>> = i.methods.iter().map(|m| text(format!("#{m}"))).collect();
         text("impl")
             + self.text_binder(&i.generics)
@@ -448,7 +460,7 @@ impl<'a> Printer<'a> {
             + self.ty_args(&i.args)
             + self.item_loc(i.file, i.span)
             + text(" { ")
-            + consts
+            + members
             + text(gap)
             + comma_sep(methods)
             + text(" }")
@@ -698,6 +710,15 @@ impl<'a> Printer<'a> {
             }
             TyKind::Bottom => text("!"),
             TyKind::Generic(g) => text(format!("${}", g.0)),
+            TyKind::Assoc {
+                trait_def,
+                name,
+                args,
+            } => {
+                text(format!("trait#{}", self.path(trait_def)))
+                    + self.ty_args(args)
+                    + text(format!("#{}", spell_name(self.resolver.resolve(name))))
+            }
             TyKind::Hole(_) => unreachable!("a fully elaborated HIR carries no inference holes"),
             TyKind::Nullable(inner) => text("Nullable<") + self.ty(inner) + text(">"),
             TyKind::ConstSeq(elem) => text("ConstSeq<") + self.ty(elem) + text(">"),

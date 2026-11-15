@@ -10,11 +10,12 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::semi::const_eval::ConstValue;
-use crate::semi::ty::{DefId, Ty, TyCtxt};
+use crate::semi::ty::{DefId, Ty, TyCtxt, TyKind, mentions_assoc};
 
 use super::coherence::{HeadKey, head_key};
 use super::def::{ImplDef, TraitDef};
-use super::select::SelectCtxt;
+use super::select::{ParamEnv, SELECT_DEPTH_LIMIT, SelectCtxt};
+use super::subst::{rebuild, replace_generics};
 use super::{Evidence, ImplId, Obligation, TraitId, TraitRef};
 
 /// The collected trait program plus resolution.
@@ -40,16 +41,27 @@ pub enum SelectError<'tcx> {
     DepthLimit(TraitRef<'tcx>),
 }
 
-/// Why [`TraitDb::assoc_const_value`] has no value to give.
+/// Why [`TraitDb::assoc_const_value`] or [`TraitDb::assoc_ty`] has nothing
+/// to give.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AssocConstError<'tcx> {
-    /// The trait declares no associated const of that name.
+pub enum AssocError<'tcx> {
+    /// The trait declares no associated const or type of that name.
     Undeclared,
     /// Selection proves no impl of the trait for the self type.
     Select(SelectError<'tcx>),
     /// The bound holds only through a sub-trait, so no impl of the trait
-    /// itself defines the value.
+    /// itself defines the item.
     Indirect,
+}
+
+/// What an associated type is once its trait reference is selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssocTy<'tcx> {
+    /// The type the selected impl binds, or the trait's default for it. It
+    /// may mention further associated types.
+    Bound(Ty<'tcx>),
+    /// The reference holds by a bound in scope, so the type stays as written.
+    Rigid,
 }
 
 impl<'tcx> TraitDb<'tcx> {
@@ -179,12 +191,12 @@ impl<'tcx> TraitDb<'tcx> {
         trait_id: TraitId,
         self_ty: Ty<'tcx>,
         name: TokenKey,
-    ) -> Result<ConstValue<'tcx>, AssocConstError<'tcx>> {
+    ) -> Result<ConstValue<'tcx>, AssocError<'tcx>> {
         let decls = &self.trait_def(trait_id).assoc_consts;
         let index = decls
             .iter()
             .position(|c| c.name == name)
-            .ok_or(AssocConstError::Undeclared)?;
+            .ok_or(AssocError::Undeclared)?;
         let goal = Obligation::Trait(TraitRef {
             trait_id,
             args: vec![self_ty],
@@ -195,9 +207,117 @@ impl<'tcx> TraitDb<'tcx> {
                 .or(decls[index].default.as_ref())
                 .expect("conformance requires a value or a default value")
                 .clone()),
-            Ok(_) => Err(AssocConstError::Indirect),
-            Err(error) => Err(AssocConstError::Select(error)),
+            Ok(_) => Err(AssocError::Indirect),
+            Err(error) => Err(AssocError::Select(error)),
         }
+    }
+
+    /// The associated type `name` of the trait reference `trait_id<args>`
+    /// (`args[0]` is the self type), which holds no inference hole. `env`
+    /// is the bounds in scope; a reference they prove leaves the type rigid.
+    pub fn assoc_ty(
+        &self,
+        tcx: &TyCtxt<'tcx>,
+        env: ParamEnv<'_>,
+        trait_id: TraitId,
+        args: &[Ty<'tcx>],
+        name: TokenKey,
+    ) -> Result<AssocTy<'tcx>, AssocError<'tcx>> {
+        let tdef = self.trait_def(trait_id);
+        let index = tdef
+            .assoc_tys
+            .iter()
+            .position(|a| a.name == name)
+            .ok_or(AssocError::Undeclared)?;
+        let goal = Obligation::Trait(TraitRef {
+            trait_id,
+            args: args.to_vec(),
+        });
+        let evidence = SelectCtxt::new(self, tcx, env)
+            .select(&goal)
+            .map_err(AssocError::Select)?;
+        let (impl_id, impl_args) = match &evidence {
+            Evidence::Impl { impl_id, args, .. } => (*impl_id, args),
+            _ if evidence.is_assumed() => return Ok(AssocTy::Rigid),
+            _ => return Err(AssocError::Indirect),
+        };
+        let imp = self.impl_def(impl_id);
+        let (ty, binder): (_, FxHashMap<_, _>) = match imp.assoc_tys[index] {
+            Some(ty) => (
+                ty,
+                imp.generics
+                    .iter()
+                    .copied()
+                    .zip(impl_args.iter().copied())
+                    .collect(),
+            ),
+            None => (
+                tdef.assoc_tys[index]
+                    .default
+                    .expect("conformance requires a binding or a default"),
+                std::iter::once(tdef.self_param)
+                    .chain(tdef.params.iter().map(|&(_, g)| g))
+                    .zip(args.iter().copied())
+                    .collect(),
+            ),
+        };
+        Ok(AssocTy::Bound(replace_generics(tcx, ty, &binder)))
+    }
+
+    /// Replace every associated type in the hole-free `ty` that an impl
+    /// decides by the type it stands for, to a fixed point. The first one
+    /// that cannot be decided is returned with the reason.
+    pub fn normalize(
+        &self,
+        tcx: &TyCtxt<'tcx>,
+        env: ParamEnv<'_>,
+        ty: Ty<'tcx>,
+    ) -> Result<Ty<'tcx>, (Ty<'tcx>, AssocError<'tcx>)> {
+        let mut failed = None;
+        let ty = self.normalize_at(tcx, env, ty, 0, &mut failed);
+        failed.map_or(Ok(ty), Err)
+    }
+
+    fn normalize_at(
+        &self,
+        tcx: &TyCtxt<'tcx>,
+        env: ParamEnv<'_>,
+        ty: Ty<'tcx>,
+        depth: usize,
+        failed: &mut Option<(Ty<'tcx>, AssocError<'tcx>)>,
+    ) -> Ty<'tcx> {
+        if !mentions_assoc(ty) {
+            return ty;
+        }
+        rebuild(tcx, ty, &mut |_| None, &mut |assoc| {
+            let TyKind::Assoc {
+                trait_def,
+                name,
+                args,
+            } = *assoc.kind()
+            else {
+                unreachable!("`rebuild` hands over associated types only")
+            };
+            let projected = match self.trait_by_def(trait_def) {
+                // A default may name the type it defines, directly or not.
+                Some(trait_id) if depth > SELECT_DEPTH_LIMIT => {
+                    Err(AssocError::Select(SelectError::DepthLimit(TraitRef {
+                        trait_id,
+                        args: args.to_vec(),
+                    })))
+                }
+                Some(trait_id) => self.assoc_ty(tcx, env, trait_id, args, name),
+                None => Err(AssocError::Undeclared),
+            };
+            match projected {
+                Ok(AssocTy::Rigid) => assoc,
+                Ok(AssocTy::Bound(ty)) => self.normalize_at(tcx, env, ty, depth + 1, failed),
+                Err(error) => {
+                    failed.get_or_insert((assoc, error));
+                    tcx.mk(TyKind::Bottom)
+                }
+            }
+        })
     }
 
     /// All impls in registration (dense-id) order — the deterministic scan
@@ -253,6 +373,7 @@ mod tests {
                 where_clauses: vec![],
                 methods: vec![],
                 assoc_consts: vec![],
+                assoc_tys: vec![],
                 span: None,
                 file: reussir_syntax::source::FileId::ROOT,
             });

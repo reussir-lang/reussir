@@ -25,7 +25,8 @@ use crate::semi::hir::grammar as hir_ir;
 use crate::semi::hir::raw;
 use crate::semi::hir::{
     ArithOp, Bound, ClosureExpr, CmpOp, DecisionTree, Expr, ExprId, ExprKind, Function, ImplText,
-    IntRange, PatVarRef, SwitchCases, TraitConstText, TraitMethodText, TraitText, VarId,
+    IntRange, PatVarRef, SwitchCases, TraitConstText, TraitMethodText, TraitText, TraitTypeText,
+    VarId,
 };
 use crate::semi::resolve::DefTable;
 use crate::semi::ty::{DefId, Flexivity, FpTy, GenericId, IntTy, Ty, TyCtxt, TyKind};
@@ -134,7 +135,7 @@ impl<'tcx> Parsed<'tcx> {
         use crate::semi::traits::builtins::Builtins;
         use crate::semi::traits::def::MethodSig;
         use crate::semi::traits::{
-            AssocConstDef, ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef,
+            AssocConstDef, AssocTyDef, ImplDef, ImplId, Obligation, TraitDef, TraitId, TraitRef,
         };
 
         let mut db = crate::semi::traits::TraitDb::new();
@@ -193,6 +194,15 @@ impl<'tcx> Parsed<'tcx> {
                     })
                 })
                 .collect();
+            let assoc_tys: Vec<AssocTyDef<'tcx>> = t
+                .types
+                .iter()
+                .map(|a| AssocTyDef {
+                    name: self.names.intern(&a.name),
+                    default: a.default,
+                    span: a.span,
+                })
+                .collect();
             let assoc_consts: Vec<AssocConstDef<'tcx>> = t
                 .consts
                 .iter()
@@ -224,6 +234,7 @@ impl<'tcx> Parsed<'tcx> {
             let def = db.trait_def_mut(id);
             def.supertraits = supertraits;
             def.methods = methods;
+            def.assoc_tys = assoc_tys;
             def.assoc_consts = assoc_consts;
         }
         for i in &self.impls {
@@ -233,6 +244,11 @@ impl<'tcx> Parsed<'tcx> {
             let self_ty = i.args[0];
             let Some(assoc_consts) =
                 i.assoc_consts_in_order(&db.trait_def(tid).assoc_consts, |n| self.names.intern(n))
+            else {
+                continue;
+            };
+            let Some(assoc_tys) =
+                i.assoc_tys_in_order(&db.trait_def(tid).assoc_tys, |n| self.names.intern(n))
             else {
                 continue;
             };
@@ -280,6 +296,7 @@ impl<'tcx> Parsed<'tcx> {
                 where_clauses,
                 methods,
                 assoc_consts,
+                assoc_tys,
                 span: i.span,
                 file: i.file,
             });
@@ -756,6 +773,15 @@ impl<'tcx> Builder<'_, 'tcx> {
                 .iter()
                 .map(|(p, args)| (p.clone(), self.tys(args)))
                 .collect(),
+            types: t
+                .types
+                .iter()
+                .map(|a| TraitTypeText {
+                    name: a.name.clone(),
+                    default: a.default.as_ref().map(|ty| self.ty(ty)),
+                    span: span_of(a.span),
+                })
+                .collect(),
             consts: t
                 .consts
                 .iter()
@@ -796,6 +822,11 @@ impl<'tcx> Builder<'_, 'tcx> {
             generics: self.text_generics(&i.generics),
             trait_path: i.trait_path.clone(),
             args: self.tys(&i.args),
+            types: i
+                .types
+                .iter()
+                .map(|(name, ty)| (name.clone(), self.ty(ty)))
+                .collect(),
             consts: i
                 .consts
                 .iter()
@@ -843,6 +874,11 @@ impl<'tcx> Builder<'_, 'tcx> {
             }
             raw::Ty::Bottom => self.tcx.mk(TyKind::Bottom),
             raw::Ty::Generic(g) => self.tcx.mk_generic(GenericId(*g)),
+            raw::Ty::Assoc { path, args, name } => {
+                let trait_def = self.trait_item_def(path);
+                let args: Vec<Ty<'tcx>> = args.iter().map(|a| self.ty(a)).collect();
+                self.tcx.mk_assoc(trait_def, self.names.intern(name), &args)
+            }
             raw::Ty::Nullable(inner) => {
                 let inner = self.ty(inner);
                 self.tcx.mk_nullable(inner)

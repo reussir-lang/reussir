@@ -237,6 +237,9 @@ pub struct FuncProto<'tcx> {
     /// functions, extern prototypes, and reparsed dumps (printed HIR never
     /// contains `Self`; it is resolved away at elaboration).
     pub self_ty: Option<Ty<'tcx>>,
+    /// For a trait impl member, what `Self::Name` names in the body: the
+    /// types the impl binds the trait's associated types to.
+    pub self_assoc_tys: Vec<(TokenKey, Ty<'tcx>)>,
     pub is_regional: bool,
     pub is_kernel: bool,
     pub span: Option<Span>,
@@ -275,6 +278,7 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
         | TyKind::Char
         | TyKind::Unit
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_)
         | TyKind::Bottom => false,
     }
@@ -334,6 +338,7 @@ fn collect_private_records<'tcx>(
         | TyKind::Char
         | TyKind::Unit
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_)
         | TyKind::Bottom => {}
     }
@@ -355,6 +360,9 @@ pub(super) struct ImplCtx<'x, 'tcx> {
     /// The applied target type — what `Self` (and a receiver annotation)
     /// means inside the block, in the record's unrefined coloring.
     pub self_ty: Ty<'tcx>,
+    /// What `Self::Name` names inside the block: the types a trait impl
+    /// binds the trait's associated types to.
+    pub assoc_tys: &'x [(TokenKey, Ty<'tcx>)],
     /// For a *trait* impl member: the implemented trait (declaration goes
     /// under `[impl-module.., trait-path.., head-name, method]`, visibility
     /// is the trait's, and the clash diagnostic names the trait).
@@ -558,6 +566,10 @@ pub struct Elaborator<'a, 'tcx> {
     /// accumulated — reset by `enter_function` and after signature eval, so
     /// no Checkpoint entry.
     pub(super) self_alias: Option<Ty<'tcx>>,
+    /// What `Self::Name` names while a trait or one of its impls is
+    /// elaborated: the trait's own associated types, or the types the impl
+    /// binds them to.
+    pub(super) self_assoc_tys: Vec<(TokenKey, Ty<'tcx>)>,
     /// The interned spelling of `Self` — the display name given to each user
     /// trait's implicit `Self` generic (interned once at construction; the
     /// scan passes have no interner).
@@ -689,6 +701,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             vars: VarEnv::default(),
             generic_names: FxHashMap::default(),
             self_alias: None,
+            self_assoc_tys: Vec::new(),
             self_name,
             prelude_names,
             cmp_method_names,
@@ -867,6 +880,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     .map_or("_", |info| self.resolver.resolve(info.name)),
             ),
             TyKind::Hole(_) => out.push('_'),
+            TyKind::Assoc { name, args, .. } => {
+                self.push_ty_display(out, args[0]);
+                out.push_str("::");
+                out.push_str(self.resolver.resolve(name));
+            }
             TyKind::Nullable(inner) => {
                 out.push_str("Nullable<");
                 self.push_ty_display(out, inner);
@@ -1596,6 +1614,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.vars.reset();
         self.generic_names.clear();
         self.self_alias = None;
+        self.self_assoc_tys.clear();
         self.inside_region = false;
         self.inside_kernel = false;
         self.fulfill = FulfillCtxt::default();
@@ -2018,6 +2037,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             where_clauses: Vec::new(),
             methods: Vec::new(),
             assoc_consts: Vec::new(),
+            assoc_tys: Vec::new(),
             span: None,
             file: FileId::ROOT,
         });
@@ -2268,6 +2288,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.populate_trait_params(td, *id, *span);
             }
         }
+        // Supertraits and associated type names resolve before any type
+        // that may name an associated type through a bound (`T::Name`).
+        for ((td, span, scope, ..), id) in trait_decls.iter().zip(&trait_ids) {
+            if let Some(id) = id {
+                self.set_current_file(scope.file);
+                self.defs.set_module(scope.module.to_vec());
+                self.populate_trait_heads(td, *id, *span);
+            }
+        }
+        // Phase D: reject (and sever) super-trait cycles — `reaches`
+        // recurses unguarded, so a surviving cycle would overflow.
+        self.reject_supertrait_cycles(trait_ids.iter().flatten().copied());
         // Record fields populate before the trait members, so checking an
         // associated const's type and value can read them.
         let record_defs: Vec<DefId> = records
@@ -2285,16 +2317,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // references only resolve within a batch, so a new cycle is always
         // rooted in this batch's defs.
         self.reject_infinite_value_recursion(&record_defs);
-        for ((td, span, scope, ..), id) in trait_decls.iter().zip(&trait_ids) {
+        for ((td, _, scope, ..), id) in trait_decls.iter().zip(&trait_ids) {
             if let Some(id) = id {
                 self.set_current_file(scope.file);
                 self.defs.set_module(scope.module.to_vec());
-                self.populate_trait_members(td, *id, *span);
+                self.populate_trait_members(td, *id);
             }
         }
-        // Phase D: reject (and sever) super-trait cycles — `reaches`
-        // recurses unguarded, so a surviving cycle would overflow.
-        self.reject_supertrait_cycles(trait_ids.iter().flatten().copied());
         let function_defs: Vec<Option<DefId>> = functions
             .iter()
             .map(|(func, span, scope, _, is_import, _, lang)| {
@@ -2341,6 +2370,19 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                         "associated const `{}` must be declared by a trait; an \
                          inherent `impl` cannot define consts",
                         self.sym(c.value.name)
+                    ),
+                );
+            }
+            for t in &ib.types {
+                self.error(
+                    Some(Span {
+                        start: t.start,
+                        end: t.end,
+                    }),
+                    format!(
+                        "associated type `{}` must be declared by a trait; an \
+                         inherent `impl` cannot bind types",
+                        self.sym(t.value.name)
                     ),
                 );
             }
@@ -2403,6 +2445,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                             head_name: self.defs.path(target).name(),
                             generics,
                             self_ty,
+                            assoc_tys: &[],
                             trait_of: None,
                         };
                         self.scan_method(&m.value, false, Some(&ctx), mspan)
@@ -3107,7 +3150,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(
                 span,
                 "the members of a builtin impl are compiler-provided; the \
-                 impl body must be empty",
+                 impl body may only bind associated types",
             );
             return nones;
         }
@@ -3142,6 +3185,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return nones;
         }
+        let Some((assoc_tys, _)) =
+            self.scan_impl_assoc_tys(ib, tid, &[], self_ty, &trait_args, span)
+        else {
+            return nones;
+        };
         // Builtin impls are ground, so an existing impl conflicts exactly when
         // it has the same self type (`Arc<Nat>` and `Arc<Int>` share a head).
         let head = crate::semi::traits::coherence::head_key(self_ty).expect("scalars have heads");
@@ -3176,6 +3224,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             where_clauses: Vec::new(),
             methods: Vec::new(),
             assoc_consts: Vec::new(),
+            assoc_tys,
             span,
             file: self.current_file,
         });
@@ -3326,6 +3375,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return nones;
         }
 
+        // Selection matches an impl header structurally, which an associated
+        // type in it would defeat.
+        if std::iter::once(self_ty)
+            .chain(trait_args.iter().copied())
+            .any(crate::semi::ty::mentions_assoc)
+        {
+            self.error(
+                span,
+                "an associated type cannot appear in the trait reference or the \
+                 self type of an `impl`",
+            );
+            return nones;
+        }
+
         // E0207: every block generic must be constrained by the trait
         // reference or the self type, or monomorphization could never derive
         // its instantiation.
@@ -3412,6 +3475,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return nones;
         }
 
+        // The associated types bind first: member signatures may name them
+        // through `Self`, and conformance reads the trait's signatures with
+        // them substituted.
+        let assoc_tys = self.scan_impl_assoc_tys(ib, tid, &generics, self_ty, &trait_args, span);
+        let self_assoc_tys = assoc_tys
+            .as_ref()
+            .map_or_else(Vec::new, |(_, named)| named.clone());
+
         // Members: declare + conformance, in member order; track coverage in
         // trait-method order for the missing-set diagnostic and the
         // ImplDef's method table.
@@ -3450,6 +3521,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     head_name: target.map_or(ib.target.basename, |t| self.defs.path(t).name()),
                     generics: &generics,
                     self_ty,
+                    assoc_tys: &self_assoc_tys,
                     trait_of: Some(tid),
                 };
                 let def = self.scan_method(func, false, Some(&ctx), mspan)?;
@@ -3457,15 +3529,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     // Duplicate member: the declare clash already reported.
                     return Some(def);
                 }
-                self.check_conformance(
-                    tid,
-                    &sigs[sig_idx],
-                    def,
-                    self_ty,
-                    &trait_args,
-                    generics.len(),
-                    mspan,
-                );
+                // Without every binding the signatures have nothing to
+                // conform to; the missing bindings are already reported.
+                if assoc_tys.is_some() {
+                    self.check_conformance(
+                        tid,
+                        &sigs[sig_idx],
+                        def,
+                        self_ty,
+                        &trait_args,
+                        &self_assoc_tys,
+                        generics.len(),
+                        mspan,
+                    );
+                }
                 Some(def)
             })
             .collect();
@@ -3492,6 +3569,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return declared;
         }
         let Some(assoc_consts) = assoc_consts else {
+            return declared;
+        };
+        let Some((assoc_tys, _)) = assoc_tys else {
             return declared;
         };
 
@@ -3528,6 +3608,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 .map(|d| d.expect("missing checked"))
                 .collect(),
             assoc_consts,
+            assoc_tys,
             span,
             file: self.current_file,
         });
@@ -3548,6 +3629,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         def: DefId,
         self_ty: Ty<'tcx>,
         trait_args: &[Ty<'tcx>],
+        assoc_tys: &[(TokenKey, Ty<'tcx>)],
         block_generics: usize,
         span: Option<Span>,
     ) {
@@ -3627,7 +3709,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let skip = sig.receiver.is_some() as usize;
         for (i, ((_, ity), &sty)) in proto.params.iter().zip(&sig.params).enumerate().skip(skip) {
-            let want = crate::semi::traits::subst::replace_generics(self.tcx, sty, &map);
+            let want = self.bind_assoc_tys(sty, &map, tid, assoc_tys);
             if *ity != want {
                 self.error(
                     span,
@@ -3640,7 +3722,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 );
             }
         }
-        let want_ret = crate::semi::traits::subst::replace_generics(self.tcx, sig.ret, &map);
+        let want_ret = self.bind_assoc_tys(sig.ret, &map, tid, assoc_tys);
         if proto.return_ty != want_ret {
             self.error(
                 span,
@@ -3668,6 +3750,147 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 format!("method `{name}` {a} `regional` in trait `{tr}` {b}"),
             );
         }
+    }
+
+    /// A type of trait `tid`'s declaration as one of its impls sees it: the
+    /// trait's binder substituted by `binder`, and each of the trait's own
+    /// associated types replaced by the type the impl binds it to
+    /// (`assoc_tys`).
+    fn bind_assoc_tys(
+        &self,
+        ty: Ty<'tcx>,
+        binder: &FxHashMap<GenericId, Ty<'tcx>>,
+        tid: TraitId,
+        assoc_tys: &[(TokenKey, Ty<'tcx>)],
+    ) -> Ty<'tcx> {
+        let tdef = self.traits.trait_def(tid);
+        let own_args: Vec<Ty<'tcx>> = std::iter::once(tdef.self_param)
+            .chain(tdef.params.iter().map(|&(_, g)| g))
+            .map(|g| binder[&g])
+            .collect();
+        crate::semi::traits::subst::rebuild(
+            self.tcx,
+            ty,
+            &mut |g| binder.get(&g).copied(),
+            &mut |assoc| match *assoc.kind() {
+                TyKind::Assoc {
+                    trait_def,
+                    name,
+                    args,
+                } if trait_def == tdef.def && args == own_args.as_slice() => assoc_tys
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map_or(assoc, |&(_, bound)| bound),
+                _ => assoc,
+            },
+        )
+    }
+
+    /// The associated types of a trait impl: each `type` member names a
+    /// type the trait declares, and one with a default may be omitted. The
+    /// first component is in trait-type order as [`ImplDef::assoc_tys`]
+    /// stores it; the second is what `Self::Name` names inside the impl,
+    /// defaults included. `None` (with every problem reported) unless every
+    /// type without a default is bound and none twice.
+    ///
+    /// [`ImplDef::assoc_tys`]: crate::semi::traits::ImplDef::assoc_tys
+    #[allow(clippy::type_complexity)]
+    fn scan_impl_assoc_tys(
+        &mut self,
+        ib: &surface::ImplBlock,
+        tid: TraitId,
+        generics: &[(TokenKey, GenericId)],
+        self_ty: Ty<'tcx>,
+        trait_args: &[Ty<'tcx>],
+        span: Option<Span>,
+    ) -> Option<(Vec<Option<Ty<'tcx>>>, Vec<(TokenKey, Ty<'tcx>)>)> {
+        let tdef = self.traits.trait_def(tid);
+        let decls = tdef.assoc_tys.clone();
+        let binder: FxHashMap<GenericId, Ty<'tcx>> = std::iter::once((tdef.self_param, self_ty))
+            .chain(
+                tdef.params
+                    .iter()
+                    .zip(trait_args)
+                    .map(|(&(_, p), &a)| (p, a)),
+            )
+            .collect();
+        let tr = self.trait_display(tid);
+        let mut bound: Vec<Option<Ty<'tcx>>> = vec![None; decls.len()];
+        let mut ok = true;
+        for member in &ib.types {
+            let tspan = Some(Span {
+                start: member.start,
+                end: member.end,
+            });
+            let t = &member.value;
+            let name = self.sym(t.name).to_owned();
+            let Some(idx) = decls.iter().position(|d| d.name == t.name) else {
+                self.error(
+                    tspan,
+                    format!("`{name}` is not an associated type of trait `{tr}`"),
+                );
+                ok = false;
+                continue;
+            };
+            if bound[idx].is_some() {
+                self.error(
+                    tspan,
+                    format!("associated type `{name}` is bound more than once"),
+                );
+                ok = false;
+                continue;
+            }
+            if t.visibility == surface::Visibility::Public {
+                self.error(
+                    tspan,
+                    "visibility is not allowed on a trait impl type; the trait's \
+                     visibility applies",
+                );
+            }
+            let ty = t.ty.as_ref().expect("the parser requires an impl binding");
+            self.generic_names = generics.iter().copied().collect();
+            self.self_alias = Some(self_ty);
+            bound[idx] = Some(self.eval_decl_type(ty));
+            self.generic_names.clear();
+            self.self_alias = None;
+        }
+        let missing: Vec<String> = decls
+            .iter()
+            .zip(&bound)
+            .filter(|(decl, b)| b.is_none() && decl.default.is_none())
+            .map(|(decl, _)| format!("`{}`", self.sym(decl.name)))
+            .collect();
+        if !missing.is_empty() {
+            self.error(
+                span,
+                format!(
+                    "impl of trait `{tr}` for `{}` is missing associated type(s) {}",
+                    self.ty_display(self_ty),
+                    missing.join(", ")
+                ),
+            );
+            return None;
+        }
+        // A default is written over the trait's binder and may name the
+        // trait's other associated types. Each pass replaces one layer of
+        // those names, and the defaults are acyclic, so one pass per
+        // declaration settles them.
+        let mut named: Vec<(TokenKey, Ty<'tcx>)> = decls
+            .iter()
+            .zip(&bound)
+            .map(|(decl, b)| (decl.name, b.or(decl.default).expect("missing checked")))
+            .collect();
+        for _ in 0..decls.len() {
+            named = named
+                .iter()
+                .zip(&bound)
+                .map(|(&(name, ty), b)| match b {
+                    Some(_) => (name, ty),
+                    None => (name, self.bind_assoc_tys(ty, &binder, tid, &named)),
+                })
+                .collect();
+        }
+        ok.then_some((bound, named))
     }
 
     /// The associated consts of a trait impl, in trait-const order: each
@@ -3859,6 +4082,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         self.generic_names = generics.iter().map(|(n, id)| (*n, *id)).collect();
         self.self_alias = impl_ctx.map(|ctx| ctx.self_ty);
+        self.self_assoc_tys = impl_ctx.map_or_else(Vec::new, |ctx| ctx.assoc_tys.to_vec());
 
         // A `[flex]` annotation on a bare generic (its coloring is dropped, as in
         // the reference) records that the generic must be instantiated regional.
@@ -3885,6 +4109,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         };
         self.generic_names.clear();
         self.self_alias = None;
+        self.self_assoc_tys.clear();
 
         // Receiver validation: a first parameter named `self` must be the
         // impl target, optionally behind one `Arc` and/or a flexivity
@@ -4010,6 +4235,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return_ty,
             impl_module,
             self_ty: impl_ctx.map(|ctx| ctx.self_ty),
+            self_assoc_tys: impl_ctx.map_or_else(Vec::new, |ctx| ctx.assoc_tys.to_vec()),
             is_regional: func.is_regional,
             is_kernel: func.is_kernel,
             span,
@@ -4103,12 +4329,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         def.params = params;
     }
 
-    /// Phase C2: resolve supertraits and member signatures (record stubs
-    /// exist by now, so signature types evaluate).
-    fn populate_trait_members(&mut self, td: &surface::TraitDecl, id: TraitId, span: Option<Span>) {
-        let self_param = self.traits.trait_def(id).self_param;
-        let trait_params = self.traits.trait_def(id).params.clone();
-        let self_ty = self.tcx.mk_generic(self_param);
+    /// Phase C2: resolve supertraits and declare the associated types by
+    /// name; their defaults wait for [`Self::populate_trait_members`].
+    fn populate_trait_heads(&mut self, td: &surface::TraitDecl, id: TraitId, span: Option<Span>) {
+        let self_ty = self.tcx.mk_generic(self.traits.trait_def(id).self_param);
 
         let supertraits: Vec<crate::semi::traits::TraitRef<'tcx>> = td
             .supertraits
@@ -4146,6 +4370,74 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 })
             })
             .collect();
+
+        let mut assoc_tys: Vec<crate::semi::traits::AssocTyDef<'tcx>> = Vec::new();
+        for member in &td.types {
+            let tspan = Some(Span {
+                start: member.start,
+                end: member.end,
+            });
+            let name = member.value.name;
+            if assoc_tys.iter().any(|a| a.name == name) {
+                self.error(
+                    tspan,
+                    format!(
+                        "trait `{}` declares associated type `{}` more than once",
+                        self.sym(td.name),
+                        self.sym(name)
+                    ),
+                );
+                continue;
+            }
+            assoc_tys.push(crate::semi::traits::AssocTyDef {
+                name,
+                default: None,
+                span: tspan,
+            });
+        }
+
+        let def = self.traits.trait_def_mut(id);
+        def.supertraits = supertraits;
+        def.assoc_tys = assoc_tys;
+    }
+
+    /// Phase C3: resolve member signatures and associated type defaults
+    /// (record stubs exist by now, so signature types evaluate).
+    fn populate_trait_members(&mut self, td: &surface::TraitDecl, id: TraitId) {
+        let tdef = self.traits.trait_def(id);
+        let trait_params = tdef.params.clone();
+        let self_ty = self.tcx.mk_generic(tdef.self_param);
+
+        // `Self::Name` names the trait's own associated types.
+        let trait_args: Vec<Ty<'tcx>> = std::iter::once(self_ty)
+            .chain(trait_params.iter().map(|&(_, g)| self.tcx.mk_generic(g)))
+            .collect();
+        let own: Vec<(TokenKey, Ty<'tcx>)> = tdef
+            .assoc_tys
+            .iter()
+            .map(|a| (a.name, self.tcx.mk_assoc(tdef.def, a.name, &trait_args)))
+            .collect();
+        self.self_assoc_tys = own;
+        self.generic_names = trait_params.iter().copied().collect();
+        self.self_alias = Some(self_ty);
+        for member in &td.types {
+            let Some(default) = &member.value.ty else {
+                continue;
+            };
+            let default = self.eval_decl_type(default);
+            if let Some(decl) = self
+                .traits
+                .trait_def_mut(id)
+                .assoc_tys
+                .iter_mut()
+                .find(|a| a.name == member.value.name && a.default.is_none())
+            {
+                decl.default = Some(default);
+            }
+        }
+        self.generic_names.clear();
+        self.self_alias = None;
+        self.reject_cyclic_assoc_defaults(id, &trait_args);
 
         let mut methods: Vec<crate::semi::traits::def::MethodSig<'tcx>> = Vec::new();
         for member in &td.members {
@@ -4223,10 +4515,76 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.generic_names.clear();
         self.self_alias = None;
 
+        self.self_assoc_tys.clear();
+
         let def = self.traits.trait_def_mut(id);
-        def.supertraits = supertraits;
         def.methods = methods;
         def.assoc_consts = assoc_consts;
+    }
+
+    /// Drop (with a report) each associated type default of trait `id` that
+    /// names itself, directly or through the trait's other defaults: an
+    /// impl taking it would bind no type. `own_args` is the trait's own
+    /// binder as arguments.
+    fn reject_cyclic_assoc_defaults(&mut self, id: TraitId, own_args: &[Ty<'tcx>]) {
+        let tdef = self.traits.trait_def(id);
+        let names: Vec<TokenKey> = tdef.assoc_tys.iter().map(|a| a.name).collect();
+        // For each default, the trait's own associated types it names.
+        let deps: Vec<Vec<usize>> = tdef
+            .assoc_tys
+            .iter()
+            .map(|a| {
+                let mut named = Vec::new();
+                if let Some(default) = a.default {
+                    crate::semi::traits::subst::rebuild(
+                        self.tcx,
+                        default,
+                        &mut |_| None,
+                        &mut |assoc| {
+                            if let TyKind::Assoc {
+                                trait_def,
+                                name,
+                                args,
+                            } = *assoc.kind()
+                                && trait_def == tdef.def
+                                && args == own_args
+                            {
+                                named.extend(names.iter().position(|&n| n == name));
+                            }
+                            assoc
+                        },
+                    );
+                }
+                named
+            })
+            .collect();
+        let cyclic: Vec<usize> = (0..names.len())
+            .filter(|&start| {
+                let mut seen = vec![false; names.len()];
+                let mut work = deps[start].clone();
+                while let Some(next) = work.pop() {
+                    if next == start {
+                        return true;
+                    }
+                    if !std::mem::replace(&mut seen[next], true) {
+                        work.extend(&deps[next]);
+                    }
+                }
+                false
+            })
+            .collect();
+        for index in cyclic {
+            let decl = &mut self.traits.trait_def_mut(id).assoc_tys[index];
+            decl.default = None;
+            let (name, span) = (decl.name, decl.span);
+            self.error(
+                span,
+                format!(
+                    "the default of associated type `{}` names itself",
+                    self.sym(name)
+                ),
+            );
+        }
     }
 
     /// One member of a `trait` body as a [`MethodSig`]: allocate its own

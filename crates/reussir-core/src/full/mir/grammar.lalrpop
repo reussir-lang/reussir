@@ -215,6 +215,7 @@ BareName: &'input str = {
     "glue" => "glue",
     "trait" => "trait",
     "const" => "const",
+    "type" => "type",
 };
 
 /// A user debug name (parameter and let names, variant names). A name that
@@ -608,6 +609,7 @@ extern {
         "glue" => Token::Glue,
         "trait" => Token::Trait,
         "const" => Token::Const,
+        "type" => Token::Type,
         "transform" => Token::Transform,
         "transform_anchor" => Token::TransformAnchor,
         "interface" => Token::Interface,

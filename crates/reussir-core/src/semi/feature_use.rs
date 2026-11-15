@@ -62,6 +62,7 @@ fn add_ty_features(ty: Ty<'_>, needed: &mut FeatureSet) {
         | TyKind::GenericAddrSpace
         | TyKind::Simd { .. }
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_)
         | TyKind::Bottom => {}
     }

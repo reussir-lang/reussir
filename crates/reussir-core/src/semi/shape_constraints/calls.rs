@@ -45,12 +45,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let subst: FxHashMap<_, _> = binders.zip(ty_args.iter().copied()).collect();
         for (&formal, actual) in signature.params.iter().zip(args) {
             let formal = crate::semi::traits::subst::replace_generics(self.tcx, formal, &subst);
+            let formal = self.normalize(formal);
             self.infer
                 .unify(formal, actual.ty)
                 .map_err(|_| "incompatible argument for a trait shape relation".to_owned())?;
         }
         let declared_result =
             crate::semi::traits::subst::replace_generics(self.tcx, signature.ret, &subst);
+        let declared_result = self.normalize(declared_result);
         self.infer
             .unify(declared_result, result)
             .map_err(|_| "incompatible result for a trait shape relation".to_owned())?;

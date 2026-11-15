@@ -345,7 +345,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if self.inside_kernel
             && !matches!(
                 scrut_ty.kind(),
-                TyKind::Int(_) | TyKind::Generic(_) | TyKind::Hole(_)
+                TyKind::Int(_) | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
             )
         {
             self.error(scrut.span, "kernel match scrutinee must be an integer");
@@ -682,7 +682,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             .iter()
             .enumerate()
             .map(|(i, decl)| {
-                let field_ty = self.infer.instantiate_ty(*decl, &inst);
+                let field_ty = self.instantiate_ty(*decl, &inst);
                 let field_ty = if arced {
                     self.arc_promote_member_ty(&group, field_ty)
                 } else {
@@ -1380,7 +1380,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         );
         payload
             .iter()
-            .map(|t| self.infer.instantiate_ty(*t, &inst))
+            .map(|t| self.instantiate_ty(*t, &inst))
             .collect()
     }
 

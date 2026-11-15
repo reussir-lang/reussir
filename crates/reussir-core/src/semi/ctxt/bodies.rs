@@ -37,6 +37,7 @@ struct FunctionFrame<'a, 'tcx> {
     vars: VarEnv<'tcx>,
     generic_names: FxHashMap<TokenKey, GenericId>,
     self_alias: Option<Ty<'tcx>>,
+    self_assoc_tys: Vec<(TokenKey, Ty<'tcx>)>,
     inside_region: bool,
     inside_kernel: bool,
     regional_generics: Vec<GenericId>,
@@ -89,6 +90,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             vars: std::mem::take(&mut self.vars),
             generic_names: std::mem::take(&mut self.generic_names),
             self_alias: self.self_alias.take(),
+            self_assoc_tys: std::mem::take(&mut self.self_assoc_tys),
             inside_region: std::mem::replace(&mut self.inside_region, false),
             inside_kernel: std::mem::replace(&mut self.inside_kernel, false),
             regional_generics: std::mem::take(&mut self.regional_generics),
@@ -103,6 +105,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.vars = frame.vars;
         self.generic_names = frame.generic_names;
         self.self_alias = frame.self_alias;
+        self.self_assoc_tys = frame.self_assoc_tys;
         self.inside_region = frame.inside_region;
         self.inside_kernel = frame.inside_kernel;
         self.regional_generics = frame.regional_generics;

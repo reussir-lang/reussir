@@ -317,7 +317,7 @@ impl<'tcx> Cx<'_, 'tcx> {
                 self.group = saved;
                 verdict
             }
-            TyKind::Generic(_) | TyKind::Hole(_) => SyncVerdict::Blocked,
+            TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => SyncVerdict::Blocked,
             TyKind::Nullable(inner) => self.check(inner),
             // The cell verdict follows the kind lattice (thread-safety
             // design §4): a plain/exclusive cell is unsynchronized and
@@ -457,7 +457,9 @@ impl<'tcx> Cx<'_, 'tcx> {
                 self.group = saved;
                 verdict
             }
-            TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => SyncVerdict::Blocked,
+            TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) | TyKind::Bottom => {
+                SyncVerdict::Blocked
+            }
             // Everything else is the kind gate's error.
             _ => SyncVerdict::Sync,
         }

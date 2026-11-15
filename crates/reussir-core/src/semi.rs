@@ -2276,7 +2276,7 @@ mod tests {
     fn assoc_const_lookup_selects_the_impl_value() {
         use crate::literal::Integer;
         use crate::semi::const_eval::{ConstScalar, ConstValue};
-        use crate::semi::traits::{AssocConstError, SelectError, TraitId};
+        use crate::semi::traits::{AssocError, SelectError, TraitId};
         check(
             "pub trait Shape { const SIDES: i64; const ROUND: bool; const DIMS: ConstSeq<u8>; }\n\
              pub struct Square { pub x: i64 }\n\
@@ -2325,13 +2325,13 @@ mod tests {
                 );
                 assert!(matches!(
                     value(record("Line"), sides),
-                    Err(AssocConstError::Select(SelectError::NoImpl(_)))
+                    Err(AssocError::Select(SelectError::NoImpl(_)))
                 ));
                 // The trait's own name is no const of it.
                 let undeclared = elab.defs.path(tdef.def).name();
                 assert_eq!(
                     value(record("Square"), undeclared),
-                    Err(AssocConstError::Undeclared)
+                    Err(AssocError::Undeclared)
                 );
                 // Both spellings defer to monomorphization.
                 for (function, name) in [("concrete", sides), ("generic", round)] {

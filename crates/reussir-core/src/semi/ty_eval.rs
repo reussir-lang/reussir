@@ -39,12 +39,14 @@
 //! binding. Generics are left uncolored — their modality is resolved at
 //! monomorphization.
 
+use reussir_syntax::kind::TokenKey;
+
 use crate::semi::const_eval::{ConstScalar, ConstValue};
 use crate::semi::infer::{Instantiation, shape::Dim};
 use crate::semi::lang::FormerItem;
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::sync::{SyncEnv, SyncVerdict, wf_arc};
-use crate::semi::ty::{DefId, Flexivity, FpTy, IntTy, Ty, TyKind};
+use crate::semi::ty::{DefId, Flexivity, FpTy, GenericId, IntTy, Ty, TyKind};
 use crate::surface::{self, FpType, IntegralType, TypeKind};
 
 use super::ctxt::{DefaultCap, Elaborator, RecordFields};
@@ -136,6 +138,24 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 );
             }
             return self.tcx.mk_generic(generic);
+        }
+
+        // An associated type, named through a type parameter (`T::Name`)
+        // or, in a trait or one of its impls, through `Self`.
+        if let [qualifier] = path.segments.as_slice() {
+            let named = match self.generic_names.get(qualifier) {
+                Some(&generic) => Some(self.generic_assoc_ty(generic, key, span)),
+                None if self.self_alias.is_some() && self.sym(*qualifier) == "Self" => {
+                    Some(self.self_assoc_ty(key, span))
+                }
+                None => None,
+            };
+            if let Some(ty) = named {
+                if !args.is_empty() {
+                    self.error(Some(span), "an associated type takes no type arguments");
+                }
+                return ty;
+            }
         }
 
         // `Self` inside an impl member: the applied target type. Contextual —
@@ -425,6 +445,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let valid = match *p.kind() {
                     TyKind::DefaultPlacement
                     | TyKind::Generic(_)
+                    | TyKind::Assoc { .. }
                     | TyKind::Hole(_)
                     | TyKind::Bottom => true,
                     TyKind::Record { def, args, .. } => {
@@ -592,6 +613,58 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// Evaluate one array or tensor extent expression as a `u64` constant
     /// ([`Self::eval_const`]). An invalid extent is reported and recovers as
     /// extent 1 (a *dynamic* dimension is spelled `?`, not an expression).
+    /// `T::Name`: the associated type `Name` that a bound of the type
+    /// parameter `generic` declares, directly or through its supertraits.
+    fn generic_assoc_ty(
+        &mut self,
+        generic: GenericId,
+        name: TokenKey,
+        span: surface::Span,
+    ) -> Ty<'tcx> {
+        let self_ty = self.tcx.mk_generic(generic);
+        let declaring = self.generic_trait_candidates(generic, |def| {
+            def.assoc_tys.iter().position(|a| a.name == name)
+        });
+        match declaring[..] {
+            [(tid, _)] => {
+                let trait_def = self.traits.trait_def(tid).def;
+                return self.tcx.mk_assoc(trait_def, name, &[self_ty]);
+            }
+            [] => self.error(
+                Some(span),
+                format!(
+                    "no associated type `{}` on `{}`: no bound of `{1}` declares it",
+                    self.sym(name),
+                    self.ty_display(self_ty)
+                ),
+            ),
+            [(a, _), (b, _), ..] => self.error(
+                Some(span),
+                format!(
+                    "multiple bounds of `{}` declare associated type `{}`: `{}` and `{}`",
+                    self.ty_display(self_ty),
+                    self.sym(name),
+                    self.trait_display(a),
+                    self.trait_display(b)
+                ),
+            ),
+        }
+        self.tcx.mk(TyKind::Bottom)
+    }
+
+    /// `Self::Name` in a trait or one of its impls: the trait's own
+    /// associated type `Name`, or the type the impl binds it to.
+    fn self_assoc_ty(&mut self, name: TokenKey, span: surface::Span) -> Ty<'tcx> {
+        if let Some(&(_, ty)) = self.self_assoc_tys.iter().find(|(n, _)| *n == name) {
+            return ty;
+        }
+        self.error(
+            Some(span),
+            format!("no associated type `{}` on `Self`", self.sym(name)),
+        );
+        self.tcx.mk(TyKind::Bottom)
+    }
+
     fn eval_simd_type(&mut self, args: &[surface::Type], span: surface::Span) -> Ty<'tcx> {
         let [inner] = args else {
             self.error(
@@ -797,6 +870,7 @@ pub(crate) fn is_plain_scalar_or_deferred(t: Ty<'_>) -> bool {
             | TyKind::Bool
             | TyKind::Char
             | TyKind::Generic(_)
+            | TyKind::Assoc { .. }
             | TyKind::Hole(_)
             | TyKind::Bottom
     )
@@ -864,7 +938,7 @@ pub fn atomic_cell_element_rejection(t: Ty<'_>) -> Option<&'static str> {
             }
         }
         TyKind::Fp(_) => None,
-        TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) | TyKind::Bottom => None,
         TyKind::Bool => Some("`bool` (use an 8-bit integer)"),
         TyKind::Char => Some("`char` (use a 32-bit integer)"),
         _ => Some("not an integer or floating-point primitive"),
@@ -949,6 +1023,7 @@ pub fn ptr_pointee_rejection(ty: Ty<'_>) -> Option<&'static str> {
         | TyKind::Char
         | TyKind::Ptr { .. }
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_)
         | TyKind::Bottom => None,
         _ => Some("not an integer, a floating-point number, `bool`, `char` or a pointer"),
@@ -975,7 +1050,7 @@ pub fn arc_inner_rejection<'tcx>(
         TyKind::Future(_) | TyKind::Token => {
             Some("a kernel SSA value is scope-confined and cannot be arc'd")
         }
-        TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) | TyKind::Bottom => None,
         // A cell is a shared box too, but synchronization is the cell's own
         // axis (plain vs exclusive, and the atomic flavor at the MLIR level)
         // — `Arc` must not stack a second discipline on top.
@@ -1313,7 +1388,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if let Err(part) = self.check_const_ty(elem)
             && !matches!(
                 part.ty.kind(),
-                TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom
+                TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) | TyKind::Bottom
             )
         {
             let found = self.non_const_ty_display(elem, &part);
@@ -1386,6 +1461,7 @@ pub fn device_element_supported(ty: Ty<'_>) -> bool {
                 crate::semi::ty::FpTy::Ieee(16 | 32 | 64) | crate::semi::ty::FpTy::BFloat16
             )
             | TyKind::Generic(_)
+            | TyKind::Assoc { .. }
             | TyKind::Hole(_)
             | TyKind::Bottom
     )
@@ -1395,7 +1471,11 @@ pub fn device_element_supported(ty: Ty<'_>) -> bool {
 /// values. Generic payloads defer this obligation until substitution.
 pub fn future_payload_rejection(payload: Ty<'_>) -> Option<&'static str> {
     match payload.kind() {
-        TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
+        TyKind::Tensor { .. }
+        | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
+        | TyKind::Hole(_)
+        | TyKind::Bottom => None,
         _ => Some("future payload must be a Tensor type"),
     }
 }
@@ -1409,6 +1489,7 @@ pub fn tensor_element_rejection(elem: Ty<'_>) -> Option<&'static str> {
         | TyKind::Bool
         | TyKind::Fp(FpTy::Ieee(16 | 32 | 64) | FpTy::BFloat16)
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_)
         | TyKind::Bottom => None,
         _ => Some("a supported integer, floating-point, or bool scalar is required"),
@@ -1443,7 +1524,11 @@ pub fn kernel_type_rejection(ty: Ty<'_>) -> Option<&'static str> {
             }
         }
         TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool => tensor_element_rejection(ty),
-        TyKind::Unit | TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => None,
+        TyKind::Unit
+        | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
+        | TyKind::Hole(_)
+        | TyKind::Bottom => None,
         TyKind::Record { .. }
         | TyKind::BigInt(_)
         | TyKind::Str

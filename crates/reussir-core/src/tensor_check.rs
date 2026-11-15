@@ -4,7 +4,10 @@ use crate::intrinsic::TensorFn;
 use crate::semi::ty::{DYNAMIC_EXTENT, IntTy, Ty, TyKind};
 
 fn open(t: Ty<'_>) -> bool {
-    matches!(t.kind(), TyKind::Generic(_) | TyKind::Hole(_))
+    matches!(
+        t.kind(),
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
+    )
 }
 fn tensor(t: Ty<'_>) -> Result<Option<(Ty<'_>, &[u64])>, String> {
     match t.kind() {
@@ -34,9 +37,12 @@ fn numeric(t: Ty<'_>) -> bool {
 fn scalar(t: Ty<'_>) -> Option<Ty<'_>> {
     match t.kind() {
         TyKind::Tensor { elem, dims } if dims.is_empty() => Some(*elem),
-        TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool | TyKind::Generic(_) | TyKind::Hole(_) => {
-            Some(t)
-        }
+        TyKind::Int(_)
+        | TyKind::Fp(_)
+        | TyKind::Bool
+        | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
+        | TyKind::Hole(_) => Some(t),
         _ => None,
     }
 }

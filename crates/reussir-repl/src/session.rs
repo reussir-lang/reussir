@@ -864,7 +864,7 @@ impl<'a, 'tcx> ReplSession<'a, 'tcx> {
                     Self::render_ty_with(elab, ret)
                 )
             }
-            TyKind::Generic(_) | TyKind::Hole(_) => "_".to_string(),
+            TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => "_".to_string(),
         }
     }
 }

@@ -395,6 +395,7 @@ impl<'a, 'tcx> Rr<'a, 'tcx> {
             | TyKind::Char
             | TyKind::Unit
             | TyKind::Generic(_)
+            | TyKind::Assoc { .. }
             | TyKind::Hole(_)
             | TyKind::Bottom => false,
         };

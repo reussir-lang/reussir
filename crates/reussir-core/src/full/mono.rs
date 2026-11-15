@@ -63,7 +63,7 @@ use crate::full::ffi as ffi_render;
 use crate::full::ffi::{FfiCtx, WrapperDecl, WrapperParam};
 use crate::full::mangle::Mangler;
 use crate::full::mir;
-use crate::full::subst::{Subst, subst_ty};
+use crate::full::subst::{Grounding, Subst};
 use crate::literal;
 use crate::semi::ctxt::{
     DefaultCap, Elaborator, FfiImport, FfiPrelude, Record, RecordFields, Report, Severity,
@@ -418,6 +418,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
 
     let mut driver = Driver {
         tcx,
+        ground: Grounding::new(tcx, input.traits.db),
         resolver: input.resolver,
         defs: input.defs,
         traits: input.traits,
@@ -486,7 +487,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         // opaque instance. Selection may enqueue comparison methods, in which
         // case this same loop resumes and drains them normally.
         if driver.queue.is_empty() && driver.records.len() != closed_record_count {
-            driver.close_records_over_fields(input.records, tcx);
+            driver.close_records_over_fields(input.records);
             closed_record_count = driver.records.len();
         }
         if driver.queue.is_empty() {
@@ -585,7 +586,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             .params
             .iter()
             .map(|(name, var, ty)| {
-                let ty = subst_ty(tcx, *ty, &subst);
+                let ty = driver.ground.ty(*ty, &subst);
                 driver.note_records(ty);
                 driver.check_arc_inners(ty, func.span);
                 if !func.is_kernel {
@@ -598,7 +599,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
                 }
             })
             .collect();
-        let return_ty = subst_ty(tcx, func.return_ty, &subst);
+        let return_ty = driver.ground.ty(func.return_ty, &subst);
         driver.note_records(return_ty);
         if func.is_kernel {
             for ty in params.iter().map(|p| p.ty).chain([return_ty]) {
@@ -749,6 +750,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
             }
         }
 
+        driver.report_ungrounded(func.span);
         functions.push(mir::Function {
             symbol,
             transform_anchor: input.transform_anchors.contains(&func.def),
@@ -770,7 +772,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     // through generics (`[value] Wrap<T> { x: T }` instantiated at a value
     // record that contains `Wrap` back), so the closed instance set is walked
     // here with every member substituted.
-    driver.reject_infinite_value_recursion(tcx);
+    driver.reject_infinite_value_recursion();
 
     // Resolve the discovered record instances to symbols. Collect the keys first
     // so the interner can be borrowed mutably while we map them.
@@ -866,7 +868,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
         // empty value layout so lowering still has a well-formed instance.
         let (default_cap, layout) = match input.records.get(&def) {
             Some(record) => resolve_layout(
-                tcx,
+                &driver.ground,
                 record,
                 args,
                 input.resolver,
@@ -960,6 +962,7 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
     }
 
     functions.extend(std::mem::take(&mut driver.synthetic_fns));
+    driver.report_ungrounded(None);
     let Driver {
         symbols, reports, ..
     } = driver;
@@ -986,13 +989,14 @@ pub fn monomorphize<'a, 'tcx>(input: &MonoInput<'a, 'tcx>) -> (mir::Program<'tcx
 /// default capability that selects the lowering. Variant names are interned into
 /// `symbols` (the program's symbol table).
 fn resolve_layout<'tcx>(
-    tcx: &TyCtxt<'tcx>,
+    ground: &Grounding<'_, 'tcx>,
     record: &Record<'tcx>,
     args: &'tcx [Ty<'tcx>],
     resolver: &dyn Resolver<TokenKey>,
     mangler: &Mangler<'_>,
     symbols: &mut Rodeo,
 ) -> (DefaultCap, mir::RecordLayout<'tcx>) {
+    let tcx = ground.tcx;
     let mut subst = Subst::default();
     for ((_, gid), &ty) in record.ty_params.iter().zip(args.iter()) {
         subst.insert(*gid, ty);
@@ -1002,7 +1006,7 @@ fn resolve_layout<'tcx>(
             let members: Vec<mir::Member<'tcx>> = fields
                 .iter()
                 .map(|(name, ty, is_mut, _)| mir::Member {
-                    ty: subst_ty(tcx, *ty, &subst),
+                    ty: ground.ty(*ty, &subst),
                     is_field: *is_mut,
                     name: Some(mir::Symbol(symbols.get_or_intern(resolver.resolve(*name)))),
                 })
@@ -1013,7 +1017,7 @@ fn resolve_layout<'tcx>(
             let members: Vec<mir::Member<'tcx>> = fields
                 .iter()
                 .map(|(ty, is_mut, _)| mir::Member {
-                    ty: subst_ty(tcx, *ty, &subst),
+                    ty: ground.ty(*ty, &subst),
                     is_field: *is_mut,
                     name: None,
                 })
@@ -1025,7 +1029,7 @@ fn resolve_layout<'tcx>(
                 .iter()
                 .map(|v| {
                     let fields: Vec<Ty<'tcx>> =
-                        v.fields.iter().map(|&t| subst_ty(tcx, t, &subst)).collect();
+                        v.fields.iter().map(|&t| ground.ty(t, &subst)).collect();
                     let name = resolver.resolve(v.name);
                     let symbol = mangler.mangle_variant(record.def, name, args);
                     mir::VariantDef {
@@ -1092,6 +1096,7 @@ fn ty_depth(ty: Ty<'_>) -> usize {
         | TyKind::Unit
         | TyKind::Bottom
         | TyKind::Generic(_)
+        | TyKind::Assoc { .. }
         | TyKind::Hole(_) => 1,
     }
 }
@@ -1138,7 +1143,7 @@ fn is_regional_arg(ty: Ty<'_>) -> bool {
 /// type here is ground, so — unlike the semi-side env — nothing blocks on
 /// incomplete fields or generics.
 struct MonoSyncEnv<'a, 'tcx> {
-    tcx: &'a TyCtxt<'tcx>,
+    ground: &'a Grounding<'a, 'tcx>,
     record_defs: &'a FxHashMap<DefId, Record<'tcx>>,
     resolver: &'a dyn Resolver<TokenKey>,
 }
@@ -1157,7 +1162,7 @@ impl<'tcx> SyncEnv<'tcx> for MonoSyncEnv<'_, 'tcx> {
             .map(|(_, g)| *g)
             .zip(args.iter().copied())
             .collect();
-        let ground = |t: Ty<'tcx>| subst_ty(self.tcx, t, &subst);
+        let ground = |t: Ty<'tcx>| self.ground.ty(t, &subst);
         Some(match fields {
             RecordFields::Named(fs) => fs
                 .iter()
@@ -1209,6 +1214,8 @@ impl<'tcx> SyncEnv<'tcx> for MonoSyncEnv<'_, 'tcx> {
 /// Mutable worklist + lowering state.
 struct Driver<'a, 'tcx> {
     tcx: &'a TyCtxt<'tcx>,
+    /// Grounds each type an instance mentions.
+    ground: Grounding<'a, 'tcx>,
     /// Symbol resolution for diagnostics (member labels in `Sync` witnesses).
     resolver: &'a dyn Resolver<TokenKey>,
     /// Path display for diagnostics (instance names, trait-call reports).
@@ -1370,7 +1377,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             (
                 trait_def,
                 method as u32,
-                subst_ty(self.tcx, sig.ret, &subst),
+                self.ground.ty(sig.ret, &subst),
                 sig.name,
             )
         };
@@ -1770,7 +1777,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             let sig = &tdef.methods[method as usize];
             let mut sig_subst = Subst::default();
             sig_subst.insert(tdef.self_param, scalar);
-            (subst_ty(self.tcx, sig.ret, &sig_subst), sig.name)
+            (self.ground.ty(sig.ret, &sig_subst), sig.name)
         };
         let TyKind::Record { def, args, .. } = *ret.kind() else {
             self.error(span, "`cmp` must return `core`'s `Ordering`");
@@ -2017,7 +2024,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         self_ty: Ty<'tcx>,
         span: Option<Span>,
     ) -> Option<crate::semi::const_eval::ConstValue<'tcx>> {
-        use crate::semi::traits::{AssocConstError, SelectError};
+        use crate::semi::traits::{AssocError, SelectError};
         let shown = self.defs.path(trait_def).display(self.resolver);
         let cname = self.resolver.try_resolve(name).unwrap_or("?").to_string();
         let Some(db) = self.traits.db else {
@@ -2036,23 +2043,57 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         };
         let message = match db.assoc_const_value(self.tcx, tid, self_ty, name) {
             Ok(value) => return Some(value),
-            Err(AssocConstError::Undeclared) => {
+            Err(AssocError::Undeclared) => {
                 format!("trait `{shown}` declares no associated const `{cname}`")
             }
-            Err(AssocConstError::Select(SelectError::NoImpl(_))) => format!(
+            Err(AssocError::Select(SelectError::NoImpl(_))) => format!(
                 "no implementation of `{shown}` applies in this instantiation, so \
                  `{cname}` has no value"
             ),
-            Err(AssocConstError::Select(SelectError::DepthLimit(_))) => {
+            Err(AssocError::Select(SelectError::DepthLimit(_))) => {
                 format!("overflow selecting an `impl {shown}` for this instantiation")
             }
-            Err(AssocConstError::Indirect) => format!(
+            Err(AssocError::Indirect) => format!(
                 "no direct `impl {shown}` defines associated const `{cname}` for this \
                  instantiation (the bound holds only through a sub-trait)"
             ),
         };
         self.error(span, message);
         None
+    }
+
+    /// Report the associated type no impl decided while the current
+    /// instance was grounded, if there is one.
+    fn report_ungrounded(&mut self, span: Option<Span>) {
+        use crate::semi::traits::{AssocError, SelectError};
+        let Some((assoc, error)) = self.ground.take_failure() else {
+            return;
+        };
+        let TyKind::Assoc {
+            trait_def, name, ..
+        } = *assoc.kind()
+        else {
+            unreachable!("only an associated type fails to ground")
+        };
+        let shown = self.defs.path(trait_def).display(self.resolver);
+        let name = self.resolver.try_resolve(name).unwrap_or("?").to_string();
+        let message = match error {
+            AssocError::Undeclared => {
+                format!("cannot resolve `{shown}::{name}`: its trait declaration is missing")
+            }
+            AssocError::Select(SelectError::NoImpl(_)) => format!(
+                "no implementation of `{shown}` applies in this instantiation, so \
+                 `{name}` names no type"
+            ),
+            AssocError::Select(SelectError::DepthLimit(_)) => {
+                format!("overflow selecting an `impl {shown}` for this instantiation")
+            }
+            AssocError::Indirect => format!(
+                "no direct `impl {shown}` binds associated type `{name}` for this \
+                 instantiation (the bound holds only through a sub-trait)"
+            ),
+        };
+        self.error(span, message);
     }
 
     /// A lifted method's body may mention built-in integers only where the
@@ -2226,7 +2267,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     // anything a generic blocks — instantiation is where
                     // those ground.
                     let env = MonoSyncEnv {
-                        tcx: self.tcx,
+                        ground: &self.ground,
                         record_defs: self.record_defs,
                         resolver: self.resolver,
                     };
@@ -2301,7 +2342,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                             }
                         } else {
                             let env = MonoSyncEnv {
-                                tcx: self.tcx,
+                                ground: &self.ground,
                                 record_defs: self.record_defs,
                                 resolver: self.resolver,
                             };
@@ -2416,11 +2457,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// layout. Each instance's field types are substituted under its type
     /// arguments — mirroring [`resolve_layout`] — and the records they mention are
     /// added, to a fixed point.
-    fn close_records_over_fields(
-        &mut self,
-        records: &FxHashMap<DefId, Record<'tcx>>,
-        tcx: &TyCtxt<'tcx>,
-    ) {
+    fn close_records_over_fields(&mut self, records: &FxHashMap<DefId, Record<'tcx>>) {
         let mut worklist: Vec<(DefId, &'tcx [Ty<'tcx>])> = self.records.iter().copied().collect();
         while let Some((def, args)) = worklist.pop() {
             let Some(record) = records.get(&def) else {
@@ -2444,7 +2481,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 Some(RecordFields::Opaque) | None => Vec::new(),
             };
             for field_ty in field_tys {
-                let ground = subst_ty(tcx, field_ty, &subst);
+                let ground = self.ground.ty(field_ty, &subst);
                 self.discover_records(ground, &mut worklist);
                 // The member position is where an `Arc` can ground without
                 // ever appearing in a signature or expression type: a direct
@@ -2464,7 +2501,6 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// break an inline chain.
     fn inline_value_instances(
         &self,
-        tcx: &'a TyCtxt<'tcx>,
         def: DefId,
         args: &'tcx [Ty<'tcx>],
     ) -> Vec<(DefId, &'tcx [Ty<'tcx>])> {
@@ -2486,7 +2522,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         };
         let mut pending: Vec<_> = field_tys
             .into_iter()
-            .map(|t| subst_ty(tcx, t, &subst))
+            .map(|t| self.ground.ty(t, &subst))
             .collect();
         let mut instances = Vec::new();
         while let Some(ty) = pending.pop() {
@@ -2509,7 +2545,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     /// The ground half of the infinite-size check (see semi's
     /// `reject_infinite_value_recursion`): walk the closed record-instance
     /// set and report any `[value]` instance stored inline within itself.
-    fn reject_infinite_value_recursion(&mut self, tcx: &'a TyCtxt<'tcx>) {
+    fn reject_infinite_value_recursion(&mut self) {
         type Key<'tcx> = (DefId, &'tcx [Ty<'tcx>]);
         // 1 = on the current DFS path, 2 = finished.
         let mut color: FxHashMap<Key<'tcx>, u8> = FxHashMap::default();
@@ -2524,7 +2560,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 continue;
             }
             let mut stack: Vec<(Key<'tcx>, Vec<Key<'tcx>>)> =
-                vec![(root, self.inline_value_instances(tcx, root.0, root.1))];
+                vec![(root, self.inline_value_instances(root.0, root.1))];
             color.insert(root, 1);
             while let Some((_, succs)) = stack.last_mut() {
                 let Some(next) = succs.pop() else {
@@ -2555,7 +2591,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     }
                     Some(_) => {}
                     None => {
-                        let succs = self.inline_value_instances(tcx, next.0, next.1);
+                        let succs = self.inline_value_instances(next.0, next.1);
                         color.insert(next, 1);
                         stack.push((next, succs));
                     }
@@ -2566,10 +2602,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
 
     /// Ground a slice of type arguments and re-intern it.
     fn ground_args(&self, ty_args: &[Ty<'tcx>], subst: &Subst<'tcx>) -> &'tcx [Ty<'tcx>] {
-        let grounded: Vec<Ty<'tcx>> = ty_args
-            .iter()
-            .map(|&t| subst_ty(self.tcx, t, subst))
-            .collect();
+        let grounded: Vec<Ty<'tcx>> = ty_args.iter().map(|&t| self.ground.ty(t, subst)).collect();
         self.tcx.intern_tys(&grounded)
     }
 
@@ -2606,7 +2639,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
     }
 
     fn lower_expr(&mut self, e: &Expr<'tcx>, subst: &Subst<'tcx>) -> mir::Expr<'tcx> {
-        let ty = subst_ty(self.tcx, e.ty, subst);
+        let ty = self.ground.ty(e.ty, subst);
         if self.inside_kernel {
             let allowed = matches!(
                 e.kind,
@@ -2686,7 +2719,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         span: Option<Span>,
     ) {
         let name = func.as_str();
-        let integer = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
+        let integer = args.first().map(|a| self.ground.ty(a.ty, subst));
         if func.takes_integer() && !integer.is_some_and(|ty| ty.bigint().is_some()) {
             self.error(
                 span,
@@ -2845,7 +2878,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 name,
                 ty_args,
             } => {
-                let self_ty = subst_ty(self.tcx, ty_args[0], subst);
+                let self_ty = self.ground.ty(ty_args[0], subst);
                 // The value lowers as the expression denoting it: a literal,
                 // a `ConstSeq`, or a record constructor call. HIR expression
                 // ids only key facts recorded during elaboration, so the
@@ -2904,7 +2937,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 if matches!(op, hir::ArithOp::Shl | hir::ArithOp::Shr)
                     && let Some((int, _)) = result_ty.bigint()
                     && !matches!(
-                        subst_ty(self.tcx, r.ty, subst).kind(),
+                        self.ground.ty(r.ty, subst).kind(),
                         TyKind::Int(IntTy::Signed(64))
                     )
                 {
@@ -2920,7 +2953,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 // this expression when an operand's type was solved *after*
                 // the operator committed to the scalar path (a late-solved
                 // hole).
-                let ty = subst_ty(self.tcx, l.ty, subst);
+                let ty = self.ground.ty(l.ty, subst);
                 // `str` and the built-in integers compare intrinsically too:
                 // codegen lowers their comparisons through dedicated ops.
                 if !ty.is_scalar() && !matches!(ty.kind(), TyKind::Str) && ty.bigint().is_none() {
@@ -2941,15 +2974,15 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 M::Cmp(self.lower_ref(l, subst), *op, self.lower_ref(r, subst))
             }
             ExprKind::TypeOffset(t) => {
-                let t = subst_ty(self.tcx, *t, subst);
+                let t = self.ground.ty(*t, subst);
                 self.note_records(t);
                 self.check_ptr_pointee("type_offset", t, span);
                 M::TypeOffset(t)
             }
             ExprKind::Cast(e, t) => {
-                let t = subst_ty(self.tcx, *t, subst);
+                let t = self.ground.ty(*t, subst);
                 self.note_records(t);
-                let from = subst_ty(self.tcx, e.ty, subst);
+                let from = self.ground.ty(e.ty, subst);
                 // The checker rejects these casts when it sees both types; a
                 // generic cast reaches here once its instance is known.
                 if let Some(reason) = bigint_cast_rejection(from, t) {
@@ -3028,7 +3061,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                     && (result_ty.mentions_bigint(true)
                         || args
                             .iter()
-                            .any(|a| subst_ty(self.tcx, a.ty, subst).mentions_bigint(true)));
+                            .any(|a| self.ground.ty(a.ty, subst).mentions_bigint(true)));
                 self.enqueue(*target, ty_args, atomic, span);
                 let callee = self.instance_symbol(Instance {
                     def: *target,
@@ -3043,7 +3076,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
             }
             ExprKind::Intrinsic { op, args } => {
                 if let crate::intrinsic::IntrinsicOp::Object { func } = *op {
-                    let ty = subst_ty(self.tcx, args[0].ty, subst);
+                    let ty = self.ground.ty(args[0].ty, subst);
                     if let Some(reason) = crate::semi::ty_eval::object_operand_rejection(
                         |def| self.record_defs.get(&def).map(|r| r.default_cap),
                         ty,
@@ -3058,9 +3091,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 if let crate::intrinsic::IntrinsicOp::Ptr { func, .. } = *op {
                     let accessed = match func {
                         crate::intrinsic::PtrFn::Load => Some(result_ty),
-                        crate::intrinsic::PtrFn::Store => {
-                            Some(subst_ty(self.tcx, args[1].ty, subst))
-                        }
+                        crate::intrinsic::PtrFn::Store => Some(self.ground.ty(args[1].ty, subst)),
                         _ => None,
                     };
                     if let Some(ty) = accessed {
@@ -3133,10 +3164,10 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 use crate::intrinsic::ArrayFn;
                 use crate::semi::ty::TyKind;
                 use crate::semi::ty_eval::{array_element_rejection, is_plain_scalar_or_deferred};
-                let arg0 = args.first().map(|a| subst_ty(self.tcx, a.ty, subst));
+                let arg0 = args.first().map(|a| self.ground.ty(a.ty, subst));
                 // The constructors' payload operand is the *last* argument
                 // (dynamic extents, if any, lead).
-                let last = args.last().map(|a| subst_ty(self.tcx, a.ty, subst));
+                let last = args.last().map(|a| self.ground.ty(a.ty, subst));
                 let elem = match op {
                     // `splat`'s payload argument *is* an element value.
                     ArrayFn::Splat => last,
@@ -3194,7 +3225,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 M::TensorOp { op: *op, args }
             }
             ExprKind::Match(scrut, tree) => {
-                let scrut_ty = subst_ty(self.tcx, scrut.ty, subst);
+                let scrut_ty = self.ground.ty(scrut.ty, subst);
                 if self.inside_kernel && !matches!(scrut_ty.kind(), TyKind::Int(_)) {
                     self.error(scrut.span, "kernel match scrutinee must be an integer");
                     return M::Poison;
@@ -3246,7 +3277,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                         .map(|(_, generic)| *generic)
                         .zip(args.iter().copied())
                         .collect();
-                    subst_ty(self.tcx, field, &subst)
+                    self.ground.ty(field, &subst)
                 }
                 _ => return None,
             };
@@ -3363,7 +3394,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                                 variant
                                     .fields
                                     .iter()
-                                    .map(|field| subst_ty(self.tcx, *field, &subst))
+                                    .map(|field| self.ground.ty(*field, &subst))
                                     .collect()
                             })
                             .collect();
@@ -3455,7 +3486,7 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
         let grounded: Vec<(hir::VarId, Ty<'tcx>)> = vars
             .iter()
             .map(|(v, t)| {
-                let t = subst_ty(self.tcx, *t, subst);
+                let t = self.ground.ty(*t, subst);
                 self.note_records(t);
                 (*v, t)
             })
@@ -4644,7 +4675,7 @@ mod tests {
 
     fn is_ground(ty: Ty<'_>) -> bool {
         match *ty.kind() {
-            TyKind::Generic(_) | TyKind::Hole(_) => false,
+            TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => false,
             TyKind::Record { args, .. } => args.iter().all(|&a| is_ground(a)),
             TyKind::Closure { params, ret } => {
                 params.iter().all(|&p| is_ground(p)) && is_ground(ret)

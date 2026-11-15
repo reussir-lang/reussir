@@ -83,7 +83,9 @@ pub fn head_key(ty: Ty<'_>) -> Option<HeadKey> {
         TyKind::Ptr { kind, .. } => HeadKey::Ptr(kind),
         TyKind::GenericAddrSpace => HeadKey::GenericAddrSpace,
         TyKind::Simd { .. } => HeadKey::Simd,
-        TyKind::Generic(_) | TyKind::Hole(_) | TyKind::Bottom => return None,
+        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) | TyKind::Bottom => {
+            return None;
+        }
     })
 }
 
