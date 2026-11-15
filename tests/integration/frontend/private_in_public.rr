@@ -1,8 +1,8 @@
 // The private-in-public discipline: the declared surface of a `pub` item —
-// a `pub` function's signature, a `pub` record's fields — may only mention
-// `pub` records. Within a package nothing is hidden; the rule keeps the
-// package interface (`--emit rri`) shippable with every surface type
-// nameable at the foreign point of use.
+// a `pub` function's signature, a `pub` record's fields, an associated type
+// of a `pub` trait — may only mention `pub` records. Within a package
+// nothing is hidden; the rule keeps the package interface (`--emit rri`)
+// shippable with every surface type nameable at the foreign point of use.
 
 // RUN: %not %rrc %s --emit hir -o %t.hir 2>&1 | %FileCheck %s
 
@@ -35,4 +35,44 @@ pub fn expose(n: Nullable<Hidden>) -> i64 {
 // bodies are not surface. (This is exactly the shape the rri ships whole.)
 pub fn scale<T>(x: T) -> T {
     x
+}
+
+// An associated type is surface where a `pub` trait defaults it.
+// CHECK: private record `Hidden` in the public interface of `pub trait Defaulted`
+pub trait Defaulted {
+    type Key = Hidden;
+}
+
+// A `pub` trait's method that names a private record is a warning: each
+// impl of it is checked as a `pub fn`.
+// CHECK: Warning: private record `Hidden` in the public interface of `Stamps::stamp`
+pub trait Stamps {
+    fn stamp(self: Self) -> Hidden;
+}
+
+// An associated type is surface where an impl of a `pub` trait for a public
+// type binds it, but not where the implementing type or the trait is private.
+pub trait Keyed {
+    type Key;
+}
+pub struct Account {
+    id: i64,
+}
+struct Internal {
+    id: i64,
+}
+trait Local {
+    type Key;
+}
+// CHECK: private record `Hidden` in the public interface of `impl Keyed for Account`
+impl Keyed for Account {
+    type Key = Hidden;
+}
+// CHECK-NOT: `impl Keyed for Internal`
+// CHECK-NOT: `impl Local for Account`
+impl Keyed for Internal {
+    type Key = Hidden;
+}
+impl Local for Account {
+    type Key = Hidden;
 }
