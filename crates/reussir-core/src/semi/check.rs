@@ -3,7 +3,7 @@
 use reussir_syntax::kind::TokenKey;
 
 use crate::semi::infer::Instantiation;
-use crate::semi::lang::{IntrinsicItem, OperatorTrait};
+use crate::semi::lang::{IntrinsicItem, OperatorMethod, OperatorTrait};
 use crate::semi::resolve::DefKind;
 use crate::semi::traits::{
     Evidence, Obligation, SelectCtxt, SelectError, TraitDef, TraitId, TraitRef,
@@ -1148,13 +1148,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     let aop = arith_op(op);
                     return self.mk_expr(ExprKind::Arith(Box::new(l), aop, Box::new(r)), ty, span);
                 }
-                let (op, method) = operator_trait(op);
-                self.operator_call(op, method, l, Some(r), span)
+                self.operator_call(operator_method(op), l, Some(r), span)
             }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
                 let l = self.infer_expr(l);
-                let (op, method) = operator_trait(op);
-                self.operator_call(op, method, l, Some(r), span)
+                self.operator_call(operator_method(op), l, Some(r), span)
             }
             BinOp::And | BinOp::Or => {
                 // (LOGIC) is sugar for (IF), which is what makes it
@@ -1260,14 +1258,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// the built-in node under a bound, which defaulting or context solves.
     fn operator_call(
         &mut self,
-        op: OperatorTrait,
-        method: usize,
+        method: OperatorMethod,
         receiver: Expr<'tcx>,
         other: Option<&surface::Expr>,
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        let tid = self.lang.operator(op);
-        let name = op.methods()[method];
+        let tid = self.lang.operator(method.trait_());
+        let name = method.name();
         let methods = &self.traits.trait_def(tid).methods;
         let Some(midx) = methods.iter().position(|m| self.sym(m.name) == name) else {
             let shown = self.trait_display(tid);
@@ -1284,7 +1281,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 let expected = self.operand_ty(tid, midx, ty);
                 self.check_expr(e, expected)
             });
-            return self.operator_node(op, method, receiver, other, span);
+            return self.operator_node(method, receiver, other, span);
         }
         // A generic operand has the method through its bound.
         if matches!(ty.kind(), TyKind::Generic(_)) {
@@ -1305,22 +1302,21 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         self.instantiate_ty(param, &inst)
     }
 
-    /// The built-in operation of the `method`-th method of `op` on a
-    /// receiver and, for a binary operator, its other operand.
+    /// The built-in operation of `method` on a receiver and, for a binary
+    /// operator, its other operand.
     fn operator_node(
         &mut self,
-        op: OperatorTrait,
-        method: usize,
+        method: OperatorMethod,
         receiver: Expr<'tcx>,
         other: Option<Expr<'tcx>>,
         span: Option<Span>,
     ) -> Expr<'tcx> {
         let ty = receiver.ty;
         let receiver = Box::new(receiver);
-        let kind = match (op.arith(method), other) {
-            (Some(aop), Some(other)) => ExprKind::Arith(receiver, aop, Box::new(other)),
-            (None, None) if op == OperatorTrait::Neg => ExprKind::Negate(receiver),
-            (None, None) => ExprKind::Not(receiver),
+        let kind = match (method, method.arith(), other) {
+            (_, Some(aop), Some(other)) => ExprKind::Arith(receiver, aop, Box::new(other)),
+            (OperatorMethod::Neg, None, None) => ExprKind::Negate(receiver),
+            (OperatorMethod::Not, None, None) => ExprKind::Not(receiver),
             _ => return self.poison(span),
         };
         self.mk_expr(kind, ty, span)
@@ -1460,7 +1456,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     );
                     return self.mk_expr(ExprKind::Negate(Box::new(e)), ty, span);
                 }
-                self.operator_call(OperatorTrait::Neg, 0, e, None, span)
+                self.operator_call(OperatorMethod::Neg, e, None, span)
             }
             UnaryOp::Not => {
                 let e = self.infer_expr(e);
@@ -1471,7 +1467,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     self.expect(ty, bool_ty, e.span);
                     return self.mk_expr(ExprKind::Not(Box::new(e)), bool_ty, span);
                 }
-                self.operator_call(OperatorTrait::Not, 0, e, None, span)
+                self.operator_call(OperatorMethod::Not, e, None, span)
             }
         }
     }
@@ -2580,7 +2576,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         span: Option<Span>,
     ) -> Expr<'tcx> {
         let name = self.sym(self.traits.trait_def(tid).methods[midx].name);
-        let Some(method) = op.methods().iter().position(|&m| m == name) else {
+        let Some(method) = op.method(name) else {
             self.error(span, format!("`{name}` is not the method of an operator"));
             return self.poison(span);
         };
@@ -2588,7 +2584,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         if op.is_numeric() {
             self.fulfill.shapes.register_scalar(recv_ty);
         }
-        let other = match (op.arith(method), args) {
+        let other = match (method.arith(), args) {
             (Some(_), [other]) => {
                 let expected = self.operand_ty(tid, midx, recv_ty);
                 Some(self.check_expr(other, expected))
@@ -2599,7 +2595,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 return self.poison(span);
             }
         };
-        self.operator_node(op, method, receiver, other, span)
+        self.operator_node(method, receiver, other, span)
     }
 
     /// A selected method-less impl of a comparison-tower trait: the call
@@ -6915,20 +6911,19 @@ fn arith_op(op: BinOp) -> ArithOp {
     }
 }
 
-/// The trait of an arithmetic, bitwise or shift operator, and which of its
-/// methods ([`OperatorTrait::methods`]) the operator is sugar for.
-fn operator_trait(op: BinOp) -> (OperatorTrait, usize) {
+/// The method an arithmetic, bitwise or shift operator is sugar for.
+fn operator_method(op: BinOp) -> OperatorMethod {
     match op {
-        BinOp::Add => (OperatorTrait::Add, 0),
-        BinOp::Sub => (OperatorTrait::Sub, 0),
-        BinOp::Mul => (OperatorTrait::Mul, 0),
-        BinOp::Div => (OperatorTrait::Div, 0),
-        BinOp::Mod => (OperatorTrait::Rem, 0),
-        BinOp::BitAnd => (OperatorTrait::BitAnd, 0),
-        BinOp::BitOr => (OperatorTrait::BitOr, 0),
-        BinOp::BitXor => (OperatorTrait::BitXor, 0),
-        BinOp::Shl => (OperatorTrait::Shift, 0),
-        BinOp::Shr => (OperatorTrait::Shift, 1),
+        BinOp::Add => OperatorMethod::Add,
+        BinOp::Sub => OperatorMethod::Sub,
+        BinOp::Mul => OperatorMethod::Mul,
+        BinOp::Div => OperatorMethod::Div,
+        BinOp::Mod => OperatorMethod::Rem,
+        BinOp::BitAnd => OperatorMethod::BitAnd,
+        BinOp::BitOr => OperatorMethod::BitOr,
+        BinOp::BitXor => OperatorMethod::BitXor,
+        BinOp::Shl => OperatorMethod::Shl,
+        BinOp::Shr => OperatorMethod::Shr,
         _ => unreachable!("not an operator with a trait"),
     }
 }

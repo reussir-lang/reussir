@@ -202,6 +202,95 @@ impl FormerItem {
     }
 }
 
+/// A method of an operator trait, which one operator is sugar for: `a + b`
+/// is `Add::add(a, b)` and `a >> n` is `Shift::shr(a, n)`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum OperatorMethod {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Neg,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Not,
+    Shl,
+    Shr,
+}
+
+impl OperatorMethod {
+    pub const ALL: [OperatorMethod; 12] = [
+        OperatorMethod::Add,
+        OperatorMethod::Sub,
+        OperatorMethod::Mul,
+        OperatorMethod::Div,
+        OperatorMethod::Rem,
+        OperatorMethod::Neg,
+        OperatorMethod::BitAnd,
+        OperatorMethod::BitOr,
+        OperatorMethod::BitXor,
+        OperatorMethod::Not,
+        OperatorMethod::Shl,
+        OperatorMethod::Shr,
+    ];
+
+    /// The trait that declares the method.
+    pub fn trait_(self) -> OperatorTrait {
+        match self {
+            OperatorMethod::Add => OperatorTrait::Add,
+            OperatorMethod::Sub => OperatorTrait::Sub,
+            OperatorMethod::Mul => OperatorTrait::Mul,
+            OperatorMethod::Div => OperatorTrait::Div,
+            OperatorMethod::Rem => OperatorTrait::Rem,
+            OperatorMethod::Neg => OperatorTrait::Neg,
+            OperatorMethod::BitAnd => OperatorTrait::BitAnd,
+            OperatorMethod::BitOr => OperatorTrait::BitOr,
+            OperatorMethod::BitXor => OperatorTrait::BitXor,
+            OperatorMethod::Not => OperatorTrait::Not,
+            OperatorMethod::Shl | OperatorMethod::Shr => OperatorTrait::Shift,
+        }
+    }
+
+    /// The method's name in its trait.
+    pub fn name(self) -> &'static str {
+        match self {
+            OperatorMethod::Add => "add",
+            OperatorMethod::Sub => "sub",
+            OperatorMethod::Mul => "mul",
+            OperatorMethod::Div => "div",
+            OperatorMethod::Rem => "rem",
+            OperatorMethod::Neg => "neg",
+            OperatorMethod::BitAnd => "bitand",
+            OperatorMethod::BitOr => "bitor",
+            OperatorMethod::BitXor => "bitxor",
+            OperatorMethod::Not => "not",
+            OperatorMethod::Shl => "shl",
+            OperatorMethod::Shr => "shr",
+        }
+    }
+
+    /// The built-in operation of a binary operator's method; the unary
+    /// `Neg` and `Not` have none.
+    pub fn arith(self) -> Option<crate::semi::hir::ArithOp> {
+        use crate::semi::hir::ArithOp;
+        Some(match self {
+            OperatorMethod::Add => ArithOp::Add,
+            OperatorMethod::Sub => ArithOp::Sub,
+            OperatorMethod::Mul => ArithOp::Mul,
+            OperatorMethod::Div => ArithOp::Div,
+            OperatorMethod::Rem => ArithOp::Mod,
+            OperatorMethod::BitAnd => ArithOp::BitAnd,
+            OperatorMethod::BitOr => ArithOp::BitOr,
+            OperatorMethod::BitXor => ArithOp::BitXor,
+            OperatorMethod::Shl => ArithOp::Shl,
+            OperatorMethod::Shr => ArithOp::Shr,
+            OperatorMethod::Neg | OperatorMethod::Not => return None,
+        })
+    }
+}
+
 /// The trait of one operator: `a + b` is a call of `Add::add`. Declared by
 /// `core::ops`, sealed, and wired like the numeric tower.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -252,40 +341,11 @@ impl OperatorTrait {
         }
     }
 
-    /// The trait's methods: `a + b` is `Add::add(a, b)`.
-    pub fn methods(self) -> &'static [&'static str] {
-        match self {
-            OperatorTrait::Add => &["add"],
-            OperatorTrait::Sub => &["sub"],
-            OperatorTrait::Mul => &["mul"],
-            OperatorTrait::Div => &["div"],
-            OperatorTrait::Rem => &["rem"],
-            OperatorTrait::Neg => &["neg"],
-            OperatorTrait::BitAnd => &["bitand"],
-            OperatorTrait::BitOr => &["bitor"],
-            OperatorTrait::BitXor => &["bitxor"],
-            OperatorTrait::Not => &["not"],
-            OperatorTrait::Shift => &["shl", "shr"],
-        }
-    }
-
-    /// The built-in operation of the binary operator that calls the
-    /// `method`-th of [`Self::methods`].
-    pub fn arith(self, method: usize) -> Option<crate::semi::hir::ArithOp> {
-        use crate::semi::hir::ArithOp;
-        Some(match self {
-            OperatorTrait::Shift if method == 0 => ArithOp::Shl,
-            OperatorTrait::Shift => ArithOp::Shr,
-            OperatorTrait::Add => ArithOp::Add,
-            OperatorTrait::Sub => ArithOp::Sub,
-            OperatorTrait::Mul => ArithOp::Mul,
-            OperatorTrait::Div => ArithOp::Div,
-            OperatorTrait::Rem => ArithOp::Mod,
-            OperatorTrait::BitAnd => ArithOp::BitAnd,
-            OperatorTrait::BitOr => ArithOp::BitOr,
-            OperatorTrait::BitXor => ArithOp::BitXor,
-            OperatorTrait::Neg | OperatorTrait::Not => return None,
-        })
+    /// The method of this trait named `name`.
+    pub fn method(self, name: &str) -> Option<OperatorMethod> {
+        OperatorMethod::ALL
+            .into_iter()
+            .find(|m| m.trait_() == self && m.name() == name)
     }
 
     /// The operator traits of the compiler's own table, in [`Self::ALL`]
