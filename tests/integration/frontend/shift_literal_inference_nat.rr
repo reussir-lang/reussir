@@ -1,0 +1,10 @@
+// A literal on the left of a shift that its context types as a `Nat` takes
+// an `i64` amount: the amount follows the left type's `Amount`.
+
+// REQUIRES: rcgmp
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc %s --package-name shifts --extern core=%t.core.rri --emit hir --no-source-locations -o - | %FileCheck %s
+
+// CHECK-LABEL: fn #shifts::natural
+// CHECK: (1 : Nat << v0 : i64) : Nat
+pub fn natural(n: i64) -> Nat { 1 << n }
