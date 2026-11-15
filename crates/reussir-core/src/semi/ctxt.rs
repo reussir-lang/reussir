@@ -285,6 +285,26 @@ pub fn contains_kernel_value(ty: Ty<'_>) -> bool {
 }
 
 /// Collect private records through every structural type former.
+/// The members that reach themselves through `deps`, each member's list of
+/// the members it depends on.
+fn cyclic_members(deps: &[Vec<usize>]) -> Vec<usize> {
+    (0..deps.len())
+        .filter(|&start| {
+            let mut seen = vec![false; deps.len()];
+            let mut work = deps[start].clone();
+            while let Some(next) = work.pop() {
+                if next == start {
+                    return true;
+                }
+                if !std::mem::replace(&mut seen[next], true) {
+                    work.extend(&deps[next]);
+                }
+            }
+            false
+        })
+        .collect()
+}
+
 fn collect_private_records<'tcx>(
     records: &FxHashMap<DefId, Record<'tcx>>,
     ty: Ty<'tcx>,
@@ -3938,7 +3958,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             )
             .collect();
         let tr = self.trait_display(tid);
+        // `Self::Name` in a binding names the trait's associated type at
+        // this impl; the bindings replace those names below.
+        let own_args: Vec<Ty<'tcx>> = std::iter::once(self_ty)
+            .chain(trait_args.iter().copied())
+            .collect();
+        let own: Vec<(TokenKey, Ty<'tcx>)> = decls
+            .iter()
+            .map(|d| (d.name, self.tcx.mk_assoc(tdef.def, d.name, &own_args)))
+            .collect();
+        let trait_def = tdef.def;
         let mut bound: Vec<Option<Ty<'tcx>>> = vec![None; decls.len()];
+        let mut spans: Vec<Option<Span>> = vec![None; decls.len()];
         let mut ok = true;
         for member in &ib.types {
             let tspan = Some(Span {
@@ -3973,9 +4004,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let ty = t.ty.as_ref().expect("the parser requires an impl binding");
             self.generic_names = generics.iter().copied().collect();
             self.self_alias = Some(self_ty);
+            self.self_assoc_tys.clone_from(&own);
             bound[idx] = Some(self.eval_decl_type(ty));
+            spans[idx] = tspan;
             self.generic_names.clear();
             self.self_alias = None;
+            self.self_assoc_tys.clear();
         }
         let missing: Vec<String> = decls
             .iter()
@@ -3994,10 +4028,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return None;
         }
-        // A default is written over the trait's binder and may name the
-        // trait's other associated types. Each pass replaces one layer of
-        // those names, and the defaults are acyclic, so one pass per
-        // declaration settles them.
+        // A default is written over the trait's binder; it and a binding
+        // may name the trait's other associated types.
         let mut named: Vec<(TokenKey, Ty<'tcx>)> = decls
             .iter()
             .zip(&bound)
@@ -4009,17 +4041,41 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 (decl.name, ty)
             })
             .collect();
+        let names: Vec<TokenKey> = decls.iter().map(|d| d.name).collect();
+        let deps: Vec<Vec<usize>> = named
+            .iter()
+            .map(|&(_, ty)| self.own_assoc_deps(ty, trait_def, &own_args, &names))
+            .collect();
+        // The defaults alone are acyclic, so a cycle runs through a binding.
+        for index in cyclic_members(&deps) {
+            if bound[index].is_some() {
+                self.error(
+                    spans[index],
+                    format!(
+                        "the binding of associated type `{}` names itself",
+                        self.sym(names[index])
+                    ),
+                );
+            }
+            ok = false;
+        }
+        if !ok {
+            return None;
+        }
+        // Each pass replaces one layer of those names, so one pass per
+        // declaration settles an acyclic set.
         for _ in 0..decls.len() {
             named = named
                 .iter()
-                .zip(&bound)
-                .map(|(&(name, ty), b)| match b {
-                    Some(_) => (name, ty),
-                    None => (name, self.bind_assoc_tys(ty, &binder, tid, &named)),
-                })
+                .map(|&(name, ty)| (name, self.bind_assoc_tys(ty, &binder, tid, &named)))
                 .collect();
         }
-        ok.then_some((bound, named))
+        for (slot, &(_, ty)) in bound.iter_mut().zip(&named) {
+            if slot.is_some() {
+                *slot = Some(ty);
+            }
+        }
+        Some((bound, named))
     }
 
     /// The associated consts of a trait impl, in trait-const order: each
@@ -4658,50 +4714,16 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     fn reject_cyclic_assoc_defaults(&mut self, id: TraitId, own_args: &[Ty<'tcx>]) {
         let tdef = self.traits.trait_def(id);
         let names: Vec<TokenKey> = tdef.assoc_tys.iter().map(|a| a.name).collect();
-        // For each default, the trait's own associated types it names.
         let deps: Vec<Vec<usize>> = tdef
             .assoc_tys
             .iter()
             .map(|a| {
-                let mut named = Vec::new();
-                if let Some(default) = a.default {
-                    crate::semi::traits::subst::rebuild(
-                        self.tcx,
-                        default,
-                        &mut |_| None,
-                        &mut |assoc| {
-                            if let TyKind::Assoc {
-                                trait_def,
-                                name,
-                                args,
-                            } = *assoc.kind()
-                                && trait_def == tdef.def
-                                && args == own_args
-                            {
-                                named.extend(names.iter().position(|&n| n == name));
-                            }
-                            assoc
-                        },
-                    );
-                }
-                named
+                a.default.map_or_else(Vec::new, |default| {
+                    self.own_assoc_deps(default, tdef.def, own_args, &names)
+                })
             })
             .collect();
-        let cyclic: Vec<usize> = (0..names.len())
-            .filter(|&start| {
-                let mut seen = vec![false; names.len()];
-                let mut work = deps[start].clone();
-                while let Some(next) = work.pop() {
-                    if next == start {
-                        return true;
-                    }
-                    if !std::mem::replace(&mut seen[next], true) {
-                        work.extend(&deps[next]);
-                    }
-                }
-                false
-            })
-            .collect();
+        let cyclic = cyclic_members(&deps);
         for index in cyclic {
             let decl = &mut self.traits.trait_def_mut(id).assoc_tys[index];
             decl.default = None;
@@ -4714,6 +4736,32 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ),
             );
         }
+    }
+
+    /// The positions in `names` of the associated types of trait
+    /// `trait_def`, at `own_args`, that `ty` names.
+    fn own_assoc_deps(
+        &self,
+        ty: Ty<'tcx>,
+        trait_def: DefId,
+        own_args: &[Ty<'tcx>],
+        names: &[TokenKey],
+    ) -> Vec<usize> {
+        let mut named = Vec::new();
+        crate::semi::traits::subst::rebuild(self.tcx, ty, &mut |_| None, &mut |assoc| {
+            if let TyKind::Assoc {
+                trait_def: of,
+                name,
+                args,
+            } = *assoc.kind()
+                && of == trait_def
+                && args == own_args
+            {
+                named.extend(names.iter().position(|&n| n == name));
+            }
+            assoc
+        });
+        named
     }
 
     /// One member of a `trait` body as a [`MethodSig`]: allocate its own
