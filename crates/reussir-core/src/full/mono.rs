@@ -4074,6 +4074,24 @@ mod tests {
         );
     }
 
+    /// An operator is sugar for its trait's method: on a generic operand it
+    /// is a call through the trait, which an instance at a number makes the
+    /// built-in operation, and the method is callable by name on a number.
+    #[test]
+    fn operator_selection_lowers_intrinsically() {
+        let text = mir_text(
+            r#"#[lang("add")] #[sealed]
+            pub trait Plus { fn add(self: Self, other: Self) -> Self; }
+            fn twice<T: Plus>(a: T) -> T { a + a }
+            pub fn go(x: i64) -> i64 { twice(x).add(x) }"#,
+        );
+        for symbol in ["_RIC5twicexE", "_RC2go"] {
+            let item = mir_item(&text, symbol);
+            assert!(item.contains(" + "), "expected a built-in `+`:\n{item}");
+        }
+        assert!(!text.contains("Plus"), "no trait symbols:\n{text}");
+    }
+
     /// `Ord::cmp` over a scalar synthesizes one private three-way helper
     /// per scalar: `if a < b { Less } else if a == b { Equal } else
     /// { Greater }`, returning the declared `Ordering`.

@@ -1935,6 +1935,23 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // against the declared traits — which get their own method-less
         // compiler impls here (idempotent; a no-op in plain sessions).
         let ints = || ordered.iter().take(10).copied();
+        // The operator traits likewise: a method call needs a direct impl,
+        // where the edges from `Num` and `Integral` only satisfy bounds.
+        let operators = {
+            use crate::semi::lang::OperatorTrait::*;
+            let arithmetic = [Add, Sub, Mul, Div, Rem, Neg];
+            let bitwise = [BitAnd, BitOr, BitXor, Shl, Shr];
+            let on = |ops: &[crate::semi::lang::OperatorTrait], ty: Ty<'tcx>| {
+                ops.iter()
+                    .map(|&op| (self.lang.operator(op), ty))
+                    .collect::<Vec<_>>()
+            };
+            ints()
+                .flat_map(|ty| [on(&arithmetic, ty), on(&bitwise, ty)].concat())
+                .chain(floats.iter().flat_map(|&ty| on(&arithmetic, ty)))
+                .chain(on(&[Not], self.tcx.mk_bool()))
+                .collect::<Vec<_>>()
+        };
         all()
             .map(|ty| (pe, ty))
             .chain(all().map(|ty| (po, ty)))
@@ -1946,6 +1963,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     .copied()
                     .map(|ty| (self.lang.floating_point, ty)),
             )
+            .chain(operators)
             .collect::<Vec<_>>()
             .into_iter()
             .for_each(|(trait_id, self_ty)| self.ensure_scalar_impl(trait_id, self_ty));
