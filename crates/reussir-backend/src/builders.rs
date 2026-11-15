@@ -1058,6 +1058,133 @@ pub fn ptr_from_addr<'c>(
         .expect("valid reussir.ptr.from_addr")
 }
 
+/// `vector.broadcast %value : <scalar or vector> to <vector_type>`.
+pub fn vector_broadcast<'c>(
+    value: Value<'c, '_>,
+    vector_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.broadcast", location)
+        .add_operands(&[value])
+        .add_results(&[vector_type])
+        .build()
+        .expect("valid vector.broadcast")
+}
+
+/// `vector.step : <vector_type>`: the lanes 0, 1, 2, ....
+pub fn vector_step<'c>(vector_type: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("vector.step", location)
+        .add_results(&[vector_type])
+        .build()
+        .expect("valid vector.step")
+}
+
+/// `vector.vscale`: the scalable factor, as an `index`.
+pub fn vector_vscale<'c>(context: &'c Context, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("vector.vscale", location)
+        .add_results(&[Type::index(context)])
+        .build()
+        .expect("valid vector.vscale")
+}
+
+/// `vector.from_elements %elements... : <vector_type>`.
+pub fn vector_from_elements<'c>(
+    elements: &[Value<'c, '_>],
+    vector_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("vector.from_elements", location)
+        .add_operands(elements)
+        .add_results(&[vector_type])
+        .build()
+        .expect("valid vector.from_elements")
+}
+
+/// A position of `vector.extract` or `vector.insert`: a constant, or an
+/// `index` value.
+#[derive(Clone, Copy)]
+pub enum VectorPosition<'c, 'a> {
+    Static(i64),
+    Dynamic(Value<'c, 'a>),
+}
+
+/// Set the positions of a `vector.extract` or `vector.insert`. They are an
+/// inherent attribute kept in the operation's properties, which the generic
+/// operation builder does not fill.
+fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
+    use melior::ir::attribute::AttributeLike;
+    let name = melior::StringRef::new("static_position");
+    unsafe {
+        mlir_sys::mlirOperationSetInherentAttributeByName(
+            operation.to_raw(),
+            name.to_raw(),
+            positions.to_raw(),
+        );
+    }
+}
+
+fn vector_positions<'c, 'a>(
+    context: &'c Context,
+    positions: &[VectorPosition<'c, 'a>],
+) -> (Vec<Value<'c, 'a>>, Attribute<'c>) {
+    // The sentinel `vector.extract` and `vector.insert` use for a dynamic
+    // position in `static_position`.
+    const DYNAMIC: i64 = i64::MIN;
+    let dynamic = positions
+        .iter()
+        .filter_map(|p| match *p {
+            VectorPosition::Dynamic(value) => Some(value),
+            VectorPosition::Static(_) => None,
+        })
+        .collect();
+    let fixed: Vec<i64> = positions
+        .iter()
+        .map(|p| match *p {
+            VectorPosition::Static(n) => n,
+            VectorPosition::Dynamic(_) => DYNAMIC,
+        })
+        .collect();
+    (dynamic, DenseI64ArrayAttribute::new(context, &fixed).into())
+}
+
+/// `vector.extract %source[positions] : <result_type> from <vector>`.
+pub fn vector_extract<'c, 'a>(
+    context: &'c Context,
+    source: Value<'c, 'a>,
+    positions: &[VectorPosition<'c, 'a>],
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    let (dynamic, fixed) = vector_positions(context, positions);
+    let operation = OperationBuilder::new("vector.extract", location)
+        .add_operands(&[source])
+        .add_operands(&dynamic)
+        .add_results(&[result_type])
+        .build()
+        .expect("valid vector.extract");
+    set_static_position(&operation, fixed);
+    operation
+}
+
+/// `vector.insert %value, %dest[positions] : <value> into <vector>`.
+pub fn vector_insert<'c, 'a>(
+    context: &'c Context,
+    value: Value<'c, 'a>,
+    dest: Value<'c, 'a>,
+    positions: &[VectorPosition<'c, 'a>],
+    location: Location<'c>,
+) -> Operation<'c> {
+    let (dynamic, fixed) = vector_positions(context, positions);
+    let operation = OperationBuilder::new("vector.insert", location)
+        .add_operands(&[value, dest])
+        .add_operands(&dynamic)
+        .add_results(&[dest.r#type()])
+        .build()
+        .expect("valid vector.insert");
+    set_static_position(&operation, fixed);
+    operation
+}
+
 /// `reussir.ptr.mask %ptr, %mask : <ptr>, <mask>`.
 pub fn ptr_mask<'c>(
     ptr: Value<'c, '_>,

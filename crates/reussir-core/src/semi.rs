@@ -2746,6 +2746,7 @@ mod tests {
                     include_str!("../../../library/core/src/intrinsic/pjrt.rr"),
                 ),
                 (&["ptr"], include_str!("../../../library/core/src/ptr.rr")),
+                (&["simd"], include_str!("../../../library/core/src/simd.rr")),
             ],
             |elab, _| {
                 assert!(!elab.has_errors(), "{:#?}", elab.reports);
@@ -2759,6 +2760,14 @@ mod tests {
                 }
                 for &f in crate::intrinsic::PtrFn::ALL {
                     let item = LangItem::Intrinsic(IntrinsicItem::Ptr(f));
+                    assert!(
+                        elab.lang.get(item).is_some(),
+                        "core declares no prototype for `{}`",
+                        f.as_str()
+                    );
+                }
+                for &f in crate::intrinsic::SimdFn::ALL {
+                    let item = LangItem::Intrinsic(IntrinsicItem::Simd(f));
                     assert!(
                         elab.lang.get(item).is_some(),
                         "core declares no prototype for `{}`",
