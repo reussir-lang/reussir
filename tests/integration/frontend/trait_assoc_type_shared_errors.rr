@@ -1,0 +1,52 @@
+// An associated type is a function of its trait reference, so two uses of
+// `T::Name` on one unknown `T` are one type before `T` is known: what
+// differs between them is reported where it is written, and what one use
+// learns the other knows.
+
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s
+// RUN: %not %rrc %s --emit hir -o - 2>&1 | %FileCheck %s --check-prefix=COUNT
+
+// Each function leaves one literal undetermined, and each report prints its
+// message twice: as the heading and at the span.
+// COUNT-COUNT-6: type annotations needed: cannot resolve a bound
+// COUNT-NOT: type annotations needed
+
+// The amounts of two shifts of one value.
+// CHECK-DAG: type mismatch: expected `i64`, found `i32`
+// CHECK-DAG: trait_assoc_type_shared_errors.rr:[[# @LINE + 4]]:18
+pub fn two_amounts(n: i64, m: i32) -> bool {
+    let a = 1;
+    let b = a << n;
+    let c = a << m;
+    true
+}
+
+// The literal amount is an `i64` like the amount next to it, so only `a`
+// is left without a type.
+pub fn shared_literal(n: i64) -> bool {
+    let a = 1;
+    let b = a << n;
+    let c = a << 3;
+    b == c
+}
+
+pub trait Tr {
+    type Name;
+    fn mk(self: Self, n: Self::Name) -> Self;
+}
+impl Tr for u8 {
+    type Name = u64;
+    fn mk(self: u8, n: u64) -> u8 { self }
+}
+fn with<T: Tr>(a: T, n: T::Name) -> T { a.mk(n) }
+
+// Each call has a type parameter of its own; they are one type once both
+// are unified with `x`.
+// CHECK-DAG: type mismatch: expected `i16`, found `u16`
+// CHECK-DAG: trait_assoc_type_shared_errors.rr:[[# @LINE + 4]]:21
+pub fn two_calls(p: i16, q: u16) -> bool {
+    let x = 1;
+    let a = with(x, p);
+    let b = with(x, q);
+    true
+}

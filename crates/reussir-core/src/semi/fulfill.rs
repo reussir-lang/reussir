@@ -32,9 +32,7 @@ pub struct PendingObligation<'tcx> {
 #[derive(Default)]
 pub struct FulfillCtxt<'tcx> {
     pending: Vec<PendingObligation<'tcx>>,
-    /// Associated types whose trait reference still held an inference hole
-    /// where they were instantiated, each with the hole standing in for it.
-    pub(super) projections: Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)>,
+    pub(super) deferred: DeferredAssocTys<'tcx>,
     /// Associated types that stand for no type, each with the reason, until
     /// an expression gives a span to report them at.
     pub(super) assoc_failures: Vec<(
@@ -44,6 +42,75 @@ pub struct FulfillCtxt<'tcx> {
     /// Those already reported in this function.
     pub(super) reported_assoc: rustc_hash::FxHashSet<crate::semi::ty::Ty<'tcx>>,
     pub(super) shapes: super::shape_constraints::ShapeConstraints<'tcx>,
+}
+
+/// Associated types whose trait reference still holds an inference hole,
+/// each with the hole standing in for it. An associated type is a function
+/// of its trait reference, so equal ones share one hole: two uses of
+/// `T::Name` on one unknown `T` have one type before `T` is known.
+#[derive(Default)]
+pub(super) struct DeferredAssocTys<'tcx> {
+    /// The stand-in hole of each, keyed by the associated type as it
+    /// resolved when it was last looked at.
+    holes: rustc_hash::FxHashMap<crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>>,
+    /// The keys in the order they were deferred, and those that mention
+    /// each hole. A key that has left `holes` since is skipped.
+    order: Vec<crate::semi::ty::Ty<'tcx>>,
+    waiting: rustc_hash::FxHashMap<HoleId, Vec<crate::semi::ty::Ty<'tcx>>>,
+}
+
+impl<'tcx> DeferredAssocTys<'tcx> {
+    /// The hole standing in for the resolved `assoc`: the one an equal
+    /// associated type already has, or else `fresh`, which is recorded.
+    pub(super) fn stand_in(
+        &mut self,
+        assoc: crate::semi::ty::Ty<'tcx>,
+        fresh: impl FnOnce() -> crate::semi::ty::Ty<'tcx>,
+    ) -> crate::semi::ty::Ty<'tcx> {
+        if let Some(&hole) = self.holes.get(&assoc) {
+            return hole;
+        }
+        let hole = fresh();
+        self.holes.insert(assoc, hole);
+        self.order.push(assoc);
+        let mut mentioned = Vec::new();
+        collect_holes(assoc, &mut mentioned);
+        for id in mentioned {
+            self.waiting.entry(id).or_default().push(assoc);
+        }
+        hole
+    }
+
+    /// Take the ones that mention `hole`, with their stand-in holes.
+    pub(super) fn take_waiting(
+        &mut self,
+        hole: HoleId,
+    ) -> Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)> {
+        let keys = self.waiting.remove(&hole).unwrap_or_default();
+        self.take(keys)
+    }
+
+    /// Take every one, in the order they were deferred.
+    pub(super) fn take_all(
+        &mut self,
+    ) -> Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)> {
+        self.waiting.clear();
+        let keys = std::mem::take(&mut self.order);
+        self.take(keys)
+    }
+
+    fn take(
+        &mut self,
+        keys: Vec<crate::semi::ty::Ty<'tcx>>,
+    ) -> Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)> {
+        keys.into_iter()
+            .filter_map(|assoc| Some((assoc, self.holes.remove(&assoc)?)))
+            .collect()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.holes.is_empty()
+    }
 }
 
 impl<'tcx> FulfillCtxt<'tcx> {
@@ -68,6 +135,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut pending = Vec::new();
         loop {
             let revision = self.infer.progress();
+            // A shaped hole becomes a type without being solved, so look at
+            // every deferred associated type here.
+            for (assoc, stand_in) in self.fulfill.deferred.take_all() {
+                self.revisit_deferred(assoc, stand_in, None);
+            }
             self.solve_projections(None);
             self.resolve_shape_constraints(false);
             pending.append(&mut self.fulfill.pending);
@@ -113,7 +185,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         // An associated type still waiting for its implementing type is
         // stuck on a hole reported above or at zonk time.
-        for (_, hole) in std::mem::take(&mut self.fulfill.projections) {
+        for (_, hole) in self.fulfill.deferred.take_all() {
             let mut holes = Vec::new();
             collect_holes(self.infer.resolve(hole), &mut holes);
             self.reported_holes.extend(holes);
