@@ -45,7 +45,8 @@ pub enum SelectError<'tcx> {
 /// to give.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AssocError<'tcx> {
-    /// The trait declares no associated const or type of that name.
+    /// The trait declares no associated const or type of that name, or the
+    /// selected impl gives it nothing and the trait has no default.
     Undeclared,
     /// Selection proves no impl of the trait for the self type.
     Select(SelectError<'tcx>),
@@ -242,7 +243,8 @@ impl<'tcx> TraitDb<'tcx> {
             _ => return Err(AssocError::Indirect),
         };
         let imp = self.impl_def(impl_id);
-        let (ty, binder): (_, FxHashMap<_, _>) = match imp.assoc_tys[index] {
+        // A compiler-provided impl lists no bindings: it takes the defaults.
+        let (ty, binder): (_, FxHashMap<_, _>) = match imp.assoc_tys.get(index).copied().flatten() {
             Some(ty) => (
                 ty,
                 imp.generics
@@ -254,7 +256,7 @@ impl<'tcx> TraitDb<'tcx> {
             None => (
                 tdef.assoc_tys[index]
                     .default
-                    .expect("conformance requires a binding or a default"),
+                    .ok_or(AssocError::Undeclared)?,
                 std::iter::once(tdef.self_param)
                     .chain(tdef.params.iter().map(|&(_, g)| g))
                     .zip(args.iter().copied())

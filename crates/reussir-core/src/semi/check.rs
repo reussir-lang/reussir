@@ -6547,8 +6547,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 })
         });
         self.fulfill.projections.extend(deferred);
-        if let Some((assoc, error)) = failed {
-            self.report_assoc_ty_error(assoc, &error);
+        if let Some(failure) = failed
+            && self.fulfill.reported_assoc.insert(failure.0)
+        {
+            self.fulfill.assoc_failures.push(failure);
         }
         ty
     }
@@ -6557,6 +6559,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     /// references are known by now; `span` is blamed where one turns out
     /// not to be the type it was used as.
     pub(super) fn solve_projections(&mut self, span: Option<Span>) {
+        self.report_assoc_failures(span);
         while self
             .fulfill
             .projections
@@ -6570,6 +6573,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                     continue;
                 }
                 let ty = self.normalize(assoc);
+                if matches!(ty.kind(), TyKind::Bottom) {
+                    // Already reported; the hole has nothing left to infer.
+                    let mut holes = Vec::new();
+                    collect_holes(self.infer.resolve(hole), &mut holes);
+                    self.reported_holes.extend(holes);
+                }
                 if self.infer.unify(hole, ty).is_err() {
                     let found = self.infer.resolve(hole);
                     self.error(
@@ -6585,24 +6594,24 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// Report why the associated type `assoc` stands for no type. A missing
-    /// impl is not reported here: the bound that requires it is checked
-    /// where the type parameter is instantiated.
-    fn report_assoc_ty_error(
-        &mut self,
-        assoc: Ty<'tcx>,
-        error: &crate::semi::traits::AssocError<'tcx>,
-    ) {
+    /// Report, at `span`, the associated types [`Self::normalize`] found to
+    /// stand for no type. A missing impl is not reported: the bound that
+    /// requires it is checked where the type parameter is instantiated.
+    fn report_assoc_failures(&mut self, span: Option<Span>) {
         use crate::semi::traits::{AssocError, SelectError};
-        let message = match error {
-            AssocError::Select(SelectError::NoImpl(_)) => return,
-            AssocError::Select(SelectError::DepthLimit(goal)) => self.depth_limit_message(goal),
-            AssocError::Undeclared | AssocError::Indirect => format!(
-                "`{}` names no type: its trait is implemented only through a sub-trait",
-                self.ty_display(assoc)
-            ),
-        };
-        self.error(None, message);
+        for (assoc, error) in std::mem::take(&mut self.fulfill.assoc_failures) {
+            let message = match error {
+                AssocError::Select(SelectError::NoImpl(_)) => continue,
+                AssocError::Select(SelectError::DepthLimit(goal)) => {
+                    self.depth_limit_message(&goal)
+                }
+                AssocError::Undeclared | AssocError::Indirect => format!(
+                    "`{}` names no type: its trait is implemented only through a sub-trait",
+                    self.ty_display(assoc)
+                ),
+            };
+            self.error(span, message);
+        }
     }
 
     fn inst_args(
@@ -6671,6 +6680,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     fn zonk_ty(&mut self, ty: Ty<'tcx>, span: Option<Span>) -> Ty<'tcx> {
         let ty = self.infer.resolve(ty);
         let ty = self.normalize(ty);
+        self.report_assoc_failures(span);
         if ty_has_hole(ty) {
             let mut holes = Vec::new();
             collect_holes(ty, &mut holes);

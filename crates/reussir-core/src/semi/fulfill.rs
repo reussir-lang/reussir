@@ -35,6 +35,14 @@ pub struct FulfillCtxt<'tcx> {
     /// Associated types whose trait reference still held an inference hole
     /// where they were instantiated, each with the hole standing in for it.
     pub(super) projections: Vec<(crate::semi::ty::Ty<'tcx>, crate::semi::ty::Ty<'tcx>)>,
+    /// Associated types that stand for no type, each with the reason, until
+    /// an expression gives a span to report them at.
+    pub(super) assoc_failures: Vec<(
+        crate::semi::ty::Ty<'tcx>,
+        crate::semi::traits::AssocError<'tcx>,
+    )>,
+    /// Those already reported in this function.
+    pub(super) reported_assoc: rustc_hash::FxHashSet<crate::semi::ty::Ty<'tcx>>,
     pub(super) shapes: super::shape_constraints::ShapeConstraints<'tcx>,
 }
 
@@ -97,6 +105,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let self_ty = self.infer.resolve(tref.self_ty());
             let mut holes = Vec::new();
             collect_holes(self_ty, &mut holes);
+            self.reported_holes.extend(holes);
+        }
+        // An associated type still waiting for its implementing type is
+        // stuck on a hole reported above or at zonk time.
+        for (_, hole) in std::mem::take(&mut self.fulfill.projections) {
+            let mut holes = Vec::new();
+            collect_holes(self.infer.resolve(hole), &mut holes);
             self.reported_holes.extend(holes);
         }
     }

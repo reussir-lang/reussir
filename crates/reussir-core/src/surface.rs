@@ -1805,6 +1805,40 @@ mod tests {
     }
 
     #[test]
+    fn assoc_types_project_beside_methods() {
+        let parse = parse(
+            "trait Shift { type Amount; type Wide = Self; fn shl(self: Self, n: Self::Amount) -> Self; }
+             impl Shift for Big { type Amount = i64; fn shl(self: Self, n: i64) -> Self { self } }",
+        );
+        let prog = program(&parse.root);
+        let resolver = parse.resolver();
+        let StmtKind::Trait(decl) = prog[0].kind() else {
+            panic!("expected a trait declaration");
+        };
+        assert_eq!(decl.members.len(), 1);
+        let [declared, defaulted] = decl.types.as_slice() else {
+            panic!("expected two trait types");
+        };
+        assert_eq!(resolver.resolve(declared.value.name), "Amount");
+        assert!(declared.value.ty.is_none());
+        assert_eq!(resolver.resolve(defaulted.value.name), "Wide");
+        assert!(defaulted.value.ty.is_some());
+
+        let StmtKind::Impl(ib) = prog[1].kind() else {
+            panic!("expected an impl block");
+        };
+        assert_eq!(ib.members.len(), 1);
+        let [bound] = ib.types.as_slice() else {
+            panic!("expected one impl type");
+        };
+        assert_eq!(resolver.resolve(bound.value.name), "Amount");
+        assert!(matches!(
+            bound.value.ty.as_ref().expect("binding").kind(),
+            TypeKind::TypeIntegral(IntegralType::Signed(64))
+        ));
+    }
+
+    #[test]
     fn assoc_consts_project_beside_methods() {
         let parse = parse(
             "trait Shape { const SIDES: i64; const ROUND: bool = false; fn area(self: Self) -> f64; }

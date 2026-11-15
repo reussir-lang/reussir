@@ -1,0 +1,39 @@
+// Associated types across a package boundary: the dependency's `.rri` ships
+// the trait's declarations with their defaults and the types its impl
+// binds. The consumer instantiates the dependency's generic with its own
+// impl of the extern trait and with the dependency's.
+
+// RUN: %rrc --package-root %S/trait_assoc_type_extern_dep --package-name dep --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+
+// RRI-DAG: type Amount = [[SELF:\$[0-9]+]] {{\[[0-9.]+\]}};
+// RRI-DAG: type Wide {{\[[0-9.]+\]}};
+// RRI-DAG: fn shl ([[SELF]], trait#dep::Shift::<[[SELF]]>#Amount) -> [[SELF]]
+// RRI-DAG: impl #dep::Shift::<#dep::Base> in 0 {{\[[0-9.]+\]}} { type Wide = i64; #dep::dep::Shift::Base::shl, #dep::dep::Shift::Base::widen }
+// RRI-DAG: trait#dep::Shift::<[[T:\$[0-9]+]]>#Amount) -> [[T]]
+
+// RUN: %rrc %s --package-name app --extern dep=%t.rri --extern-src dep=%S/trait_assoc_type_extern_dep \
+// RUN:   --emit mir --no-source-locations -o - | %FileCheck %s --check-prefix=MIR
+
+// MIR-NOT: trait#
+// MIR-DAG: fn @{{.*}}5shift{{.*}}(v0 (a): #app::Local, v1 (n): i32) -> #app::Local {
+// MIR-DAG: fn @{{.*}}5shift{{.*}}(v0 (a): #dep::Base, v1 (n): #dep::Base) -> #dep::Base {
+
+pub struct Local {
+    pub v: i32,
+}
+
+impl dep::Shift for Local {
+    type Amount = i32;
+    type Wide = i64;
+    fn shl(self: Local, amount: i32) -> Local { Local { v: self.v << amount } }
+    fn widen(self: Local) -> i64 { self.v as i64 }
+}
+
+pub fn local() -> i64 {
+    dep::shift(Local { v: 1 }, 3).widen()
+}
+
+pub fn base() -> i64 {
+    dep::shift(dep::Base { v: 1 }, dep::Base { v: 2 }).widen()
+}

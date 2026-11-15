@@ -3878,7 +3878,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut named: Vec<(TokenKey, Ty<'tcx>)> = decls
             .iter()
             .zip(&bound)
-            .map(|(decl, b)| (decl.name, b.or(decl.default).expect("missing checked")))
+            .map(|(decl, b)| {
+                let ty = b.unwrap_or_else(|| {
+                    let default = decl.default.expect("missing checked");
+                    crate::semi::traits::subst::replace_generics(self.tcx, default, &binder)
+                });
+                (decl.name, ty)
+            })
             .collect();
         for _ in 0..decls.len() {
             named = named
