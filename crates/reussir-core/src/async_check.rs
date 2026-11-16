@@ -10,13 +10,7 @@ pub fn tensor_op(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
                 && let TyKind::Future(ps) = arg.kind()
                 && ps.len() == 1
                 && ps[0] == result
-                && matches!(
-                    result.kind(),
-                    TyKind::Tensor { .. }
-                        | TyKind::Generic(_)
-                        | TyKind::Assoc { .. }
-                        | TyKind::Hole(_)
-                )
+                && (matches!(result.kind(), TyKind::Tensor { .. }) || result.is_open())
             {
                 return Ok(());
             }
@@ -27,13 +21,7 @@ pub fn tensor_op(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
         TensorFn::CollectivePermute => {
             if let [input, _] = args
                 && *input == result
-                && matches!(
-                    input.kind(),
-                    TyKind::Tensor { .. }
-                        | TyKind::Generic(_)
-                        | TyKind::Assoc { .. }
-                        | TyKind::Hole(_)
-                )
+                && (matches!(input.kind(), TyKind::Tensor { .. }) || input.is_open())
             {
                 Ok(())
             } else {
@@ -46,13 +34,7 @@ pub fn tensor_op(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
             let [input, starts] = args else {
                 return error("dynamic_slice requires input and start-index tuple");
             };
-            if matches!(
-                input.kind(),
-                TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-            ) || matches!(
-                result.kind(),
-                TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-            ) {
+            if input.is_open() || result.is_open() {
                 return Ok(());
             }
             let (TyKind::Tensor { elem: ie, dims: id }, TyKind::Tensor { elem: re, dims: rd }) =
@@ -79,7 +61,7 @@ pub fn tensor_op(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
             let fields = match starts.kind() {
                 TyKind::Tuple(fs) => *fs,
                 TyKind::Unit => &[],
-                TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => return Ok(()),
+                _ if starts.is_open() => return Ok(()),
                 _ => return error("dynamic_slice start indices must form a tuple"),
             };
             if fields.len() != id.len() {
@@ -90,17 +72,14 @@ pub fn tensor_op(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
                 let e = match t.kind() {
                     TyKind::Int(_) => *t,
                     TyKind::Tensor { elem, dims } if dims.is_empty() => *elem,
-                    TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_) => continue,
+                    _ if t.is_open() => continue,
                     _ => {
                         return error(
                             "dynamic_slice indices must be integers or rank-zero integer Tensors",
                         );
                     }
                 };
-                if !matches!(
-                    e.kind(),
-                    TyKind::Int(_) | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-                ) {
+                if !(matches!(e.kind(), TyKind::Int(_)) || e.is_open()) {
                     return error("dynamic_slice indices must have integer element types");
                 }
                 if integer.is_some_and(|prev| prev != e) {
@@ -133,13 +112,8 @@ enum Origin {
 
 fn capture_type(ty: Ty<'_>) -> bool {
     match ty.kind() {
-        TyKind::Tensor { .. }
-        | TyKind::Int(_)
-        | TyKind::Fp(_)
-        | TyKind::Bool
-        | TyKind::Generic(_)
-        | TyKind::Assoc { .. }
-        | TyKind::Hole(_) => true,
+        _ if ty.is_open() => true,
+        TyKind::Tensor { .. } | TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool => true,
         TyKind::Tuple(fs) => fs.iter().all(|&f| capture_type(f)),
         TyKind::Unit => true,
         _ => false,
@@ -284,10 +258,7 @@ macro_rules! validate {
             use crate::semi::hir::VarId;
             use rustc_hash::{FxHashMap, FxHashSet};
             if !matches!(result.kind(),TyKind::Future(ps) if ps.len()==1 && ps[0]==body.ty)
-                || !matches!(
-                    body.ty.kind(),
-                    TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-                )
+                || !(matches!(body.ty.kind(), TyKind::Tensor { .. }) || body.ty.is_open())
             {
                 return Err("async result must be a single-payload Future matching its Tensor body".into());
             }

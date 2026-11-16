@@ -342,11 +342,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         // Generic matches are checked again after specialization. A wildcard
         // alone imposes no Integral bound, so accepting it here must not let a
         // later Bool/Tuple/Tensor instantiation bypass the kernel restriction.
-        if self.inside_kernel
-            && !matches!(
-                scrut_ty.kind(),
-                TyKind::Int(_) | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-            )
+        if self.inside_kernel && !(matches!(scrut_ty.kind(), TyKind::Int(_)) || scrut_ty.is_open())
         {
             self.error(scrut.span, "kernel match scrutinee must be an integer");
             return self.poison(span);

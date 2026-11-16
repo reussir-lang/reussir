@@ -114,60 +114,7 @@ pub fn subst_ty<'tcx>(tcx: &TyCtxt<'tcx>, ty: Ty<'tcx>, subst: &Subst<'tcx>) -> 
         TyKind::Arc(inner) if subst.atomic_bigints && matches!(inner.kind(), TyKind::BigInt(_)) => {
             ty
         }
-        TyKind::Record { def, args, flex } => {
-            let args: Vec<Ty<'tcx>> = args.iter().map(|&a| subst_ty(tcx, a, subst)).collect();
-            tcx.mk_record(def, &args, flex)
-        }
-        TyKind::Assoc {
-            trait_def,
-            name,
-            args,
-        } => {
-            let args: Vec<Ty<'tcx>> = args.iter().map(|&a| subst_ty(tcx, a, subst)).collect();
-            tcx.mk_assoc(trait_def, name, &args)
-        }
-        TyKind::Closure { params, ret } => {
-            let params: Vec<Ty<'tcx>> = params.iter().map(|&p| subst_ty(tcx, p, subst)).collect();
-            tcx.mk_closure(&params, subst_ty(tcx, ret, subst))
-        }
-        TyKind::Nullable(inner) => tcx.mk_nullable(subst_ty(tcx, inner, subst)),
-        TyKind::Cell { elem, kind } => tcx.mk_cell(subst_ty(tcx, elem, subst), kind),
-        TyKind::Arc(inner) => tcx.mk_arc(subst_ty(tcx, inner, subst)),
-        TyKind::ConstSeq(elem) => tcx.mk_const_seq(subst_ty(tcx, elem, subst)),
-        TyKind::Ptr { space, kind } => tcx.mk_ptr(subst_ty(tcx, space, subst), kind),
-        TyKind::Array { elem, dims } => tcx.mk_array(subst_ty(tcx, elem, subst), dims),
-        TyKind::DevArray {
-            elem,
-            dims,
-            placement,
-        } => tcx.mk_devarray(
-            subst_ty(tcx, elem, subst),
-            dims,
-            Some(subst_ty(tcx, placement, subst)),
-        ),
-        TyKind::Future(ps) => tcx.mk_future(
-            &ps.iter()
-                .map(|&p| subst_ty(tcx, p, subst))
-                .collect::<Vec<_>>(),
-        ),
-        TyKind::Tuple(ps) => tcx.mk_tuple(
-            &ps.iter()
-                .map(|&p| subst_ty(tcx, p, subst))
-                .collect::<Vec<_>>(),
-        ),
-        TyKind::Token => ty,
-        TyKind::Tensor { elem, dims } => tcx.mk_tensor(subst_ty(tcx, elem, subst), dims),
-        TyKind::DefaultPlacement
-        | TyKind::GenericAddrSpace
-        | TyKind::Simd { .. }
-        | TyKind::Int(_)
-        | TyKind::BigInt(_)
-        | TyKind::Fp(_)
-        | TyKind::Bool
-        | TyKind::Str
-        | TyKind::Char
-        | TyKind::Unit
-        | TyKind::Bottom => ty,
         TyKind::Hole(_) => panic!("subst: an inference hole survived zonking"),
+        _ => ty.map_children(tcx, |child| subst_ty(tcx, child, subst)),
     }
 }

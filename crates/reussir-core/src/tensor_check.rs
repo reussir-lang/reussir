@@ -3,27 +3,21 @@
 use crate::intrinsic::TensorFn;
 use crate::semi::ty::{DYNAMIC_EXTENT, IntTy, Ty, TyKind};
 
-fn open(t: Ty<'_>) -> bool {
-    matches!(
-        t.kind(),
-        TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-    )
-}
 fn tensor(t: Ty<'_>) -> Result<Option<(Ty<'_>, &[u64])>, String> {
     match t.kind() {
-        TyKind::Tensor { elem, dims } if dims.is_empty() && open(*elem) => Ok(None),
+        TyKind::Tensor { elem, dims } if dims.is_empty() && elem.is_open() => Ok(None),
         TyKind::Tensor { elem, dims } => {
             if let Some(reason) = crate::semi::ty_eval::tensor_element_rejection(*elem) {
                 return Err(reason.into());
             }
             Ok(Some((*elem, dims)))
         }
-        _ if open(t) => Ok(None),
+        _ if t.is_open() => Ok(None),
         _ => Err("tensor operation requires Tensor operands and result".into()),
     }
 }
 fn same(a: Ty<'_>, b: Ty<'_>) -> bool {
-    a == b || open(a) || open(b)
+    a == b || a.is_open() || b.is_open()
 }
 fn shape(a: &[u64], b: &[u64]) -> bool {
     a.len() == b.len()
@@ -32,7 +26,7 @@ fn shape(a: &[u64], b: &[u64]) -> bool {
             .all(|(a, b)| a == b || *a == DYNAMIC_EXTENT || *b == DYNAMIC_EXTENT)
 }
 fn numeric(t: Ty<'_>) -> bool {
-    open(t) || matches!(t.kind(), TyKind::Int(_) | TyKind::Fp(_))
+    t.is_open() || matches!(t.kind(), TyKind::Int(_) | TyKind::Fp(_))
 }
 fn scalar(t: Ty<'_>) -> Option<Ty<'_>> {
     match t.kind() {
@@ -63,7 +57,7 @@ pub fn operation(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
         Fill | DynamicFill | Iota | DynamicIota => {
             if matches!(op, Iota | DynamicIota) {
                 let axis = args[usize::from(op == DynamicIota)];
-                if !open(axis) && !matches!(axis.kind(), TyKind::Int(IntTy::Signed(64))) {
+                if !axis.is_open() && !matches!(axis.kind(), TyKind::Int(IntTy::Signed(64))) {
                     return Err("iota axis must have type i64".into());
                 }
             }
@@ -90,7 +84,7 @@ pub fn operation(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
                         match shape_ty.kind() {
                             TyKind::Tuple(fs) => *fs,
                             TyKind::Unit => &[],
-                            _ if open(shape_ty) => return Ok(()),
+                            _ if shape_ty.is_open() => return Ok(()),
                             _ => return Err(
                                 "dynamic tensor shape must be a rank-sized tuple of i64 dimensions"
                                     .into(),
@@ -104,7 +98,8 @@ pub fn operation(op: TensorFn, result: Ty<'_>, args: &[Ty<'_>]) -> Result<(), St
                     for field in fields {
                         let elem = scalar(*field)
                             .ok_or("dynamic tensor dimension must be i64 or Tensor<i64>")?;
-                        if !open(elem) && !matches!(elem.kind(), TyKind::Int(IntTy::Signed(64))) {
+                        if !elem.is_open() && !matches!(elem.kind(), TyKind::Int(IntTy::Signed(64)))
+                        {
                             return Err(
                                 "dynamic tensor dimension must be i64 or Tensor<i64>".into()
                             );
@@ -215,7 +210,7 @@ macro_rules! expressions {
             let arg = args.get(index).ok_or("iota requires a literal axis")?;
             let n = $integer(arg).ok_or("iota axis must be a compile-time integer literal")?;
             let axis = i64::try_from(&n).map_err(|_| "iota axis is outside the signed 64-bit range")?;
-            if axis < 0 || matches!(result.kind(),TyKind::Tensor{elem,dims} if !(dims.is_empty() && open(*elem)) && axis as usize >= dims.len()) { return Err("iota axis must be within the result rank".into()); }
+            if axis < 0 || matches!(result.kind(),TyKind::Tensor{elem,dims} if !(dims.is_empty() && elem.is_open()) && axis as usize >= dims.len()) { return Err("iota axis must be within the result rank".into()); }
             Ok(axis)
         }
         pub fn $name(op:TensorFn,result:Ty<'_>,args:&[$expr]) -> Result<(),String> {

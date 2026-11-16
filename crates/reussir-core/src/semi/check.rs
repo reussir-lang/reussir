@@ -3256,10 +3256,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let body = self.infer_expr(body);
         let result = self.infer.resolve(body.ty);
-        if !matches!(
-            result.kind(),
-            TyKind::Tensor { .. } | TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
-        ) {
+        if !(matches!(result.kind(), TyKind::Tensor { .. }) || result.is_open()) {
             self.error(span, "an async block must return exactly one Tensor");
         }
         let mut free = Vec::new();
@@ -6511,16 +6508,20 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let tcx = self.tcx;
         let (infer, traits, generics) = (&mut self.infer, &self.traits, &self.generics);
         let deferred = &mut self.fulfill.deferred;
-        let ty = crate::semi::traits::subst::rebuild(tcx, ty, &mut |_| None, &mut |assoc| {
+        let rebuild = crate::semi::traits::subst::rebuild;
+        let ty = rebuild(tcx, ty, &mut |_| None, &mut |trait_def, name, args| {
+            let assoc = tcx.mk_assoc(trait_def, name, args);
             if ty_has_hole(assoc) {
-                return deferred.stand_in(assoc, || infer.new_hole_ty());
+                return Some(deferred.stand_in(assoc, || infer.new_hole_ty()));
             }
-            traits
-                .normalize(tcx, generics, assoc)
-                .unwrap_or_else(|error| {
-                    failed.get_or_insert(error);
-                    tcx.mk(TyKind::Bottom)
-                })
+            Some(
+                traits
+                    .normalize(tcx, generics, assoc)
+                    .unwrap_or_else(|error| {
+                        failed.get_or_insert(error);
+                        tcx.mk(TyKind::Bottom)
+                    }),
+            )
         });
         if let Some(failure) = failed
             && self.fulfill.reported_assoc.insert(failure.0)
@@ -6569,9 +6570,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             let ty = self.normalize(assoc);
             if matches!(ty.kind(), TyKind::Bottom) {
                 // Already reported; the hole has nothing left to infer.
-                let mut holes = Vec::new();
-                collect_holes(self.infer.resolve(stand_in), &mut holes);
-                self.reported_holes.extend(holes);
+                self.mark_reported(stand_in);
             }
             ty
         };

@@ -148,22 +148,11 @@ impl Parser<'_> {
         }
         self.expect(LBrace);
         while !self.at(RBrace) && !self.at_eof() {
-            if self.at_assoc_const() {
+            if self.at_member_start(false) {
                 let member = self.start();
-                self.assoc_const(member, false);
-            } else if self.at_assoc_type() {
-                let member = self.start();
-                self.assoc_type(member, false);
-            } else if self.at(Pound) || self.at(RegionalKw) || self.at(FnKw) {
-                let member = self.start();
+                let attributed = self.at(Pound);
                 self.attrs_opt();
-                if self.at_assoc_const() {
-                    self.error("attributes are not allowed on an associated const");
-                    self.assoc_const(member, false);
-                } else if self.at_assoc_type() {
-                    self.error("attributes are not allowed on an associated type");
-                    self.assoc_type(member, false);
-                } else {
+                if let Some(member) = self.assoc_member(member, attributed, false) {
                     self.trait_method(member);
                 }
             } else {
@@ -174,16 +163,7 @@ impl Parser<'_> {
                     "expected `fn`, `regional fn`, `const`, or `type` in a `trait` body, found {}",
                     self.current().describe()
                 ));
-                while !self.at_eof()
-                    && !self.at(RBrace)
-                    && !self.at(Pound)
-                    && !self.at(RegionalKw)
-                    && !self.at(FnKw)
-                    && !self.at_assoc_const()
-                    && !self.at_assoc_type()
-                {
-                    self.bump();
-                }
+                self.skip_to_member_start(false);
                 e.complete(self, ErrorNode);
             }
         }
@@ -269,30 +249,17 @@ impl Parser<'_> {
         }
         self.expect(LBrace);
         while !self.at(RBrace) && !self.at_eof() {
-            if self.at(Pound)
-                || self.at(PubKw)
-                || self.at(RegionalKw)
-                || self.at(FnKw)
-                || self.at_assoc_const()
-                || self.at_assoc_type()
-            {
+            if self.at_member_start(true) {
                 let member = self.start();
                 let attributed = self.at(Pound);
                 self.attrs_opt();
                 if self.at(PubKw) {
                     self.bump();
                 }
-                if self.at_assoc_const() {
-                    if attributed {
-                        self.error("attributes are not allowed on an associated const");
-                    }
-                    self.assoc_const(member, true);
-                } else if self.at_assoc_type() {
-                    if attributed {
-                        self.error("attributes are not allowed on an associated type");
-                    }
-                    self.assoc_type(member, true);
-                } else if self.at(RegionalKw) || self.at(FnKw) {
+                let Some(member) = self.assoc_member(member, attributed, true) else {
+                    continue;
+                };
+                if self.at(RegionalKw) || self.at(FnKw) {
                     self.fn_stmt(member);
                 } else {
                     self.error(format!(
@@ -309,22 +276,50 @@ impl Parser<'_> {
                     "expected `pub`, `fn`, `regional fn`, `const`, or `type` in an `impl` block, found {}",
                     self.current().describe()
                 ));
-                while !self.at_eof()
-                    && !self.at(RBrace)
-                    && !self.at(PubKw)
-                    && !self.at(Pound)
-                    && !self.at(RegionalKw)
-                    && !self.at(FnKw)
-                    && !self.at_assoc_const()
-                    && !self.at_assoc_type()
-                {
-                    self.bump();
-                }
+                self.skip_to_member_start(true);
                 e.complete(self, ErrorNode);
             }
         }
         self.expect(RBrace);
         m.complete(self, ImplStmt);
+    }
+
+    /// Whether a member of a `trait` body, or of an `impl` block, can start
+    /// here. Only an `impl` member starts with `pub`.
+    fn at_member_start(&self, in_impl: bool) -> bool {
+        self.at(Pound)
+            || (in_impl && self.at(PubKw))
+            || self.at(RegionalKw)
+            || self.at(FnKw)
+            || self.at_assoc_const()
+            || self.at_assoc_type()
+    }
+
+    fn skip_to_member_start(&mut self, in_impl: bool) {
+        while !self.at_eof() && !self.at(RBrace) && !self.at_member_start(in_impl) {
+            self.bump();
+        }
+    }
+
+    /// An associated const or type after the attributes a member may have,
+    /// which neither takes. Hands `member` back if neither starts here.
+    fn assoc_member(&mut self, member: Marker, attributed: bool, in_impl: bool) -> Option<Marker> {
+        let (kind, is_const) = match (self.at_assoc_const(), self.at_assoc_type()) {
+            (true, _) => ("const", true),
+            (_, true) => ("type", false),
+            _ => return Some(member),
+        };
+        if attributed {
+            self.error(format!(
+                "attributes are not allowed on an associated {kind}"
+            ));
+        }
+        if is_const {
+            self.assoc_const(member, in_impl);
+        } else {
+            self.assoc_type(member, in_impl);
+        }
+        None
     }
 
     /// `const` is contextual (the language has no reserved words): it heads

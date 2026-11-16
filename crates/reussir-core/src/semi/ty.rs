@@ -21,6 +21,7 @@ use std::ptr;
 
 use reussir_syntax::kind::TokenKey;
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use stumpalo::ArenaRef;
 
 /// Identifies a resolved top-level item (a record or function). Globally unique
@@ -418,6 +419,99 @@ pub enum TyKind<'tcx> {
 pub struct Ty<'tcx>(&'tcx TyKind<'tcx>);
 
 impl<'tcx> Ty<'tcx> {
+    /// The types this type is built from directly, in order.
+    pub fn children(self) -> impl Iterator<Item = Ty<'tcx>> {
+        let (list, rest): (&'tcx [Ty<'tcx>], [Option<Ty<'tcx>>; 2]) = match *self.kind() {
+            TyKind::Record { args, .. }
+            | TyKind::Assoc { args, .. }
+            | TyKind::Tuple(args)
+            | TyKind::Future(args) => (args, [None, None]),
+            TyKind::Closure { params, ret } => (params, [Some(ret), None]),
+            TyKind::DevArray {
+                elem, placement, ..
+            } => (&[], [Some(elem), Some(placement)]),
+            TyKind::Array { elem, .. }
+            | TyKind::Tensor { elem, .. }
+            | TyKind::Simd { elem, .. }
+            | TyKind::Cell { elem, .. }
+            | TyKind::Ptr { space: elem, .. }
+            | TyKind::Nullable(elem)
+            | TyKind::ConstSeq(elem)
+            | TyKind::Arc(elem) => (&[], [Some(elem), None]),
+            TyKind::Int(_)
+            | TyKind::BigInt(_)
+            | TyKind::Fp(_)
+            | TyKind::Bool
+            | TyKind::Str
+            | TyKind::Char
+            | TyKind::Unit
+            | TyKind::Token
+            | TyKind::DefaultPlacement
+            | TyKind::GenericAddrSpace
+            | TyKind::Generic(_)
+            | TyKind::Hole(_)
+            | TyKind::Bottom => (&[], [None, None]),
+        };
+        list.iter().copied().chain(rest.into_iter().flatten())
+    }
+
+    /// This type with `f` applied to each of [`Self::children`].
+    pub fn map_children(
+        self,
+        tcx: &TyCtxt<'tcx>,
+        mut f: impl FnMut(Ty<'tcx>) -> Ty<'tcx>,
+    ) -> Ty<'tcx> {
+        let new: SmallVec<[Ty<'tcx>; 4]> = self.children().map(&mut f).collect();
+        if new.iter().copied().eq(self.children()) {
+            return self;
+        }
+        match *self.kind() {
+            TyKind::Record { def, flex, .. } => tcx.mk_record(def, &new, flex),
+            TyKind::Assoc {
+                trait_def, name, ..
+            } => tcx.mk_assoc(trait_def, name, &new),
+            TyKind::Tuple(_) => tcx.mk_tuple(&new),
+            TyKind::Future(_) => tcx.mk_future(&new),
+            TyKind::Closure { .. } => {
+                let (ret, params) = new.split_last().expect("a closure has a result");
+                tcx.mk_closure(params, *ret)
+            }
+            TyKind::DevArray { dims, .. } => tcx.mk_devarray(new[0], dims, Some(new[1])),
+            TyKind::Array { dims, .. } => tcx.mk_array(new[0], dims),
+            TyKind::Tensor { dims, .. } => tcx.mk_tensor(new[0], dims),
+            TyKind::Simd { dims, scalable, .. } => tcx.mk_simd(new[0], dims, scalable),
+            TyKind::Cell { kind, .. } => tcx.mk_cell(new[0], kind),
+            TyKind::Ptr { kind, .. } => tcx.mk_ptr(new[0], kind),
+            TyKind::Nullable(_) => tcx.mk_nullable(new[0]),
+            TyKind::ConstSeq(_) => tcx.mk_const_seq(new[0]),
+            TyKind::Arc(_) => tcx.mk_arc(new[0]),
+            TyKind::Int(_)
+            | TyKind::BigInt(_)
+            | TyKind::Fp(_)
+            | TyKind::Bool
+            | TyKind::Str
+            | TyKind::Char
+            | TyKind::Unit
+            | TyKind::Token
+            | TyKind::DefaultPlacement
+            | TyKind::GenericAddrSpace
+            | TyKind::Generic(_)
+            | TyKind::Hole(_)
+            | TyKind::Bottom => self,
+        }
+    }
+
+    /// Call `f` on this type and on every type inside it, outermost first.
+    pub fn walk(self, f: &mut impl FnMut(Ty<'tcx>)) {
+        f(self);
+        self.children().for_each(|child| child.walk(f));
+    }
+
+    /// Whether `pred` holds for this type or for a type inside it.
+    pub fn any(self, pred: &mut impl FnMut(Ty<'tcx>) -> bool) -> bool {
+        pred(self) || self.children().any(|child| child.any(pred))
+    }
+
     /// The built-in integer this type is, and whether its handle is counted
     /// atomically: `Nat`/`Int`, or their `Arc` coloring, which is the same
     /// integer behind an atomic reference count.
@@ -481,6 +575,15 @@ impl<'tcx> Ty<'tcx> {
         matches!(
             self.kind(),
             TyKind::Int(_) | TyKind::Fp(_) | TyKind::Bool | TyKind::Char
+        )
+    }
+
+    /// Whether what this type is gets decided later: a type parameter, an
+    /// associated type, or an inference hole.
+    pub fn is_open(self) -> bool {
+        matches!(
+            self.kind(),
+            TyKind::Generic(_) | TyKind::Assoc { .. } | TyKind::Hole(_)
         )
     }
 
@@ -566,27 +669,7 @@ pub fn mentions_scalable_simd(ty: Ty<'_>) -> bool {
 
 /// Whether an associated type occurs anywhere in `ty`.
 pub fn mentions_assoc(ty: Ty<'_>) -> bool {
-    match *ty.kind() {
-        TyKind::Assoc { .. } => true,
-        TyKind::Record { args, .. } | TyKind::Tuple(args) | TyKind::Future(args) => {
-            args.iter().any(|&a| mentions_assoc(a))
-        }
-        TyKind::Closure { params, ret } => {
-            params.iter().any(|&p| mentions_assoc(p)) || mentions_assoc(ret)
-        }
-        TyKind::DevArray {
-            elem, placement, ..
-        } => mentions_assoc(elem) || mentions_assoc(placement),
-        TyKind::Array { elem, .. }
-        | TyKind::Tensor { elem, .. }
-        | TyKind::Simd { elem, .. }
-        | TyKind::Cell { elem, .. }
-        | TyKind::Ptr { space: elem, .. }
-        | TyKind::Nullable(elem)
-        | TyKind::ConstSeq(elem)
-        | TyKind::Arc(elem) => mentions_assoc(elem),
-        _ => false,
-    }
+    ty.any(&mut |t| matches!(t.kind(), TyKind::Assoc { .. }))
 }
 
 /// Why `ty` is not a legal type because of a scalable vector in it, if it is
