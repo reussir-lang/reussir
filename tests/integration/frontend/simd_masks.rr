@@ -13,12 +13,12 @@
 import core::simd;
 
 // A masked lane keeps the first operand.
-// HIR-DAG: intrinsic#simd#add#0(v0 : Simd<[i32; 8]>, v1 : Simd<[i32; 8]>, v2 : Simd<[bool; 8]>) : Simd<[i32; 8]>
+// HIR-DAG: intrinsic#simd#add_masked#0(v0 : Simd<[i32; 8]>, v1 : Simd<[i32; 8]>, v2 : Simd<[bool; 8]>) : Simd<[i32; 8]>
 // CHECK-LABEL: func.func @{{.*}}add
 // CHECK: %[[SUM:.*]] = arith.addi %arg0, %arg1 : vector<8xi32>
 // CHECK: arith.select %arg2, %[[SUM]], %arg0 : vector<8xi1>, vector<8xi32>
 pub fn add(a: Simd<[i32; 8]>, b: Simd<[i32; 8]>, m: Simd<[bool; 8]>) -> Simd<[i32; 8]> {
-    simd::add(a, b, m)
+    simd::add_masked(a, b, m)
 }
 
 // CHECK-LABEL: func.func @{{.*}}any
@@ -32,7 +32,7 @@ pub fn any(m: Simd<[bool; 8]>) -> bool { simd::any(m) }
 // CHECK: %[[Q:.*]] = arith.divsi %arg0, %[[SAFE]]
 // CHECK: arith.select %arg2, %[[Q]], %arg0
 pub fn div(a: Simd<[i32; 8]>, b: Simd<[i32; 8]>, m: Simd<[bool; 8]>) -> Simd<[i32; 8]> {
-    simd::div(a, b, m)
+    simd::div_masked(a, b, m)
 }
 
 // A masked lane is false in a comparison.
@@ -40,7 +40,7 @@ pub fn div(a: Simd<[i32; 8]>, b: Simd<[i32; 8]>, m: Simd<[bool; 8]>) -> Simd<[i3
 // CHECK: %[[CMP:.*]] = arith.cmpi slt, %arg0, %arg1 : vector<8xi32>
 // CHECK: arith.andi %[[CMP]], %arg2 : vector<8xi1>
 pub fn less(a: Simd<[i32; 8]>, b: Simd<[i32; 8]>, m: Simd<[bool; 8]>) -> Simd<[bool; 8]> {
-    simd::lt(a, b, m)
+    simd::lt_masked(a, b, m)
 }
 
 // HIR-DAG: intrinsic#simd#mask_first#0(v0 : u64, v1 : u64) : Simd<[bool; 2, 8]>

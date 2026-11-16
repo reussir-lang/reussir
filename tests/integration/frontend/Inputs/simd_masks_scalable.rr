@@ -10,7 +10,7 @@ pub fn tail(n: u64) -> Simd<[bool; [16]]> { simd::mask_first<Simd<[bool; [16]]>>
 // CHECK: %[[SUM:.*]] = fadd <vscale x 4 x float> %0, %1
 // CHECK: select <vscale x 4 x i1> %{{.*}}, <vscale x 4 x float> %[[SUM]], <vscale x 4 x float> %0
 pub fn masked(a: Simd<[f32; [4]]>, b: Simd<[f32; [4]]>, n: u64) -> Simd<[f32; [4]]> {
-    simd::add(a, b, simd::mask_first<Simd<[bool; [4]]>>(n))
+    simd::add_masked(a, b, simd::mask_first<Simd<[bool; [4]]>>(n))
 }
 
 // CHECK-LABEL: define {{.*}}i64 @{{.*}}position

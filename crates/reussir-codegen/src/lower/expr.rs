@@ -4349,15 +4349,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 let reduce = |kind, vector, ty| {
                     builders::vector_reduction(self.context, kind, vector, ty, loc)
                 };
-                match func {
-                    SimdFn::Any => reduce(Kind::Or, mask, i1),
-                    SimdFn::All => reduce(Kind::And, mask, i1),
-                    SimdFn::Count => {
+                match (func, scalable) {
+                    (SimdFn::Any, _) => reduce(Kind::Or, mask, i1),
+                    (SimdFn::All, _) => reduce(Kind::And, mask, i1),
+                    (SimdFn::Count, _) => {
                         let ones = self.append(block, arith::extui(mask, counters, loc));
                         let total = self.append(block, reduce(Kind::Add, ones, i32_ty));
                         arith::extui(total, result, loc)
                     }
-                    _ if !scalable => {
+                    (SimdFn::FirstSet, false) => {
                         use std::cmp::Ordering;
                         // A fixed mask is one integer with a bit per lane,
                         // so its first set lane is that integer's count of
@@ -4393,7 +4393,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                             }
                         }
                     }
-                    _ => {
+                    (SimdFn::FirstSet, true) => {
                         // The smallest index among the set lanes; a clear
                         // lane counts as the number of lanes.
                         let fixed = self.append(
@@ -4414,6 +4414,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         let first = self.append(block, reduce(Kind::MinUI, live, i32_ty));
                         arith::extui(first, result, loc)
                     }
+                    _ => return err("vector operation reached lowering unelaborated"),
                 }
             }
             SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
@@ -4427,11 +4428,15 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 let lane = self.tys.mlir_ty(elem)?;
                 let float = matches!(elem.kind(), TyKind::Fp(_));
                 let signed = matches!(elem.kind(), TyKind::Int(IntTy::Signed(_)));
+                let (func, masked) = match func.unmasked() {
+                    Some(unmasked) => (unmasked, true),
+                    None => (func, false),
+                };
                 let Some((arity, _, compares)) = func.lanewise() else {
                     return err("vector operation reached lowering unelaborated");
                 };
-                // One operand more than the operation needs is its mask.
-                let mask = values.get(arity).copied();
+                // The mask follows the vectors.
+                let mask = masked.then(|| values[arity]);
                 let a = values[0];
                 let b = if arity >= 2 { values[1] } else { a };
                 // Every lane set to an integer constant, for `neg` and `not`.

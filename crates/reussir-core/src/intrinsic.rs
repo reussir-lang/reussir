@@ -507,11 +507,6 @@ pub enum IntrinsicOp {
 }
 
 /// Operations on vectors (`Simd<...>`). `V` is a vector type.
-///
-/// A lanewise operation may take one more operand than its table entry
-/// says: a mask of the shape of its vectors. A lane whose mask bit is clear
-/// keeps the lane of the first operand, or is false in a comparison, and
-/// never traps.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SimdFn {
     /// `splat<V>(x)`: every lane is `x`.
@@ -565,6 +560,32 @@ pub enum SimdFn {
     Ge,
     /// `select(m, a, b)`: `a` where the mask is set, else `b`.
     Select,
+    /// `add_masked(a, b, m)` and the others: the lanewise operation or
+    /// comparison of the same name, with a mask of the shape of its vectors
+    /// as the last operand. A lane whose mask bit is clear keeps the lane of
+    /// the first operand, or is false in a comparison, and never traps.
+    AddMasked,
+    SubMasked,
+    MulMasked,
+    DivMasked,
+    RemMasked,
+    MinMasked,
+    MaxMasked,
+    NegMasked,
+    AbsMasked,
+    AndMasked,
+    OrMasked,
+    XorMasked,
+    NotMasked,
+    ShlMasked,
+    ShrMasked,
+    FmaMasked,
+    EqMasked,
+    NeMasked,
+    LtMasked,
+    LeMasked,
+    GtMasked,
+    GeMasked,
     /// `mask_first<M>(n...)`: the mask whose leading `n` lanes are set, with
     /// one count per dimension.
     MaskFirst,
@@ -640,6 +661,28 @@ impl SimdFn {
         SimdFn::Gt,
         SimdFn::Ge,
         SimdFn::Select,
+        SimdFn::AddMasked,
+        SimdFn::SubMasked,
+        SimdFn::MulMasked,
+        SimdFn::DivMasked,
+        SimdFn::RemMasked,
+        SimdFn::MinMasked,
+        SimdFn::MaxMasked,
+        SimdFn::NegMasked,
+        SimdFn::AbsMasked,
+        SimdFn::AndMasked,
+        SimdFn::OrMasked,
+        SimdFn::XorMasked,
+        SimdFn::NotMasked,
+        SimdFn::ShlMasked,
+        SimdFn::ShrMasked,
+        SimdFn::FmaMasked,
+        SimdFn::EqMasked,
+        SimdFn::NeMasked,
+        SimdFn::LtMasked,
+        SimdFn::LeMasked,
+        SimdFn::GtMasked,
+        SimdFn::GeMasked,
         SimdFn::MaskFirst,
         SimdFn::Any,
         SimdFn::All,
@@ -683,6 +726,28 @@ impl SimdFn {
             SimdFn::Gt => "gt",
             SimdFn::Ge => "ge",
             SimdFn::Select => "select",
+            SimdFn::AddMasked => "add_masked",
+            SimdFn::SubMasked => "sub_masked",
+            SimdFn::MulMasked => "mul_masked",
+            SimdFn::DivMasked => "div_masked",
+            SimdFn::RemMasked => "rem_masked",
+            SimdFn::MinMasked => "min_masked",
+            SimdFn::MaxMasked => "max_masked",
+            SimdFn::NegMasked => "neg_masked",
+            SimdFn::AbsMasked => "abs_masked",
+            SimdFn::AndMasked => "and_masked",
+            SimdFn::OrMasked => "or_masked",
+            SimdFn::XorMasked => "xor_masked",
+            SimdFn::NotMasked => "not_masked",
+            SimdFn::ShlMasked => "shl_masked",
+            SimdFn::ShrMasked => "shr_masked",
+            SimdFn::FmaMasked => "fma_masked",
+            SimdFn::EqMasked => "eq_masked",
+            SimdFn::NeMasked => "ne_masked",
+            SimdFn::LtMasked => "lt_masked",
+            SimdFn::LeMasked => "le_masked",
+            SimdFn::GtMasked => "gt_masked",
+            SimdFn::GeMasked => "ge_masked",
             SimdFn::MaskFirst => "mask_first",
             SimdFn::Any => "any",
             SimdFn::All => "all",
@@ -705,6 +770,37 @@ impl SimdFn {
             Fma => (3, SimdLanes::Float, false),
             Eq | Ne => (2, SimdLanes::Any, true),
             Lt | Le | Gt | Ge => (2, SimdLanes::Numeric, true),
+            _ => return None,
+        })
+    }
+
+    /// The lanewise operation that a masked one applies where its mask is
+    /// set.
+    pub fn unmasked(self) -> Option<SimdFn> {
+        use SimdFn::*;
+        Some(match self {
+            AddMasked => Add,
+            SubMasked => Sub,
+            MulMasked => Mul,
+            DivMasked => Div,
+            RemMasked => Rem,
+            MinMasked => Min,
+            MaxMasked => Max,
+            NegMasked => Neg,
+            AbsMasked => Abs,
+            AndMasked => And,
+            OrMasked => Or,
+            XorMasked => Xor,
+            NotMasked => Not,
+            ShlMasked => Shl,
+            ShrMasked => Shr,
+            FmaMasked => Fma,
+            EqMasked => Eq,
+            NeMasked => Ne,
+            LtMasked => Lt,
+            LeMasked => Le,
+            GtMasked => Gt,
+            GeMasked => Ge,
             _ => return None,
         })
     }

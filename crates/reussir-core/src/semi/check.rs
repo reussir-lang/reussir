@@ -3977,7 +3977,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         Some(indices)
     }
 
-    /// An operation applied lane by lane: `arity` vectors of one type.
+    /// An operation applied lane by lane: `arity` vectors of one type, then
+    /// a mask of their shape when it is `masked`.
     #[allow(clippy::too_many_arguments)]
     fn infer_simd_lanewise(
         &mut self,
@@ -3986,6 +3987,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         arity: usize,
         lanes: crate::intrinsic::SimdLanes,
         compares: bool,
+        masked: bool,
         shown: &str,
         span: Option<Span>,
     ) -> Expr<'tcx> {
@@ -3994,12 +3996,12 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             self.error(span, format!("{shown} takes no type arguments"));
             return self.poison(span);
         }
-        // One operand more than the operation needs is its mask.
-        if fc.args.len() != arity && fc.args.len() != arity + 1 {
+        let expected = arity + usize::from(masked);
+        if fc.args.len() != expected {
             self.error(
                 span,
                 format!(
-                    "{shown} expects {arity} argument(s) and an optional mask, got {}",
+                    "{shown} expects {expected} argument(s), got {}",
                     fc.args.len()
                 ),
             );
@@ -4036,8 +4038,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         for arg in &fc.args[1..arity] {
             args.push(self.check_expr(arg, ty));
         }
-        if let Some(mask) = fc.args.get(arity) {
-            args.push(self.check_expr(mask, mask_ty));
+        if masked {
+            args.push(self.check_expr(&fc.args[arity], mask_ty));
         }
         let result = if compares { mask_ty } else { ty };
         self.mk_expr(
@@ -4075,8 +4077,13 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             func,
             SimdFn::Splat | SimdFn::Step | SimdFn::Lanes | SimdFn::FromElements | SimdFn::MaskFirst
         );
-        if let Some((arity, lanes, compares)) = func.lanewise() {
-            return self.infer_simd_lanewise(fc, func, arity, lanes, compares, &shown, span);
+        let (lanewise, masked) = match func.unmasked() {
+            Some(unmasked) => (unmasked.lanewise(), true),
+            None => (func.lanewise(), false),
+        };
+        if let Some((arity, lanes, compares)) = lanewise {
+            return self
+                .infer_simd_lanewise(fc, func, arity, lanes, compares, masked, &shown, span);
         }
         if !takes_type && !fc.ty_args.is_empty() {
             self.error(span, format!("{shown} takes no type arguments"));
