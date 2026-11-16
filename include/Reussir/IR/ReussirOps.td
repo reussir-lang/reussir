@@ -3119,4 +3119,33 @@ def ReussirPtrStripInvariantGroupOp
   let results = (outs Res<Ptr_PtrType, "stripped pointer">:$result);
   let assemblyFormat = "$ptr `:` qualified(type($ptr)) attr-dict";
 }
+
+//===----------------------------------------------------------------------===//
+// Reussir Vector Operations
+//===----------------------------------------------------------------------===//
+// Vectors are builtin `vector` values and use the upstream `vector` dialect.
+// The operations here cover what that dialect does not provide.
+
+class ReussirVectorOp<string mnemonic, list<Trait> traits>
+    : ReussirOp<"vector."#mnemonic, traits>;
+
+def ReussirVectorCttzEltsOp : ReussirVectorOp<"cttz_elts", [Pure]> {
+  let summary = "Count the trailing zero elements of a mask";
+  let description = [{
+    `reussir.vector.cttz_elts` counts the lanes of `mask` before its first set
+    lane, as `llvm.experimental.cttz.elts` does. The result is the number of
+    lanes when no lane is set, and its type must be wide enough to hold that
+    number. The mask may be scalable.
+
+    Example:
+
+    ```mlir
+    %n = reussir.vector.cttz_elts %mask : vector<[16]xi1> -> i64
+    ```
+  }];
+  let arguments = (ins Arg<VectorOfRankAndType<[1], [I1]>, "mask">:$mask);
+  let results = (outs
+      Res<AnySignlessInteger, "lanes before the first set lane">:$result);
+  let assemblyFormat = "$mask `:` type($mask) `->` type($result) attr-dict";
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD

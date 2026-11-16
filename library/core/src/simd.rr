@@ -139,3 +139,121 @@ pub fn ge<V, M>(a: V, b: V) -> M;
 /// The lanes of `a` where the mask is set and of `b` elsewhere.
 #[lang("core::simd::select")]
 pub fn select<V, M>(mask: M, a: V, b: V) -> V;
+
+// The masked operations. Each is the operation or comparison of the same
+// name with a mask `M` of the shape of `V` as the last argument. A lane whose
+// mask bit is clear keeps the lane of `a`, or is false in a comparison, and
+// never traps: a masked integer `div` or `rem` does not divide in it.
+
+/// `add` in the lanes where the mask is set.
+#[lang("core::simd::add_masked")]
+pub fn add_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `sub` in the lanes where the mask is set.
+#[lang("core::simd::sub_masked")]
+pub fn sub_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `mul` in the lanes where the mask is set.
+#[lang("core::simd::mul_masked")]
+pub fn mul_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `div` in the lanes where the mask is set.
+#[lang("core::simd::div_masked")]
+pub fn div_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `rem` in the lanes where the mask is set.
+#[lang("core::simd::rem_masked")]
+pub fn rem_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `min` in the lanes where the mask is set.
+#[lang("core::simd::min_masked")]
+pub fn min_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `max` in the lanes where the mask is set.
+#[lang("core::simd::max_masked")]
+pub fn max_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `neg` in the lanes where the mask is set.
+#[lang("core::simd::neg_masked")]
+pub fn neg_masked<V, M>(a: V, mask: M) -> V;
+
+/// `abs` in the lanes where the mask is set.
+#[lang("core::simd::abs_masked")]
+pub fn abs_masked<V, M>(a: V, mask: M) -> V;
+
+/// `and` in the lanes where the mask is set.
+#[lang("core::simd::and_masked")]
+pub fn and_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `or` in the lanes where the mask is set.
+#[lang("core::simd::or_masked")]
+pub fn or_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `xor` in the lanes where the mask is set.
+#[lang("core::simd::xor_masked")]
+pub fn xor_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `not` in the lanes where the mask is set.
+#[lang("core::simd::not_masked")]
+pub fn not_masked<V, M>(a: V, mask: M) -> V;
+
+/// `shl` in the lanes where the mask is set.
+#[lang("core::simd::shl_masked")]
+pub fn shl_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `shr` in the lanes where the mask is set.
+#[lang("core::simd::shr_masked")]
+pub fn shr_masked<V, M>(a: V, b: V, mask: M) -> V;
+
+/// `fma` in the lanes where the mask is set.
+#[lang("core::simd::fma_masked")]
+pub fn fma_masked<V, M>(a: V, b: V, c: V, mask: M) -> V;
+
+/// `eq` in the lanes where the mask is set.
+#[lang("core::simd::eq_masked")]
+pub fn eq_masked<V, M>(a: V, b: V, mask: M) -> M;
+
+/// `ne` in the lanes where the mask is set.
+#[lang("core::simd::ne_masked")]
+pub fn ne_masked<V, M>(a: V, b: V, mask: M) -> M;
+
+/// `lt` in the lanes where the mask is set.
+#[lang("core::simd::lt_masked")]
+pub fn lt_masked<V, M>(a: V, b: V, mask: M) -> M;
+
+/// `le` in the lanes where the mask is set.
+#[lang("core::simd::le_masked")]
+pub fn le_masked<V, M>(a: V, b: V, mask: M) -> M;
+
+/// `gt` in the lanes where the mask is set.
+#[lang("core::simd::gt_masked")]
+pub fn gt_masked<V, M>(a: V, b: V, mask: M) -> M;
+
+/// `ge` in the lanes where the mask is set.
+#[lang("core::simd::ge_masked")]
+pub fn ge_masked<V, M>(a: V, b: V, mask: M) -> M;
+
+// Masks. `M` is a mask type.
+
+/// The mask whose leading `n` lanes are set. A call passes one count per
+/// dimension. A count past the extent sets every lane, which makes
+/// `mask_first(len - i)` the mask of the lanes left in a loop over `len`.
+#[lang("core::simd::mask_first")]
+pub fn mask_first<M>(n: u64) -> M;
+
+/// Whether some lane of the mask is set.
+#[lang("core::simd::any")]
+pub fn any<M>(mask: M) -> bool;
+
+/// Whether every lane of the mask is set.
+#[lang("core::simd::all")]
+pub fn all<M>(mask: M) -> bool;
+
+/// The number of set lanes.
+#[lang("core::simd::count")]
+pub fn count<M>(mask: M) -> u64;
+
+/// The index of the first set lane of a one-dimensional mask, or its number
+/// of lanes when none is set.
+#[lang("core::simd::first_set")]
+pub fn first_set<M>(mask: M) -> u64;
