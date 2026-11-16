@@ -1,0 +1,22 @@
+import core::simd;
+
+// ERR-DAG: `core::simd::shape_cast` on a `Simd<[f32; 2, 4]>`: `Simd<[f32; 6]>` does not have the same lanes
+fn lanes(v: Simd<[f32; 2, 4]>) -> Simd<[f32; 6]> { simd::shape_cast<Simd<[f32; 6]>>(v) }
+// ERR-DAG: `core::simd::bitcast` on a `Simd<[f32; 4]>`: `Simd<[u8; 8]>` does not have the same bits
+fn bits(v: Simd<[f32; 4]>) -> Simd<[u8; 8]> { simd::bitcast<Simd<[u8; 8]>>(v) }
+// ERR-DAG: `core::simd::broadcast` on a `Simd<[f32; 4]>`: `Simd<[f32; 4, 2]>` does not end with its extents
+fn repeat(v: Simd<[f32; 4]>) -> Simd<[f32; 4, 2]> { simd::broadcast<Simd<[f32; 4, 2]>>(v) }
+// ERR-DAG: `core::simd::transpose` on a `Simd<[f32; 2, 4]>`: the order is not a permutation of its extents that keeps a scalable extent last
+fn order(v: Simd<[f32; 2, 4]>) -> Simd<[f32; 2, 4]> { simd::transpose(v, [0, 0]) }
+// ERR-DAG: `core::simd::shuffle` on a `Simd<[u8; 4]>`: a shuffle picks lanes of two fixed one-dimensional vectors
+fn picks(v: Simd<[u8; 4]>) -> Simd<[u8; 2]> { simd::shuffle(v, v, [0, 8]) }
+// ERR-DAG: `core::simd::deinterleave_even` on a `Simd<[u8; 5]>`: its last extent is odd
+fn odd(v: Simd<[u8; 5]>) -> Simd<[u8; 2]> { simd::deinterleave_even(v) }
+// ERR-DAG: `core::simd::slice` on a `Simd<[u8; 8]>`: a slice takes ranges inside a fixed vector
+fn range(v: Simd<[u8; 8]>) -> Simd<[u8; 4]> { simd::slice(v, [6], [4]) }
+// ERR-DAG: expected a constant of type `i64`, found an expression that cannot be evaluated at compile time
+fn computed(v: Simd<[u8; 8]>, n: i64) -> Simd<[u8; 4]> { simd::slice(v, [n], [4]) }
+// ERR-DAG: `core::simd::scalable_extract` on a `Simd<[u8; 16]>`: a sub-vector of a one-dimensional scalable vector starts at a literal multiple of its own length
+fn fixed(v: Simd<[u8; 16]>) -> Simd<[u8; 4]> { simd::scalable_extract<Simd<[u8; 4]>>(v, 0) }
+// ERR-DAG: `core::simd::outer` on a `Simd<[f32; 4]>`: an outer product takes a fixed and a second one-dimensional vector of the same numbers
+fn mixed(a: Simd<[f32; 4]>, b: Simd<[i32; 4]>) -> Simd<[f32; 4, 4]> { simd::outer(a, b) }
