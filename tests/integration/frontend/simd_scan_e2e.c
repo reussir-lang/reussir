@@ -6,8 +6,15 @@ extern uint64_t simd_clamp(int32_t *base, uint64_t len, int32_t limit);
 extern uint64_t simd_count(const uint8_t *base, uint64_t len, uint8_t needle);
 extern uint64_t simd_find(const uint8_t *base, uint64_t len, uint8_t needle);
 extern int64_t simd_sum(const int32_t *base, uint64_t len);
+extern uint64_t simd_leading(uint64_t n);
 
 int main(void) {
+  const uint64_t counts[] = {0,          1,          15,         16,
+                             17,         1ull << 31, 1ull << 32, INT64_MAX,
+                             1ull << 63, UINT64_MAX};
+  for (unsigned i = 0; i < sizeof counts / sizeof *counts; ++i)
+    assert(simd_leading(counts[i]) == (counts[i] < 16 ? counts[i] : 16));
+
   // A guard byte after each buffer checks that the tail is never written.
   uint8_t text[41];
   for (int i = 0; i < 40; ++i)

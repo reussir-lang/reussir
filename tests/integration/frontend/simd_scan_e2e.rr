@@ -34,6 +34,11 @@ fn clamp(base: Ptr<Generic>, len: u64, limit: i32) -> u64 {
 }
 extern "C" trampoline "simd_clamp" = clamp;
 
+// The number of lanes `mask_first` sets: every lane for a count past the
+// extent, however large.
+fn leading(n: u64) -> u64 { simd::count(simd::mask_first<Simd<[bool; 16]>>(n)) }
+extern "C" trampoline "simd_leading" = leading;
+
 // The number of bytes equal to `needle`.
 fn count(base: ConstPtr<Generic>, len: u64, needle: u8) -> u64 {
     let wanted = simd::splat<Simd<[u8; 16]>>(needle);
