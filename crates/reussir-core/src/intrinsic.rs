@@ -597,6 +597,31 @@ pub enum SimdFn {
     /// `first_set(m) -> u64`: the index of the first set lane of a
     /// one-dimensional mask, or its number of lanes when none is set.
     FirstSet,
+    /// `reduce_<kind>(v)`: all lanes combined into one value.
+    ReduceAdd,
+    ReduceMul,
+    ReduceMin,
+    ReduceMax,
+    ReduceAnd,
+    ReduceOr,
+    ReduceXor,
+    /// `reduce_add_reassoc`, `reduce_mul_reassoc`: the floating-point sum
+    /// and product in any order, which lets the target reduce in parallel.
+    /// `reduce_add` and `reduce_mul` combine in lane order.
+    ReduceAddReassoc,
+    ReduceMulReassoc,
+    /// `reduce_<kind>_masked(v, m)`: the reduction of the same name over
+    /// the lanes whose mask bit is set. No set lane gives the identity of
+    /// the combination.
+    ReduceAddMasked,
+    ReduceMulMasked,
+    ReduceMinMasked,
+    ReduceMaxMasked,
+    ReduceAndMasked,
+    ReduceOrMasked,
+    ReduceXorMasked,
+    ReduceAddReassocMasked,
+    ReduceMulReassocMasked,
 }
 
 /// The lanes a lanewise vector operation works on.
@@ -688,6 +713,24 @@ impl SimdFn {
         SimdFn::All,
         SimdFn::Count,
         SimdFn::FirstSet,
+        SimdFn::ReduceAdd,
+        SimdFn::ReduceMul,
+        SimdFn::ReduceMin,
+        SimdFn::ReduceMax,
+        SimdFn::ReduceAnd,
+        SimdFn::ReduceOr,
+        SimdFn::ReduceXor,
+        SimdFn::ReduceAddReassoc,
+        SimdFn::ReduceMulReassoc,
+        SimdFn::ReduceAddMasked,
+        SimdFn::ReduceMulMasked,
+        SimdFn::ReduceMinMasked,
+        SimdFn::ReduceMaxMasked,
+        SimdFn::ReduceAndMasked,
+        SimdFn::ReduceOrMasked,
+        SimdFn::ReduceXorMasked,
+        SimdFn::ReduceAddReassocMasked,
+        SimdFn::ReduceMulReassocMasked,
     ];
 
     pub fn parse(name: &str) -> Option<SimdFn> {
@@ -753,7 +796,36 @@ impl SimdFn {
             SimdFn::All => "all",
             SimdFn::Count => "count",
             SimdFn::FirstSet => "first_set",
+            SimdFn::ReduceAdd => "reduce_add",
+            SimdFn::ReduceMul => "reduce_mul",
+            SimdFn::ReduceMin => "reduce_min",
+            SimdFn::ReduceMax => "reduce_max",
+            SimdFn::ReduceAnd => "reduce_and",
+            SimdFn::ReduceOr => "reduce_or",
+            SimdFn::ReduceXor => "reduce_xor",
+            SimdFn::ReduceAddReassoc => "reduce_add_reassoc",
+            SimdFn::ReduceMulReassoc => "reduce_mul_reassoc",
+            SimdFn::ReduceAddMasked => "reduce_add_masked",
+            SimdFn::ReduceMulMasked => "reduce_mul_masked",
+            SimdFn::ReduceMinMasked => "reduce_min_masked",
+            SimdFn::ReduceMaxMasked => "reduce_max_masked",
+            SimdFn::ReduceAndMasked => "reduce_and_masked",
+            SimdFn::ReduceOrMasked => "reduce_or_masked",
+            SimdFn::ReduceXorMasked => "reduce_xor_masked",
+            SimdFn::ReduceAddReassocMasked => "reduce_add_reassoc_masked",
+            SimdFn::ReduceMulReassocMasked => "reduce_mul_reassoc_masked",
         }
+    }
+
+    /// For a reduction: the lanes it accepts.
+    pub fn reduction(self) -> Option<SimdLanes> {
+        use SimdFn::*;
+        Some(match self {
+            ReduceAdd | ReduceMul | ReduceMin | ReduceMax => SimdLanes::Numeric,
+            ReduceAnd | ReduceOr | ReduceXor => SimdLanes::Bits,
+            ReduceAddReassoc | ReduceMulReassoc => SimdLanes::Float,
+            _ => return None,
+        })
     }
 
     /// For an operation applied lane by lane to vectors of one type: the
@@ -774,8 +846,8 @@ impl SimdFn {
         })
     }
 
-    /// The lanewise operation that a masked one applies where its mask is
-    /// set.
+    /// The operation that a masked one applies to the lanes whose mask bit
+    /// is set.
     pub fn unmasked(self) -> Option<SimdFn> {
         use SimdFn::*;
         Some(match self {
@@ -801,6 +873,15 @@ impl SimdFn {
             LeMasked => Le,
             GtMasked => Gt,
             GeMasked => Ge,
+            ReduceAddMasked => ReduceAdd,
+            ReduceMulMasked => ReduceMul,
+            ReduceMinMasked => ReduceMin,
+            ReduceMaxMasked => ReduceMax,
+            ReduceAndMasked => ReduceAnd,
+            ReduceOrMasked => ReduceOr,
+            ReduceXorMasked => ReduceXor,
+            ReduceAddReassocMasked => ReduceAddReassoc,
+            ReduceMulReassocMasked => ReduceMulReassoc,
             _ => return None,
         })
     }

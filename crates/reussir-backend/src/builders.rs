@@ -1125,12 +1125,14 @@ fn set_inherent_attribute(operation: &Operation<'_>, name: &str, value: Attribut
 pub use sys::ReussirVectorCombiningKind as VectorCombiningKind;
 
 /// `vector.reduction <kind>, %vector : <vector> into <result_type>`: the
-/// lanes of a one-dimensional vector combined into a scalar.
+/// lanes of a one-dimensional vector combined into a scalar. `fastmath` is
+/// an `#arith.fastmath` attribute.
 pub fn vector_reduction<'c>(
     context: &'c Context,
     kind: VectorCombiningKind,
     vector: Value<'c, '_>,
     result_type: Type<'c>,
+    fastmath: Option<Attribute<'c>>,
     location: Location<'c>,
 ) -> Operation<'c> {
     let operation = OperationBuilder::new("vector.reduction", location)
@@ -1145,6 +1147,9 @@ pub fn vector_reduction<'c>(
         ))
     };
     set_inherent_attribute(&operation, "kind", kind);
+    if let Some(fastmath) = fastmath {
+        set_inherent_attribute(&operation, "fastmath", fastmath);
+    }
     operation
 }
 
