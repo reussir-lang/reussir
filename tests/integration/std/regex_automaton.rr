@@ -1,0 +1,884 @@
+// Unit suite and coverage-guided fuzz driver for `std::regex::automaton`:
+// the states and transitions of a list of rules.
+// Unit cases build the automata of small lexers and check their size, their
+// transitions on chosen strings, the rule that wins, a start state that is
+// dead, the limit on the number of states, the columns that are shared, the
+// runs of states that stay in themselves, the lookup table that the runs
+// share, the longest match from a place of a text, over runs of every
+// form, and the fold over the matches of a text. A name is tested with
+// shuffle tables or with the lookup table, as the target has it.
+// The first fuzz target builds the automaton of three random rules and
+// compares the longest match that its steps find in a random string, and
+// the rule that wins on the whole string, with a small matcher on the trees
+// of the rules; it also compares the run of the state reached with the
+// transitions of that state. The second compares the longest match from a
+// place of a text of repeated characters with the steps from that place,
+// and the fold from that place with one longest match after another.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_automaton %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_automaton
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_automaton%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_automaton%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex automaton/a lexer: unit
+// CHECK-NEXT: regex automaton/characters: unit
+// CHECK-NEXT: regex automaton/a keyword and a word: unit
+// CHECK-NEXT: regex automaton/dead states: unit
+// CHECK-NEXT: regex automaton/the limit: unit
+// CHECK-NEXT: regex automaton/shared columns: unit
+// CHECK-NEXT: regex automaton/runs: unit
+// CHECK-NEXT: regex automaton/the lookup table: unit
+// CHECK-NEXT: regex automaton/the longest match: unit
+// CHECK-NEXT: regex automaton/the fold: unit
+// CHECK-NEXT: regex automaton/automaton & the trees (fuzz):
+// CHECK-NEXT: regex automaton/the longest match & the steps (fuzz):
+
+import core::simd;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::ByteRange;
+import std::regex::automaton::Match;
+import std::regex::automaton::Run;
+import std::regex::automaton::State;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import std::result::Result;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ----------------------- A matcher for the tests -----------------------
+
+// Whether `regex` matches the empty string.
+fn nullable(regex: ByteRegex) -> bool {
+    match regex {
+        Empty => false,
+        Epsilon => true,
+        Set(_) => false,
+        Concat(a, b) => nullable(a) && nullable(b),
+        Union(a, b) => nullable(a) || nullable(b),
+        Intersect(a, b) => nullable(a) && nullable(b),
+        Star(_) => true,
+        Not(a) => !nullable(a)
+    }
+}
+
+// What may follow `byte` for `regex` to match.
+fn derive(regex: ByteRegex, byte: u64) -> ByteRegex {
+    match regex {
+        Empty => ByteRegex::Empty,
+        Epsilon => ByteRegex::Empty,
+        Set(set) => if set.contains(byte) { ByteRegex::Epsilon } else { ByteRegex::Empty },
+        Concat(a, b) => {
+            let after = ByteRegex::Concat { derive(a, byte), b };
+            if nullable(a) { ByteRegex::Union { after, derive(b, byte) } } else { after }
+        },
+        Union(a, b) => ByteRegex::Union { derive(a, byte), derive(b, byte) },
+        Intersect(a, b) => ByteRegex::Intersect { derive(a, byte), derive(b, byte) },
+        Star(a) => ByteRegex::Concat { derive(a, byte), ByteRegex::Star { a } },
+        Not(a) => ByteRegex::Not { derive(a, byte) }
+    }
+}
+
+fn matches(regex: ByteRegex, bytes: List<u8>) -> bool {
+    match bytes {
+        Nil => nullable(regex),
+        Cons(byte, rest) => matches(derive(regex, byte as u64), rest)
+    }
+}
+
+// ------------------------- Strings for the tests -------------------------
+
+fn above(point: u32, most: u32) -> u64 {
+    if point > most { 1 } else { 0 }
+}
+
+fn later(point: u32, bits: u32) -> u8 {
+    (0x80 | ((point >> bits) & 0x3F)) as u8
+}
+
+// The UTF-8 encoding of one character, written out here on its own.
+fn encode(character: char) -> List<u8> {
+    let point = character as u32;
+    match 1 + above(point, 0x7F) + above(point, 0x7FF) + above(point, 0xFFFF) {
+        1 => List::Cons { point as u8, List::Nil },
+        2 => List::Cons { (0xC0 | (point >> 6)) as u8, List::Cons { later(point, 0), List::Nil } },
+        3 => List::Cons {
+            (0xE0 | (point >> 12)) as u8,
+            List::Cons { later(point, 6), List::Cons { later(point, 0), List::Nil } }
+        },
+        // Four bytes: U+10000 and above.
+        _ => List::Cons {
+            (0xF0 | (point >> 18)) as u8,
+            List::Cons { later(point, 12), List::Cons { later(point, 6), List::Cons { later(point, 0), List::Nil } } }
+        }
+    }
+}
+
+fn join(first: List<u8>, second: List<u8>) -> List<u8> {
+    match first {
+        Nil => second,
+        Cons(byte, rest) => List::Cons { byte, join(rest, second) }
+    }
+}
+
+fn text(characters: List<char>) -> List<u8> {
+    match characters {
+        Nil => List::Nil,
+        Cons(character, rest) => join(encode(character), text(rest))
+    }
+}
+
+// ------------------- The rule of a lexer, on the trees -------------------
+
+// The rules that match `bytes`, in rule order, numbered from `rule`.
+fn matching(rules: List<ByteRegex>, bytes: List<u8>, rule: u32) -> List<u32> {
+    match rules {
+        Nil => List::Nil,
+        Cons(regex, rest) => {
+            let others = matching(rest, bytes, rule + 1);
+            if matches(regex, bytes) { List::Cons { rule, others } } else { others }
+        }
+    }
+}
+
+// The first `count` bytes.
+fn take(bytes: List<u8>, count: u64) -> List<u8> {
+    match bytes {
+        Nil => List::Nil,
+        Cons(byte, rest) => if count == 0 { List::Nil } else { List::Cons { byte, take(rest, count - 1) } }
+    }
+}
+
+// A match: its length and the rule that wins.
+struct [value] Best {
+    found: bool,
+    length: u64,
+    rule: u32
+}
+
+fn none() -> Best {
+    Best { found: false, length: 0, rule: 0 }
+}
+
+fn agree(first: Best, second: Best) -> bool {
+    first.found == second.found && (!first.found || (first.length == second.length && first.rule == second.rule))
+}
+
+// The longest start of `bytes` that some rule matches, and the earliest
+// such rule: every start is tried.
+fn longest(rules: List<ByteRegex>, bytes: List<u8>) -> Best {
+    let (_, best) = while [count = 0, best = none()] (count <= bytes.len()) {
+        let here = match matching(rules, take(bytes, count), 0) {
+            Cons(rule, _) => Best { found: true, length: count, rule },
+            Nil => best
+        };
+        (count + 1, here)
+    };
+    best
+}
+
+// The same from an automaton: it stops at the dead state.
+fn scan(automaton: Automaton, state: State, bytes: List<u8>, at: u64, best: Best) -> Best {
+    let here = match automaton.winner(state) {
+        Some(rule) => Best { found: true, length: at, rule },
+        None => best
+    };
+    match bytes {
+        Nil => here,
+        Cons(byte, rest) => {
+            let next = automaton.next(state, byte);
+            if next == Automaton::dead() { here } else { scan(automaton, next, rest, at + 1, here) }
+        }
+    }
+}
+
+// The state after every byte.
+fn after(automaton: Automaton, state: State, bytes: List<u8>) -> State {
+    match bytes {
+        Nil => state,
+        Cons(byte, rest) => after(automaton, automaton.next(state, byte), rest)
+    }
+}
+
+// Whether `rule` is the earliest rule that accepts in `state`.
+fn wins(automaton: Automaton, state: State, rule: u32) -> bool {
+    match automaton.winner(state) {
+        Some(winner) => winner == rule,
+        None => false
+    }
+}
+
+// The bytes after the first `count`.
+fn rest_from(bytes: List<u8>, count: u64) -> List<u8> {
+    match bytes {
+        Nil => List::Nil,
+        Cons(_, rest) => if count == 0 { bytes } else { rest_from(rest, count - 1) }
+    }
+}
+
+fn text_of(characters: List<char>) -> Text {
+    Text::from_string(characters.fold_left(String::new(), |string: String, character: char| string.push_char(character)))
+}
+
+// The longest match from the byte `from` of `input`.
+fn found(automaton: Automaton, input: Text, from: u64) -> Best {
+    match input.view().slice_byte(from, input.len()) {
+        Some(view) => {
+            let (_, found) = automaton.longest(view);
+            match found {
+                Some(found) => Best { found: true, length: found.end, rule: found.rule },
+                None => none()
+            }
+        },
+        // Past the end of the text.
+        None => none()
+    }
+}
+
+// Whether a view begins at the byte `offset` of its text and has `length`
+// bytes.
+fn spans(view: TextView, offset: u64, length: u64) -> bool {
+    view.offset() == offset && view.len() == length
+}
+
+fn rules2(a: Regex, b: Regex) -> List<ByteRegex> {
+    List::Cons { a.to_bytes(), List::Cons { b.to_bytes(), List::Nil } }
+}
+
+fn rules3(a: Regex, b: Regex, c: Regex) -> List<ByteRegex> {
+    List::Cons { a.to_bytes(), rules2(b, c) }
+}
+
+// The outcome of `check` on the automaton of `rules`, or a failure when
+// there are too many states.
+fn built(rules: List<ByteRegex>, limit: u64, check: Automaton -> Outcome) -> Outcome {
+    match Automaton::build(rules, limit) {
+        Ok(automaton) => check(automaton),
+        Err(_) => expect(false, "the automaton has too many states")
+    }
+}
+
+fn stretch(start: u8, end: u8) -> ByteRange {
+    ByteRange { start, end }
+}
+
+// The bytes a lookup table keeps in a state: those not marked as leaving.
+fn kept(automaton: Automaton, table: u64, bit: u8) -> Bits {
+    let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+        (byte + 1, if automaton.leaves(table, bit, byte as u8) { bytes } else { bytes.insert(byte) })
+    };
+    bytes
+}
+
+// The bytes of a run.
+fn bytes_of(automaton: Automaton, run: Run) -> Bits {
+    match run {
+        Nothing => Bits::empty(),
+        Inside(stretches) => stretches.fold_left(Bits::empty(), |set: Bits, one: ByteRange| set.union(Bits::range(one.start as u64, one.end as u64))),
+        Outside(stretches) => stretches.fold_left(Bits::empty(), |set: Bits, one: ByteRange| set.union(Bits::range(one.start as u64, one.end as u64))).complement(),
+        Table(table, bit) => kept(automaton, table, bit)
+    }
+}
+
+fn same_stretches(first: List<ByteRange>, second: List<ByteRange>) -> bool {
+    match first {
+        Nil => second.is_nil(),
+        Cons(one, rest) => match second {
+            Nil => false,
+            Cons(other, others) => one.start == other.start && one.end == other.end && same_stretches(rest, others)
+        }
+    }
+}
+
+fn is_inside(run: Run, wanted: List<ByteRange>) -> bool {
+    match run {
+        Inside(found) => same_stretches(found, wanted),
+        // Any other form of run.
+        _ => false
+    }
+}
+
+fn is_outside(run: Run, wanted: List<ByteRange>) -> bool {
+    match run {
+        Outside(found) => same_stretches(found, wanted),
+        // Any other form of run.
+        _ => false
+    }
+}
+
+// Whether the run is the bit `bit` of the lookup table `table`.
+fn is_table(run: Run, table: u64, bit: u8) -> bool {
+    match run {
+        Table(found, under) => found == table && under == bit,
+        // Any other form of run.
+        _ => false
+    }
+}
+
+fn is_nothing(run: Run) -> bool {
+    match run {
+        Nothing => true,
+        // Any other form of run.
+        _ => false
+    }
+}
+
+// The bytes on which `state` stays in itself, one transition at a time.
+fn staying(automaton: Automaton, state: State) -> Bits {
+    let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+        (byte + 1, if automaton.next(state, byte as u8) == state { bytes.insert(byte) } else { bytes })
+    };
+    bytes
+}
+
+fn ascii(a: u8, b: u8, c: u8) -> List<u8> {
+    List::Cons { a, List::Cons { b, List::Cons { c, List::Nil } } }
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+// `[a-z]+`, `[0-9]+` and one or more spaces: three states that accept, the
+// start and the dead state, over four classes of bytes.
+fn test_lexer() -> Outcome {
+    let rules = rules3(Regex::range(97, 122).plus(), Regex::range(48, 57).plus(), Regex::byte(32).plus());
+    // "abc 42"
+    let input = join(ascii(97, 98, 99), ascii(32, 52, 50));
+    built(rules, 100, |automaton: Automaton| {
+        let start = automaton.start();
+        let word = automaton.next(start, 97);
+        let found = scan(automaton, start, input, 0, none());
+        should_be(automaton.states(), 5)
+            .and_then(|| should_be(automaton.columns(), 4))
+            .and_then(|| expect(automaton.winner(start).is_none(), "the start accepts nothing"))
+            .and_then(|| expect(
+                is_inside(automaton.run(word), List::Cons { stretch(97, 122), List::Nil }) && is_nothing(automaton.run(start)),
+                "a word stays on letters; the start stays on nothing"
+            ))
+            .and_then(|| expect(wins(automaton, word, 0), "a letter is a word"))
+            .and_then(|| expect(automaton.next(word, 98) == word, "more letters stay in one state"))
+            .and_then(|| expect(
+                automaton.next(word, 52) == Automaton::dead() && automaton.next(start, 33) == Automaton::dead(),
+                "a byte no rule goes on with leads to the dead state"
+            ))
+            .and_then(|| expect(
+                automaton.next(Automaton::dead(), 97) == Automaton::dead(),
+                "the dead state stays dead"
+            ))
+            .and_then(|| expect(agree(found, Best { found: true, length: 3, rule: 0 }), "the longest match is the word"))
+    })
+}
+
+// `[a-zα-ω]+`: the start, the state after a letter, and one state in the
+// middle of a character for each first byte, CE and CF.
+fn test_characters() -> Outcome {
+    let letter = Regex::chars(CharSet::range('a', 'z').union(CharSet::range('α', 'ω')));
+    let rules = List::Cons { letter.plus().to_bytes(), List::Nil };
+    // "aβ!" is 61 CE B2 21.
+    let input = List::Cons { 0x61, ascii(0xCE, 0xB2, 0x21) };
+    built(rules, 100, |automaton: Automaton| {
+        let start = automaton.start();
+        let word = automaton.next(start, 0x61);
+        let middle = automaton.next(word, 0xCE);
+        should_be(automaton.states(), 5)
+            .and_then(|| should_be(automaton.columns(), 6))
+            // The start and the state after a letter go to the same states.
+            .and_then(|| expect(
+                is_inside(automaton.run(word), List::Cons { stretch(0x61, 0x7A), List::Nil }),
+                "after a letter the state stays on the letters of one byte"
+            ))
+            .and_then(|| expect(
+                automaton.winner(middle).is_none() && !(middle == Automaton::dead()),
+                "the middle of a character is a state that does not accept"
+            ))
+            .and_then(|| expect(automaton.next(middle, 0xB2) == word, "the rest of the character comes back"))
+            .and_then(|| expect(
+                automaton.next(middle, 0xB0) == Automaton::dead() && automaton.next(middle, 0x61) == Automaton::dead(),
+                "a byte that does not finish the character"
+            ))
+            .and_then(|| expect(
+                agree(scan(automaton, start, input, 0, none()), Best { found: true, length: 3, rule: 0 }),
+                "the match ends where a character ends"
+            ))
+    })
+}
+
+// A keyword before a word: both accept `while`, the keyword wins; a longer
+// word is only a word.
+fn test_keyword() -> Outcome {
+    let rules = rules2(Regex::literal(Text::from_str("while")), Regex::range(97, 122).plus());
+    let keyword = text(List::Cons { 'w', List::Cons { 'h', List::Cons { 'i', List::Cons { 'l', List::Cons { 'e', List::Nil } } } } });
+    let longer = join(keyword, List::Cons { 120, List::Nil });
+    built(rules, 100, |automaton: Automaton| {
+        let at_keyword = after(automaton, automaton.start(), keyword);
+        expect(wins(automaton, at_keyword, 0), "both rules accept the keyword; the earlier one wins")
+            .and_then(|| expect(
+                agree(scan(automaton, automaton.start(), keyword, 0, none()), Best { found: true, length: 5, rule: 0 }),
+                "the earlier rule wins"
+            ))
+            .and_then(|| expect(
+                agree(scan(automaton, automaton.start(), longer, 0, none()), Best { found: true, length: 6, rule: 1 }),
+                "a longer word is a word"
+            ))
+    })
+}
+
+// Letters that are also digits: no string matches, so the start is dead and
+// it is the only state.
+fn test_dead() -> Outcome {
+    let nothing = Regex::range(97, 122).plus().and(Regex::range(48, 57).plus());
+    built(List::Cons { nothing.to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+        expect(automaton.start() == Automaton::dead(), "a rule that matches nothing starts dead")
+            .and_then(|| should_be(automaton.states(), 1))
+    })
+}
+
+// "an `a` seven bytes from the end" needs a state for every combination of
+// the last seven bytes.
+fn test_limit() -> Outcome {
+    let either = Regex::range(97, 98);
+    let (_, tail) = while [count = (0 as u64), tail = Regex::epsilon()] (count < 6) {
+        (count + 1, either.then(tail))
+    };
+    let rules = List::Cons { either.star().then(Regex::byte(97)).then(tail).to_bytes(), List::Nil };
+    let refused = match Automaton::build(rules, 20) {
+        Ok(_) => false,
+        Err(error) => error.limit == 20
+    };
+    expect(refused, "more states than the limit are refused")
+        .and_then(|| built(rules, 1000, |automaton: Automaton| expect(
+            automaton.states() > 64,
+            "with room, every combination is a state"
+        )))
+}
+
+// `[a-m]+ & [a-z]+`: the sets make three classes, but `[n-z]` and every
+// other byte lead to the dead state everywhere, so they are one column.
+fn test_shared() -> Outcome {
+    let both = Regex::range(97, 109).plus().and(Regex::range(97, 122).plus());
+    built(List::Cons { both.to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+        let start = automaton.start();
+        let word = automaton.next(start, 97);
+        should_be(automaton.states(), 3)
+            .and_then(|| should_be(automaton.columns(), 2))
+            .and_then(|| expect(
+                !(word == start) && automaton.next(word, 98) == word && automaton.winner(word).is_some(),
+                "the state after a letter stays on letters and accepts"
+            ))
+            .and_then(|| expect(
+                automaton.next(word, 110) == Automaton::dead() && automaton.next(word, 33) == Automaton::dead(),
+                "two classes with one column"
+            ))
+    })
+}
+
+// The start state of `S*` stays on the bytes of `S`.
+fn run_of_set(set: Bits, check: (Automaton, Run) -> bool) -> Outcome {
+    built(List::Cons { Regex::bytes(set).star().to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+        expect(check(automaton, automaton.run(automaton.start())), "the run of a repeated set")
+    })
+}
+
+// For each high half from 1 to 10 the bytes with the low halves 0 and that
+// high half, and one byte of its own for each number: ten different rows,
+// so a set that is neither a few stretches nor a few rectangles, nor all
+// but a few.
+fn scattered(number: u64) -> Bits {
+    let (_, rows) = while [row = (1 as u64), rows = Bits::empty()] (row <= 10) {
+        (row + 1, rows.insert(row * 16).insert(row * 16 + row))
+    };
+    rows.insert(176 + number)
+}
+
+fn test_runs() -> Outcome {
+    let word = Bits::range(48, 57).union(Bits::range(97, 122));
+    // Every byte but a line feed, a quote and a backslash.
+    let text = Bits::single(10).union(Bits::single(34)).union(Bits::single(92)).complement();
+    let other = scattered(0);
+    run_of_set(word, |automaton: Automaton, run: Run| is_inside(run, List::Cons { stretch(48, 57), List::Cons { stretch(97, 122), List::Nil } }))
+        .and_then(|| run_of_set(Bits::full(), |automaton: Automaton, run: Run| is_inside(run, List::Cons { stretch(0, 255), List::Nil })))
+        .and_then(|| run_of_set(text, |automaton: Automaton, run: Run| is_outside(
+            run,
+            List::Cons { stretch(10, 10), List::Cons { stretch(34, 34), List::Cons { stretch(92, 92), List::Nil } } }
+        )))
+        // Any other set takes the first bit of the first lookup table,
+        // which marks the bytes outside the set.
+        .and_then(|| run_of_set(other, |automaton: Automaton, run: Run| {
+            is_table(run, 0, 1) && automaton.tables() == 1 && kept(automaton, 0, 1) == other
+        }))
+        .and_then(|| built(List::Cons { Regex::byte(97).to_bytes(), List::Nil }, 100, |automaton: Automaton| expect(
+            is_nothing(automaton.run(automaton.start())) && is_nothing(automaton.run(Automaton::dead())),
+            "a state that stays on no byte, and the dead state"
+        )))
+}
+
+// `S0* 1 S1* 1 .. S8*`, where the byte 1 is in no set: nine states, each
+// staying on a set of its own.
+fn chain(sets: u64) -> Regex {
+    let (_, regex) = while [number = sets, regex = Regex::epsilon()] (number > 0) {
+        let set = Regex::bytes(scattered(number - 1)).star();
+        (number - 1, if number == sets { set } else { set.then(Regex::byte(1)).then(regex) })
+    };
+    regex
+}
+
+// Eight sets share one table of 256 bytes, a bit each; the ninth starts a
+// second table. The bits go in the order of the states, and the state that
+// accepts, the last of the chain, comes first. A set that comes back shares
+// the bit it had.
+fn test_lookup() -> Outcome {
+    let again = Regex::bytes(scattered(0)).star().then(Regex::byte(1)).then(Regex::bytes(scattered(0)).star());
+    built(List::Cons { chain(9).to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+        let first = automaton.start();
+        let second = automaton.next(first, 1);
+        let (_, eighth) = while [steps = (0 as u64), state = first] (steps < 7) {
+            (steps + 1, automaton.next(state, 1))
+        };
+        let ninth = automaton.next(eighth, 1);
+        should_be(automaton.tables(), 2)
+            .and_then(|| expect(
+                is_table(automaton.run(ninth), 0, 1) && is_table(automaton.run(first), 0, 2) && is_table(automaton.run(second), 0, 4),
+                "the last set and the first two are bits 1, 2 and 4 of table 0"
+            ))
+            .and_then(|| expect(is_table(automaton.run(eighth), 1, 1), "the eighth set is bit 1 of table 1"))
+            .and_then(|| expect(
+                kept(automaton, 0, 1) == scattered(8) && kept(automaton, 0, 2) == scattered(0)
+                    && kept(automaton, 1, 1) == scattered(7),
+                "each bit marks the bytes outside its own set"
+            ))
+    })
+        .and_then(|| built(List::Cons { again.to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            let first = automaton.start();
+            let second = automaton.next(first, 1);
+            expect(
+                !(first == second) && is_table(automaton.run(first), 0, 1) && is_table(automaton.run(second), 0, 1)
+                    && automaton.tables() == 1,
+                "two states that stay on the same set share one bit"
+            )
+        }))
+}
+
+// A lexer over a short text, then a run of each form over more bytes than
+// one comparison or one read of the table takes, from the start, from the
+// middle, and up to the last byte.
+fn test_longest() -> Outcome {
+    let word = Regex::range(97, 122).plus();
+    let name = Regex::bytes(Bits::range(48, 57).union(Bits::range(65, 90)).union(Bits::range(97, 122)).union(Bits::single(95))).plus();
+    let inner = Bits::single(10).union(Bits::single(34)).union(Bits::single(92)).complement();
+    let quoted = Regex::byte(34).then(Regex::bytes(inner).star()).then(Regex::byte(34));
+    let letters = Text::from_str("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz 1");
+    // Small letters and an underscore: one stretch and one more byte.
+    let snake = Regex::bytes(Bits::range(97, 122).union(Bits::single(95))).plus();
+    let snakes = Text::from_str("a_snake_case_name_of_many_bytes_xy z_");
+    let named = Text::from_str("a_Long_name_of_36_bytes_0123456789AZ+b_2");
+    // The sign is inside eight bytes that the table is asked about at once.
+    let signed = Text::from_str("a_Long_name_of_36_bytes_0123456789AZ+and_some_more_bytes_after_it");
+    let string = Text::from_string(
+        String::new().push_char('"').push_str("thirty-four bytes between two quotes").push_char('"').push_str(" x")
+    );
+    built(rules3(word, Regex::range(48, 57).plus(), Regex::byte(32).plus()), 100, |automaton: Automaton| {
+        let input = Text::from_str("abc 42");
+        expect(agree(found(automaton, input, 0), Best { found: true, length: 3, rule: 0 }), "a word")
+            .and_then(|| expect(agree(found(automaton, input, 3), Best { found: true, length: 1, rule: 2 }), "a space"))
+            .and_then(|| {
+                let (rest, _) = automaton.longest(input.view());
+                let (after, _) = automaton.longest(rest);
+                expect(spans(rest, 3, 3) && spans(after, 4, 2), "what is left begins after the match")
+            })
+            .and_then(|| {
+                let (same, nothing) = automaton.longest(Text::from_str("!abc").view());
+                expect(spans(same, 0, 4) && nothing.is_none(), "all of the text is left when no rule matches")
+            })
+            .and_then(|| expect(agree(found(automaton, input, 4), Best { found: true, length: 2, rule: 1 }), "a number up to the end"))
+            .and_then(|| expect(
+                !found(automaton, input, 6).found && !found(automaton, input, 9).found,
+                "nothing at the end, nor past it"
+            ))
+            .and_then(|| expect(agree(found(automaton, letters, 0), Best { found: true, length: 52, rule: 0 }), "a long word"))
+            .and_then(|| expect(agree(found(automaton, letters, 30), Best { found: true, length: 22, rule: 0 }), "its end"))
+            .and_then(|| expect(agree(found(automaton, letters, 53), Best { found: true, length: 1, rule: 1 }), "the last byte"))
+    })
+        .and_then(|| built(List::Cons { name.to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(
+                if simd::swizzle_lanes() >= 16 {
+                    is_inside(
+                        automaton.run(automaton.next(automaton.start(), 97)),
+                        List::Cons { stretch(48, 57), List::Cons { stretch(65, 90), List::Cons { stretch(95, 95), List::Cons { stretch(97, 122), List::Nil } } } }
+                    )
+                } else {
+                    is_table(automaton.run(automaton.next(automaton.start(), 97)), 0, 1)
+                },
+                "a name stays on shuffle tables where the target shuffles, else on the lookup table"
+            )
+                .and_then(|| expect(agree(found(automaton, named, 0), Best { found: true, length: 36, rule: 0 }), "a long name"))
+                .and_then(|| expect(agree(found(automaton, named, 33), Best { found: true, length: 3, rule: 0 }), "its end"))
+                .and_then(|| expect(agree(found(automaton, named, 37), Best { found: true, length: 3, rule: 0 }), "a name up to the end"))
+                .and_then(|| expect(!found(automaton, named, 36).found, "no name at a sign"))
+                .and_then(|| expect(agree(found(automaton, signed, 0), Best { found: true, length: 36, rule: 0 }), "a name ends at a sign among more names"))
+                .and_then(|| expect(agree(found(automaton, signed, 37), Best { found: true, length: 28, rule: 0 }), "the name after the sign"))
+        }))
+        .and_then(|| built(List::Cons { snake.to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(
+                is_inside(
+                    automaton.run(automaton.next(automaton.start(), 97)),
+                    List::Cons { stretch(95, 95), List::Cons { stretch(97, 122), List::Nil } }
+                ),
+                "a name stays on a stretch and one more byte"
+            )
+                .and_then(|| expect(agree(found(automaton, snakes, 0), Best { found: true, length: 34, rule: 0 }), "a long name with underscores"))
+                .and_then(|| expect(agree(found(automaton, snakes, 35), Best { found: true, length: 2, rule: 0 }), "a short one up to the end"))
+        }))
+        .and_then(|| built(List::Cons { quoted.to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(
+                is_outside(
+                    automaton.run(automaton.next(automaton.start(), 34)),
+                    List::Cons { stretch(10, 10), List::Cons { stretch(34, 34), List::Cons { stretch(92, 92), List::Nil } } }
+                ),
+                "the inside of a string stays outside three bytes"
+            )
+                .and_then(|| expect(agree(found(automaton, string, 0), Best { found: true, length: 38, rule: 0 }), "a long string"))
+                .and_then(|| expect(!found(automaton, string, 1).found, "no string without its first quote"))
+        }))
+}
+
+// The matches of a fold as one number: every match adds its rule and its
+// two ends to the sum so far, times 31.
+fn folded(automaton: Automaton, input: Text, from: u64) -> (u64, u64) {
+    automaton.fold(input.view(), from, 0, |sum: u64, found: Match| sum * 31 + (found.rule as u64) + found.start * 3 + found.end * 7)
+}
+
+// The same from one longest match after another.
+fn one_by_one(automaton: Automaton, input: Text, from: u64) -> (u64, u64) {
+    let (_, sum, reached) = while [going = true, sum = 0, at = from] (going) {
+        let here = found(automaton, input, at);
+        if here.found && here.length > 0 {
+            (at + here.length < input.len(), sum * 31 + (here.rule as u64) + at * 3 + (at + here.length) * 7, at + here.length)
+        } else { (false, sum, at) }
+    };
+    (sum, reached)
+}
+
+fn same_fold(first: (u64, u64), second: (u64, u64)) -> bool {
+    let (sum, reached) = first;
+    let (other, place) = second;
+    sum == other && reached == place
+}
+
+// The tokens of a lexer one after another, up to a byte that no rule
+// matches and up to the end.
+fn test_fold() -> Outcome {
+    let rules = rules3(Regex::range(97, 122).plus(), Regex::range(48, 57).plus(), Regex::byte(32).plus());
+    built(rules, 100, |automaton: Automaton| {
+        let whole = Text::from_str("abc 42 de");
+        let broken = Text::from_str("abc 42!de");
+        let (count, reached) = automaton.fold(whole.view(), 0, 0, |count: u64, found: Match| count + 1);
+        let (rules, stopped) = automaton.fold(broken.view(), 0, 0, |rules: u64, found: Match| rules * 10 + (found.rule as u64) + 1);
+        should_be(count, 5)
+            .and_then(|| should_be(reached, 9))
+            .and_then(|| should_be(rules, 132))
+            .and_then(|| should_be(stopped, 6))
+            .and_then(|| expect(same_fold(folded(automaton, whole, 0), one_by_one(automaton, whole, 0)), "the fold is one longest match after another"))
+            .and_then(|| expect(same_fold(folded(automaton, broken, 4), one_by_one(automaton, broken, 4)), "from the middle too"))
+            .and_then(|| expect(same_fold(folded(automaton, whole, 9), (0, 9)), "nothing at the end"))
+    })
+}
+
+// ------------------ Fuzz: the automaton against the trees ------------------
+
+fn chars_of(ranges: List<(char, char)>) -> CharSet {
+    ranges.fold_left(CharSet::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(CharSet::range(lo, hi))
+    })
+}
+
+fn bits_of(ranges: List<(u8, u8)>) -> Bits {
+    ranges.fold_left(Bits::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(Bits::range(lo as u64, hi as u64))
+    })
+}
+
+// The two regexes on top of the stack, combined into one.
+fn combine(stack: List<Regex>, both: (Regex, Regex) -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, below) => match below {
+            Cons(under, rest) => List::Cons { both(under, top), rest },
+            Nil => stack
+        },
+        Nil => stack
+    }
+}
+
+// The regex on top of the stack, changed.
+fn change(stack: List<Regex>, one: Regex -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, rest) => List::Cons { one(top), rest },
+        Nil => stack
+    }
+}
+
+// One step of a small program that builds regexes on a stack.
+fn step(stack: List<Regex>, op: u8, characters: CharSet, bytes: Bits) -> List<Regex> {
+    match op % 9 {
+        0 => List::Cons { Regex::chars(characters), stack },
+        1 => List::Cons { Regex::bytes(bytes), stack },
+        2 => List::Cons { Regex::any_char(), stack },
+        3 => List::Cons { Regex::epsilon(), stack },
+        4 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        5 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        6 => combine(stack, |first: Regex, second: Regex| first.and(second)),
+        7 => change(stack, |inner: Regex| inner.star()),
+        // 8: the complement.
+        _ => change(stack, |inner: Regex| inner.not())
+    }
+}
+
+// The regex a program builds: whatever is left on the stack, as a union.
+fn build(ops: List<u8>, characters: CharSet, bytes: Bits) -> ByteRegex {
+    let stack = ops.fold_left(List::Nil, |stack: List<Regex>, op: u8| step(stack, op, characters, bytes));
+    stack.fold_left(Regex::empty(), |all: Regex, regex: Regex| all.or(regex)).to_bytes()
+}
+
+// Three rules from three programs over the same sets.
+fn rules_of(sets: (List<(char, char)>, List<(u8, u8)>), programs: (List<u8>, List<u8>, List<u8>)) -> List<ByteRegex> {
+    let (char_ranges, byte_ranges) = sets;
+    let (first, second, third) = programs;
+    let set = chars_of(char_ranges);
+    let bytes = bits_of(byte_ranges);
+    List::Cons { build(first, set, bytes), List::Cons { build(second, set, bytes), List::Cons { build(third, set, bytes), List::Nil } } }
+}
+
+fn fuzz_trees(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>), (List<char>, List<u8>))) -> Outcome {
+    let (sets, programs, probe) = input;
+    let (characters, tail) = probe;
+    let rules = rules_of(sets, programs);
+    let string = join(text(characters), tail);
+    match Automaton::build(rules, 400) {
+        // Too many states for this test: nothing to compare.
+        Err(_) => expect(true, "skipped"),
+        Ok(automaton) => expect(
+            agree(scan(automaton, automaton.start(), string, 0, none()), longest(rules, string)),
+            "the automaton and the trees find different matches"
+        )
+            .and_then(|| expect(
+                match matching(rules, string, 0) {
+                    Cons(rule, _) => wins(automaton, after(automaton, automaton.start(), string), rule),
+                    Nil => automaton.winner(after(automaton, automaton.start(), string)).is_none()
+                },
+                "the automaton and the trees accept the string with different rules"
+            ))
+            .and_then(|| {
+                let reached = after(automaton, automaton.start(), string);
+                expect(
+                    reached == Automaton::dead() || bytes_of(automaton, automaton.run(reached)) == staying(automaton, reached),
+                    "the run of a state is not the bytes it stays on"
+                )
+            })
+    }
+}
+
+// `count` copies of `character` before `rest`.
+fn copies(character: char, count: u64, rest: List<char>) -> List<char> {
+    let (_, all) = while [left = count, all = rest] (left > 0) {
+        (left - 1, List::Cons { character, all })
+    };
+    all
+}
+
+// Every character as many times as its number says, up to 23.
+fn repeated(pairs: List<(char, u8)>) -> List<char> {
+    match pairs {
+        Nil => List::Nil,
+        Cons(pair, rest) => {
+            let (character, count) = pair;
+            copies(character, (count % 24) as u64, repeated(rest))
+        }
+    }
+}
+
+// The longest match from a place of a text against the steps from there.
+fn fuzz_longest(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>), (List<(char, u8)>, u8))) -> Outcome {
+    let (sets, programs, probe) = input;
+    let (pairs, place) = probe;
+    let characters = repeated(pairs);
+    let bytes = text(characters);
+    let from = (place as u64) % (bytes.len() + 1);
+    match Automaton::build(rules_of(sets, programs), 400) {
+        // Too many states for this test: nothing to compare.
+        Err(_) => expect(true, "skipped"),
+        Ok(automaton) => expect(
+            agree(found(automaton, text_of(characters), from), scan(automaton, automaton.start(), rest_from(bytes, from), 0, none())),
+            "the longest match and the steps find different matches"
+        )
+            .and_then(|| expect(
+                same_fold(folded(automaton, text_of(characters), from), one_by_one(automaton, text_of(characters), from)),
+                "the fold is not one longest match after another"
+            ))
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex automaton")
+        .with_case("a lexer", test_lexer)
+        .with_case("characters", test_characters)
+        .with_case("a keyword and a word", test_keyword)
+        .with_case("dead states", test_dead)
+        .with_case("the limit", test_limit)
+        .with_case("shared columns", test_shared)
+        .with_case("runs", test_runs)
+        .with_case("the lookup table", test_lookup)
+        .with_case("the longest match", test_longest)
+        .with_case("the fold", test_fold)
+        .with_fuzz(
+            "automaton & the trees (fuzz)",
+            tuple3(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                tuple3(
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5)
+                ),
+                tuple2(char_domain().utf8().list_with_len(0, 2), u8_domain().list_with_len(0, 2))
+            ),
+            fuzz_trees
+        )
+        .with_fuzz(
+            "the longest match & the steps (fuzz)",
+            tuple3(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                tuple3(
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5)
+                ),
+                tuple2(tuple2(char_domain().utf8(), u8_domain()).list_with_len(0, 4), u8_domain())
+            ),
+            fuzz_longest
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

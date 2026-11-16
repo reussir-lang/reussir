@@ -5,7 +5,9 @@
 //! - `tree`: the regex a caller builds, and the same regex over bytes only.
 //! - `node`: regexes as nodes of a table, where equal regexes are the same
 //!   node, and their derivatives.
+//! - `automaton`: the states and transitions of a list of rules.
 
 pub mod alphabet;
+pub mod automaton;
 pub mod node;
 pub mod tree;

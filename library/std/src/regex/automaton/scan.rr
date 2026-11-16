@@ -1,0 +1,147 @@
+//! Matching.
+//!
+//! A match is a chain of reads, each waiting for the one before, so the
+//! tables are laid out to keep the chain short: the row of the start state
+//! is also kept with a cell for every byte, which makes the first step of a
+//! match one read, and the vectors of a run are found from the number of
+//! the state alone.
+
+import core::intrinsic::array;
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import std::option::Option;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::encoding;
+import std::regex::automaton::native;
+import std::text::TextView;
+
+impl Automaton {
+    /// The longest match of the rules at the beginning of `input`, and the
+    /// earliest rule that matches that far, with what is left of `input`
+    /// after the match: all of it when no rule matches. The ends of the
+    /// match count from the beginning of `input`.
+    pub fn longest(self: Self, input: TextView) -> (TextView, Option<Match>) {
+        match self.unsafe_longest(input.unsafe_data_ptr(), input.len(), 0) {
+            Matched(found) => match input.slice_byte(found.end, input.len()) {
+                Some(rest) => (rest, Option::Some { found }),
+                // A match ends within the text it is found in.
+                None => (input, Option::None)
+            },
+            Nothing => (input, Option::None)
+        }
+    }
+
+    /// The longest match that begins at the byte `from` of the `length`
+    /// bytes at `bytes`, which the caller keeps readable for the call. The
+    /// answer is a plain value, so this is the way to ask for one match
+    /// after another.
+    pub fn unsafe_longest(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> Found {
+        let (last, end) = scan(self, bytes, length, from);
+        if last == 0 { Found::Nothing } else {
+            Found::Matched { Match { rule: array::get(self.winners, encoding::place(last, self.shift) as i64), start: from, end } }
+        }
+    }
+
+    /// Folds over the matches of the rules in `input`, one after another:
+    /// the first begins at the byte `from`, and each next one where the one
+    /// before ended. The fold ends at the end of the input, where no rule
+    /// matches, or at a match of no bytes; the place where it ended comes
+    /// with the value.
+    pub fn fold<A>(self: Self, input: TextView, from: u64, initial: A, step: (A, Match) -> A) -> (A, u64) {
+        let bytes = input.unsafe_data_ptr();
+        // Every round reads the length of the input, which keeps the input
+        // for as long as its bytes are read.
+        let (_, value, reached) = while [going = true, value = initial, at = from] (going) {
+            let (last, end) = scan(self, bytes, input.len(), at);
+            if last == 0 || end == at { (false, value, at) } else {
+                let rule = array::get(self.winners, encoding::place(last, self.shift) as i64);
+                (end < input.len(), step(value, Match { rule, start: at, end }), end)
+            }
+        };
+        (value, reached)
+    }
+}
+
+// The cell of the last state that accepts on the way from the start state
+// at the byte `from` of the `length` bytes at `bytes`, and where it does;
+// the cell 0 when none does.
+fn scan(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64) {
+    // A start state that neither accepts nor has a run takes its first
+    // step in one read.
+    let quick = encoding::kind(automaton.start) == 6 && from < length;
+    let (begun, after) = if quick { (array::get(automaton.first, native::byte_at(bytes, from) as i64), from + 1) } else { (automaton.start, from) };
+    let (_, _, last, end, _) = while [cell = begun, at = after, last = 0, end = from, going = true] (going) {
+        match encoding::kind(cell) {
+            // The dead state: the match is the last one found.
+            0 => (cell, at, last, end, false),
+            // Accepts, and no byte goes on.
+            1 => (cell, at, cell, at, false),
+            // Neither accepts nor has a run.
+            6 => stepped(automaton, bytes, length, cell, at, last, end),
+            // 2 to 5: accepts and goes on, or has a run.
+            _ => arrived(automaton, bytes, length, cell, at, last, end)
+        }
+    };
+    (last, end)
+}
+
+// One step from `cell` on the byte at `at`, or the end of the way at the
+// end of the input.
+fn stepped(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, at: u64, last: u32, end: u64) -> (u32, u64, u32, u64, bool) {
+    if at < length {
+        let column = array::get(automaton.classes, native::byte_at(bytes, at) as i64) as u32;
+        (array::get(automaton.next, (encoding::row(cell) + column) as i64), at + 1, last, end, true)
+    } else { (cell, at, last, end, false) }
+}
+
+// Reaching a state that has a run or accepts and goes on, with `at` bytes
+// read: the run is read first, and a state that accepts is the match so
+// far.
+fn arrived(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, at: u64, last: u32, end: u64) -> (u32, u64, u32, u64, bool) {
+    let kind = encoding::kind(cell);
+    let moved = if kind >= 3 { skip(automaton, bytes, length, cell, at) } else { at };
+    match kind {
+        // Accepts, and only its run goes on.
+        3 => (cell, moved, cell, moved, false),
+        // Does not accept.
+        5 => stepped(automaton, bytes, length, cell, moved, last, end),
+        // 2 and 4: accepts and goes on.
+        _ => stepped(automaton, bytes, length, cell, moved, cell, moved)
+    }
+}
+
+// The first place from `at` whose byte leaves `state`, which has a run, or
+// the end of the input.
+fn skip(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, at: u64) -> u64 {
+    let place = encoding::place(cell - automaton.runs, automaton.shift) as i64;
+    let word = array::get(automaton.run_words, place);
+    // The vectors are read whole, which an array has no way to do.
+    let vectors = ptr::offset(array::unsafe_data_ptr(automaton.vectors), place * 64, PtrArithFlag::Inbounds);
+    let inside = encoding::stays_inside(word);
+    let reached = match encoding::form(word) {
+        0 => native::equal(vectors, inside, bytes, at, length),
+        1 => native::equal_two(vectors, inside, bytes, at, length),
+        2 => native::equal_three(vectors, inside, bytes, at, length),
+        3 => native::equal_four(vectors, inside, bytes, at, length),
+        4 => native::stretched(vectors, inside, bytes, at, length),
+        5 => native::stretched_or_equal(vectors, inside, bytes, at, length),
+        6 => native::stretched_or_equal_two(vectors, inside, bytes, at, length),
+        7 => native::stretched_twice(vectors, inside, bytes, at, length),
+        8 => native::marked(automaton.lookup, encoding::first(word), encoding::bits(word) as u8, bytes, at, length),
+        // 9: the shuffle tables are read whole as well.
+        _ => native::shuffled(ptr::offset(array::unsafe_data_ptr(automaton.nibbles), encoding::first(word) as i64, PtrArithFlag::Inbounds), encoding::bits(word) as u8, inside, bytes, at, length)
+    };
+    // The vectors leave fewer than sixteen bytes at the end unread.
+    if reached + 16 > length { settled(automaton, bytes, length, cell, reached) } else { reached }
+}
+
+// Reads on byte by byte while the steps of the automaton stay in the state
+// of `cell`.
+fn settled(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, at: u64) -> u64 {
+    while [at = at] (at < length && array::get(automaton.next, (encoding::row(cell) + (array::get(automaton.classes, native::byte_at(bytes, at) as i64) as u32)) as i64) == cell) {
+        at + 1
+    }
+}

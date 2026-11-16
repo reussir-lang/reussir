@@ -1,0 +1,115 @@
+//! How a cell of the table and the word of a run are packed.
+//!
+//! A cell is the number of a state with, in its three lowest bits, what
+//! reaching that state takes. A match jumps on those bits, as generated
+//! code jumps to the code of a state:
+//!
+//! ```text
+//! 0    the dead state: the match is the last one found
+//! 1    accepts, and no byte goes on: the match ends
+//! 2    accepts
+//! 3    accepts and has a run, and no other byte goes on: the match ends
+//!      after the run
+//! 4    accepts and has a run
+//! 5    has a run
+//! 6    neither
+//! ```
+//!
+//! The states are numbered in this order, so the states that accept are one
+//! stretch of numbers and the states with a run another.
+//!
+//! Each state with a run has one word:
+//!
+//! ```text
+//! bits 0 to 3     the form of the run
+//! bit 4           the state stays on the bytes that its vectors or its
+//!                 shuffle tables match; unset, on the other bytes
+//! bits 8 to 15    the bit of the lookup table, or the bits of the shuffle
+//!                 tables
+//! bits 32 on      where its lookup table or its pair of shuffle tables
+//!                 begins
+//! ```
+//!
+//! ```text
+//! forms 0 to 3    the bytes equal to one of one to four bytes
+//! form 4          the bytes of one stretch
+//! forms 5 and 6   the bytes of one stretch, or equal to one of one or two
+//!                 bytes
+//! form 7          the bytes of one of two stretches
+//! form 8          the lookup table
+//! form 9          a pair of shuffle tables
+//! ```
+//!
+//! A stretch is two vectors: its first byte, and its length less one. A
+//! form compares with as many vectors as its bytes cost.
+
+/// The cell of the state `place` of a table whose rows have `1 << shift`
+/// cells.
+pub fn cell(place: u32, shift: u32, kind: u32) -> u32 {
+    (place << shift) | kind
+}
+
+pub fn kind(cell: u32) -> u32 {
+    cell & 7
+}
+
+/// Where the row of the state of `cell` begins in the table.
+pub fn row(cell: u32) -> u32 {
+    cell & 0xFFFFFFF8
+}
+
+/// The place of the state of `cell` among the states.
+pub fn place(cell: u32, shift: u32) -> u32 {
+    cell >> shift
+}
+
+/// The word of a run that compares with vectors in `form`, 0 to 7.
+pub fn vector_word(form: u64) -> u64 {
+    form
+}
+
+/// The bit in its table of the set with this number in the lookup table.
+pub fn table_bit(number: u64) -> u8 {
+    ((1 as u64) << (number % 8)) as u8
+}
+
+/// Where the table of the set with this number begins in the lookup table.
+pub fn table_at(number: u64) -> u64 {
+    (number / 8) * 256
+}
+
+/// The word of a run that reads the set with this number in the lookup
+/// table.
+pub fn table_word(number: u64) -> u64 {
+    8 | ((table_bit(number) as u64) << 8) | (table_at(number) << 32)
+}
+
+/// The word of a run that tests the bits `mask` of the pair of shuffle
+/// tables at `first`.
+pub fn shuffle_word(first: u64, mask: u64) -> u64 {
+    9 | (mask << 8) | (first << 32)
+}
+
+/// `word` for a state that stays on the bytes that are matched.
+pub fn inside(word: u64) -> u64 {
+    word | 16
+}
+
+pub fn form(word: u64) -> u64 {
+    word & 15
+}
+
+/// Whether the state stays on the bytes that are matched.
+pub fn stays_inside(word: u64) -> bool {
+    (word & 16) != 0
+}
+
+/// The bit of the lookup table, or the bits of the shuffle tables.
+pub fn bits(word: u64) -> u64 {
+    (word >> 8) & 255
+}
+
+/// Where the lookup table or the pair of shuffle tables begins.
+pub fn first(word: u64) -> u64 {
+    word >> 32
+}

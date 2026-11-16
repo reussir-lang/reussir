@@ -60,6 +60,16 @@ fn mark_inside(classes: List<Bits>, set: Bits, number: u64, marked: Bits) -> Bit
     }
 }
 
+// The number of the class that holds `byte`, where `number` is the number of
+// the first class of `classes`.
+fn class_index_impl(classes: List<Bits>, byte: u64, number: u64) -> u64 {
+    match classes {
+        Nil => number,
+        Cons(class, _) if class.contains(byte) => number,
+        Cons(_, rest) => class_index_impl(rest, byte, number + 1)
+    }
+}
+
 fn nth(classes: List<Bits>, number: u64) -> Option<Bits> {
     match classes {
         Nil => Option::None,
@@ -82,6 +92,11 @@ impl ByteClasses {
     /// refined with `set`.
     pub fn inside(self: Self, set: Bits) -> Bits {
         mark_inside(self.classes, set, 0, Bits::empty())
+    }
+
+    /// The number of the class that holds `byte`.
+    pub fn class_index(self: Self, byte: u8) -> u64 {
+        class_index_impl(self.classes, byte as u64, 0)
     }
 
     /// The number of classes.

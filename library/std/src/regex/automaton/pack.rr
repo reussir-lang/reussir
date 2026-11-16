@@ -1,0 +1,68 @@
+//! The flat arrays of an automaton.
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::option::Option;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::arrange::Arranged;
+import std::regex::automaton::columns::Columns;
+import std::regex::automaton::encoding;
+import std::regex::automaton::lookahead::LoopOptimizer;
+
+/// The automaton of the states `arranged`, with the columns `shared` and
+/// the runs `runs`, over the classes of bytes `sets`.
+pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: ByteClasses) -> Automaton {
+    let classes = arranged.classes;
+    let count = arranged.states;
+    let starts = arranged.starts;
+    let kinds = arranged.kinds;
+    let table = arranged.next;
+    let rules = arranged.winners;
+    let start = arranged.start;
+    let of_class = shared.of_class;
+    let firsts = shared.firsts;
+    let columns = firsts.len();
+    let shift = while [shift = 3] ((1 << shift) < columns) { shift + 1 };
+    let first_run = array::get(starts, 3);
+    let words = runs.words();
+    let vectors = runs.vectors();
+    let marks = runs.lookup();
+    let pairs = runs.nibbles();
+    let class_cells = array::tabulate<[u8; 256]>(|byte: i64| of_class.get(sets.class_index(byte as u8)).unwrap_or(0) as u8);
+    // A row is longer than its columns when their number is no power of
+    // two; no byte reads the cells past them.
+    let next_cells = array::tabulate<[u32; ?]>(count << shift, |at: i64| {
+        let to = match firsts.get((at as u64) & ((1 << shift) - 1)) {
+            Some(class) => array::get(table, (((at as u64) >> shift) * classes + class) as i64),
+            None => 0
+        };
+        encoding::cell(to, shift as u32, array::get(kinds, to as i64))
+    });
+    let first_cells = array::tabulate<[u32; 256]>(|byte: i64| {
+        let to = match firsts.get(of_class.get(sets.class_index(byte as u8)).unwrap_or(0) as u64) {
+            Some(class) => array::get(table, (start * classes + class) as i64),
+            None => 0
+        };
+        encoding::cell(to, shift as u32, array::get(kinds, to as i64))
+    });
+    let winner_cells = array::tabulate<[u32; ?]>(array::get(starts, 5), |place: i64| array::get(rules, place));
+    let word_cells = array::tabulate<[u64; ?]>(words.len(), |at: i64| words.get(at as u64).unwrap_or(0));
+    let vector_cells = array::tabulate<[u8; ?]>(vectors.len(), |at: i64| vectors.get(at as u64).unwrap_or(0));
+    let mark_cells = array::tabulate<[u8; ?]>(marks.len(), |at: i64| marks.get(at as u64).unwrap_or(0));
+    let pair_cells = array::tabulate<[u8; ?]>(pairs.len(), |at: i64| pairs.get(at as u64).unwrap_or(0));
+    Automaton {
+        classes: class_cells,
+        columns,
+        shift: shift as u32,
+        next: next_cells,
+        first: first_cells,
+        winners: winner_cells,
+        runs: encoding::cell(first_run as u32, shift as u32, 0),
+        run_words: word_cells,
+        vectors: vector_cells,
+        lookup: mark_cells,
+        nibbles: pair_cells,
+        start: encoding::cell(start as u32, shift as u32, array::get(kinds, start as i64))
+    }
+}

@@ -1,0 +1,96 @@
+//! The kind of every state: whether it is dead, accepts, has a run.
+//!
+//! A state is live when it reaches a state that accepts, and dead
+//! otherwise. `encoding` lists the kinds.
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::automaton::explore::Explored;
+
+// For every state, the states with a transition into it.
+fn sources(next: Vec<u32>, states: u64, classes: u64) -> Vec<List<u32>> {
+    let (_, empty) = while [state = 0, into = Vec::new()] (state < states) {
+        (state + 1, into.push(List::Nil))
+    };
+    let (_, into) = while [at = 0, into = empty] (at < states * classes) {
+        let target = next.get(at).unwrap_or(0) as u64;
+        let from = (at / classes) as u32;
+        (at + 1, into.set(target, List::Cons { from, into.get(target).unwrap_or(List::Nil) }))
+    };
+    into
+}
+
+// Marks every state that reaches one of `pending`, which are live.
+fn mark(live: Vec<bool>, into: Vec<List<u32>>, pending: List<u32>) -> Vec<bool> {
+    match pending {
+        Nil => live,
+        Cons(state, rest) => {
+            let at = state as u64;
+            if live.get(at).unwrap_or(true) { mark(live, into, rest) } else {
+                let more = into.get(at).unwrap_or(List::Nil).fold_left(rest, |rest: List<u32>, from: u32| List::Cons { from, rest });
+                mark(live.set(at, true), into, more)
+            }
+        }
+    }
+}
+
+// The kind of a live state, as `encoding` numbers them: whether it
+// accepts, whether some byte leads it to itself, and whether some byte
+// leads it to another live state. A state with none of the three is dead,
+// so it is not asked about.
+fn kind_of(accepts: bool, stays: bool, leaves: bool) -> u64 {
+    let code: u64 = (if accepts { 4 } else { 0 }) + (if stays { 2 } else { 0 }) + (if leaves { 1 } else { 0 });
+    match code {
+        4 => 1,
+        5 => 2,
+        6 => 3,
+        7 => 4,
+        2 => 5,
+        3 => 5,
+        // 1: neither accepts nor stays.
+        _ => 6
+    }
+}
+
+// Whether some class leads `state` to another live state.
+fn leaves(next: Vec<u32>, live: Vec<bool>, state: u64, classes: u64) -> bool {
+    let (_, any) = while [class = 0, any = false] (class < classes && !any) {
+        let to = next.get(state * classes + class).unwrap_or(0) as u64;
+        (class + 1, to != state && live.get(to).unwrap_or(false))
+    };
+    any
+}
+
+// Whether some class leads `state` to itself.
+fn stays_put(next: Vec<u32>, state: u64, classes: u64) -> bool {
+    let (_, any) = while [class = 0, any = false] (class < classes && !any) {
+        (class + 1, next.get(state * classes + class).unwrap_or(0) as u64 == state)
+    };
+    any
+}
+
+// Whether each state of `found` is live: it reaches a state that accepts.
+fn live_states(found: Explored) -> Vec<bool> {
+    let states = found.states();
+    // The states that accept, and no state live yet.
+    let (_, accepting, none) = while [state = 0, accepting = List::Nil, live = Vec::new()] (state < states) {
+        let accepts = found.winners.get(state).unwrap_or(Option::None).is_some();
+        (state + 1, if accepts { List::Cons { state as u32, accepting } } else { accepting }, live.push(false))
+    };
+    mark(none, sources(found.next, states, found.classes), accepting)
+}
+
+/// The kind of every state of `found`; 0 for a dead state.
+pub fn kinds(found: Explored) -> Vec<u64> {
+    let next = found.next;
+    let classes = found.classes;
+    let live = live_states(found);
+    let (_, kinds) = while [state = 0, kinds = Vec::new()] (state < found.states()) {
+        let kind = if live.get(state).unwrap_or(false) {
+            kind_of(found.winners.get(state).unwrap_or(Option::None).is_some(), stays_put(next, state, classes), leaves(next, live, state, classes))
+        } else { 0 };
+        (state + 1, kinds.push(kind))
+    };
+    kinds
+}

@@ -1,0 +1,110 @@
+//! An automaton one step at a time: its states, where they lead, which
+//! rule accepts in them, and their runs.
+
+import core::intrinsic::array;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Run;
+import std::regex::automaton::State;
+import std::regex::automaton::encoding;
+import std::regex::automaton::vectors::stretches;
+
+impl Automaton {
+    /// The state before any byte.
+    pub fn start(self: Self) -> State {
+        State { number: self.start }
+    }
+
+    /// The state from which no rule can accept.
+    pub fn dead() -> State {
+        State { number: 0 }
+    }
+
+    /// The number of states, the dead state included.
+    pub fn states(self: Self) -> u64 {
+        array::dim(self.next, 0) >> (self.shift as u64)
+    }
+
+    /// The number of columns of the table: classes of bytes that no state
+    /// tells apart.
+    pub fn columns(self: Self) -> u64 {
+        self.columns
+    }
+
+    /// The state after `state` on `byte`. A state this automaton does not
+    /// have is read as the dead state.
+    pub fn next(self: Self, state: State, byte: u8) -> State {
+        let at = (encoding::row(state.number) as u64) + (array::get(self.classes, byte as i64) as u64);
+        State { number: if at < array::dim(self.next, 0) { array::get(self.next, at as i64) } else { 0 } }
+    }
+
+    /// The earliest rule that accepts in `state`.
+    pub fn winner(self: Self, state: State) -> Option<u32> {
+        let kind = encoding::kind(state.number);
+        let place = encoding::place(state.number, self.shift) as u64;
+        if kind >= 1 && kind <= 4 && place < array::dim(self.winners, 0) {
+            Option::Some { array::get(self.winners, place as i64) }
+        } else { Option::None }
+    }
+
+    /// The bytes on which `state` stays in itself.
+    pub fn run(self: Self, state: State) -> Run {
+        let kind = encoding::kind(state.number);
+        let place = encoding::place(state.number - self.runs, self.shift) as u64;
+        if kind >= 3 && kind <= 5 && state.number >= self.runs && place < array::dim(self.run_words, 0) {
+            let word = array::get(self.run_words, place as i64);
+            match encoding::form(word) {
+                8 => Run::Table { encoding::first(word) / 256, encoding::bits(word) as u8 },
+                9 => {
+                    let matched = stretches(self.shuffled(encoding::first(word), encoding::bits(word)));
+                    if encoding::stays_inside(word) { Run::Inside { matched } } else { Run::Outside { matched } }
+                },
+                // 0 to 7: vectors.
+                _ => {
+                    let matched = stretches(self.matched(encoding::form(word), place * 64));
+                    if encoding::stays_inside(word) { Run::Inside { matched } } else { Run::Outside { matched } }
+                }
+            }
+        } else { Run::Nothing }
+    }
+
+    // The bytes that the vectors at `place` match in this form. A form
+    // with fewer than four vectors is given the first again in their place.
+    fn matched(self: Self, form: u64, place: u64) -> Bits {
+        let first = array::get(self.vectors, place as i64) as u64;
+        let second = array::get(self.vectors, (place + 16) as i64) as u64;
+        let third = array::get(self.vectors, (place + 32) as i64) as u64;
+        let fourth = array::get(self.vectors, (place + 48) as i64) as u64;
+        if form <= 3 { Bits::single(first).insert(second).insert(third).insert(fourth) } else {
+            let stretch = Bits::range(first, first + second);
+            match form {
+                7 => stretch.union(Bits::range(third, third + fourth)),
+                // 4 to 6: the places past the bytes of the form repeat the
+                // first byte of the stretch.
+                _ => stretch.insert(third).insert(fourth)
+            }
+        }
+    }
+
+    // The bytes that the pair of shuffle tables at `first` matches under
+    // the bits of `mask`.
+    fn shuffled(self: Self, first: u64, mask: u64) -> Bits {
+        let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+            let low = array::get(self.nibbles, (first + (byte & 15)) as i64) as u64;
+            let high = array::get(self.nibbles, (first + 16 + (byte >> 4)) as i64) as u64;
+            (byte + 1, if (low & high & mask) != 0 { bytes.insert(byte) } else { bytes })
+        };
+        bytes
+    }
+
+    /// Whether `byte` leaves a state whose run is `Run::Table(table, bit)`.
+    pub fn leaves(self: Self, table: u64, bit: u8, byte: u8) -> bool {
+        table < self.tables() && (array::get(self.lookup, (table * 256 + (byte as u64)) as i64) & bit) != 0
+    }
+
+    /// The number of lookup tables of 256 bytes.
+    pub fn tables(self: Self) -> u64 {
+        array::dim(self.lookup, 0) / 256
+    }
+}
