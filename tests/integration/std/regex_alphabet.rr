@@ -1,0 +1,310 @@
+// Unit suite and coverage-guided fuzz driver for `std::regex::alphabet`: the
+// sets of bytes and of characters, and the division of the bytes into the
+// classes that a group of sets cannot tell apart.
+// Unit cases cover `Bits` across its words, `CharSet` beyond ASCII and under
+// complement, and the classes of a small lexer.
+// Fuzz targets compare both sets with a model that tests every range, and
+// check that classes are disjoint, cover every byte, and make up each set
+// they were refined with.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_alphabet %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_alphabet
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_alphabet%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_alphabet%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex alphabet/bits: unit
+// CHECK-NEXT: regex alphabet/char set: unit
+// CHECK-NEXT: regex alphabet/byte classes: unit
+// CHECK-NEXT: regex alphabet/bits & range model (fuzz):
+// CHECK-NEXT: regex alphabet/bits set algebra (fuzz):
+// CHECK-NEXT: regex alphabet/char set & range model (fuzz):
+// CHECK-NEXT: regex alphabet/byte classes (fuzz):
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::alphabet::char_set::CharSet;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ------------------------------ Unit cases ------------------------------
+
+fn test_bits() -> Outcome {
+    let lower = Bits::range(97, 122);
+    // A range that crosses the words of the set.
+    let wide = Bits::range(60, 200);
+    should_be(lower.len(), 26)
+        .and_then(|| should_be(lower.least(), 97))
+        .and_then(|| expect(
+            lower.contains(97) && lower.contains(122) && !lower.contains(96) && !lower.contains(123),
+            "the ends of a range"
+        ))
+        .and_then(|| should_be(wide.len(), 141))
+        .and_then(|| expect(
+            wide.contains(63) && wide.contains(64) && wide.contains(192) && !wide.contains(59) && !wide.contains(201),
+            "a range across words"
+        ))
+        .and_then(|| should_be(Bits::single(255).least(), 255))
+        .and_then(|| should_be(Bits::empty().least(), 256))
+        .and_then(|| expect(Bits::range(5, 4).is_empty(), "a range that ends before it starts"))
+        .and_then(|| should_be(Bits::full().len(), 256))
+        .and_then(|| expect(Bits::full().complement().is_empty(), "the complement of every number"))
+        .and_then(|| expect(lower.intersect(Bits::range(120, 130)) == Bits::range(120, 122), "intersect"))
+        .and_then(|| expect(lower.subtract(Bits::range(98, 122)) == Bits::single(97), "subtract"))
+        .and_then(|| should_be(lower.complement().len(), 230))
+        .and_then(|| expect(
+            Bits::empty().insert(3).insert(200) == Bits::single(3).union(Bits::single(200)),
+            "insert"
+        ))
+}
+
+fn test_char_set() -> Outcome {
+    let lower = CharSet::range('a', 'z');
+    let greek = CharSet::range('α', 'ω');
+    let both = lower.union(greek);
+    let rest = lower.complement();
+    expect(
+        lower.contains('a') && lower.contains('z') && !lower.contains('`') && !lower.contains('{'),
+        "the ends of a range"
+    )
+        .and_then(|| expect(greek.contains('λ') && !greek.contains('a'), "a range beyond ASCII"))
+        .and_then(|| should_be(greek.least(), 945))
+        .and_then(|| expect(both.contains('q') && both.contains('π') && !both.contains('A'), "union"))
+        .and_then(|| expect(both.intersect(greek) == greek && both.subtract(greek) == lower, "intersect and subtract"))
+        .and_then(|| expect(lower.intersect(greek).is_empty(), "disjoint sets"))
+        .and_then(|| expect(CharSet::range('z', 'a').is_empty(), "a range that ends before it starts"))
+        .and_then(|| expect(
+            CharSet::range('a', 'm').union(CharSet::range('n', 'z')) == lower,
+            "adjacent ranges join"
+        ))
+        .and_then(|| expect(!rest.contains('m') && rest.contains('猫') && rest.complement() == lower, "complement"))
+        .and_then(|| expect(CharSet::full().complement().is_empty(), "the complement of every character"))
+        // The characters after U+D7FF start at U+E000: no set holds a surrogate.
+        .and_then(|| should_be(CharSet::full().subtract(CharSet::range('\u{0}', '\u{d7ff}')).least(), 57344))
+}
+
+// The sets of three rules, `[a-z]+`, `[0-9]+` and `' '+`, divide the bytes
+// into four classes, numbered by their smallest byte.
+// Whether the class with this number is exactly `wanted`.
+fn byte_class_is(classes: ByteClasses, number: u64, wanted: Bits) -> bool {
+    match classes.class(number) {
+        Some(found) => found == wanted,
+        None => false
+    }
+}
+
+fn test_byte_classes() -> Outcome {
+    let lower = Bits::range(97, 122);
+    let digit = Bits::range(48, 57);
+    let space = Bits::single(32);
+    let classes = ByteClasses::whole().refine(lower).refine(digit).refine(space);
+    // A set that cuts a class makes two of it.
+    let finer = classes.refine(Bits::range(97, 102));
+    should_be(classes.len(), 4)
+        .and_then(|| expect(
+            byte_class_is(classes, 0, lower.union(digit).union(space).complement()),
+            "class 0 is every other byte"
+        ))
+        .and_then(|| expect(
+            byte_class_is(classes, 1, space)
+                && byte_class_is(classes, 2, digit)
+                && byte_class_is(classes, 3, lower),
+            "classes in the order of their smallest byte"
+        ))
+        .and_then(|| expect(classes.class(4).is_none(), "no fifth class"))
+        .and_then(|| expect(
+            classes.inside(lower) == Bits::single(3) && classes.inside(digit) == Bits::single(2),
+            "the classes of a set"
+        ))
+        .and_then(|| should_be(finer.len(), 5))
+        .and_then(|| expect(
+            finer.inside(lower) == Bits::range(3, 4) && finer.inside(Bits::range(97, 102)) == Bits::single(3),
+            "the classes of a set that was cut"
+        ))
+        .and_then(|| should_be(finer.refine(lower).len(), 5))
+}
+
+// ------------------------- Fuzz 1: Bits and a model -------------------------
+
+fn bits_of(ranges: List<(u8, u8)>) -> Bits {
+    ranges.fold_left(Bits::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(Bits::range(lo as u64, hi as u64))
+    })
+}
+
+fn in_ranges(ranges: List<(u8, u8)>, number: u64) -> bool {
+    ranges.any(|range| {
+        let (lo, hi) = range;
+        (lo as u64) <= number && number <= (hi as u64)
+    })
+}
+
+fn fuzz_bits_model(ranges: List<(u8, u8)>) -> Outcome {
+    let set = bits_of(ranges);
+    let (_, agree, count, first) = while [number = (0 as u64), agree = true, count = (0 as u64), first = (256 as u64)]
+        (number < 256) {
+        let inside = in_ranges(ranges, number);
+        (
+            number + 1,
+            agree && set.contains(number) == inside,
+            if inside { count + 1 } else { count },
+            if inside && first == 256 { number } else { first }
+        )
+    };
+    expect(agree, "`contains` disagrees with the ranges")
+        .and_then(|| should_be(set.len(), count))
+        .and_then(|| should_be(set.least(), first))
+}
+
+// ------------------------ Fuzz 2: Bits set algebra ------------------------
+
+fn fuzz_bits_algebra(input: (List<(u8, u8)>, List<(u8, u8)>)) -> Outcome {
+    let (first, second) = input;
+    let a = bits_of(first);
+    let b = bits_of(second);
+    let (_, agree) = while [number = (0 as u64), agree = true] (number < 256 && agree) {
+        let in_a = in_ranges(first, number);
+        let in_b = in_ranges(second, number);
+        (
+            number + 1,
+            a.union(b).contains(number) == (in_a || in_b)
+                && a.intersect(b).contains(number) == (in_a && in_b)
+                && a.subtract(b).contains(number) == (in_a && !in_b)
+                && a.complement().contains(number) == !in_a
+        )
+    };
+    expect(agree, "a set operation disagrees with the ranges")
+        .and_then(|| expect(a.subtract(b) == a.intersect(b.complement()), "subtract is intersect with the complement"))
+        .and_then(|| expect(a.union(b).complement() == a.complement().intersect(b.complement()), "De Morgan"))
+        .and_then(|| expect(a.complement().complement() == a, "complement twice"))
+}
+
+// ----------------------- Fuzz 3: CharSet and a model -----------------------
+
+fn chars_of(ranges: List<(char, char)>) -> CharSet {
+    ranges.fold_left(CharSet::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(CharSet::range(lo, hi))
+    })
+}
+
+fn in_char_ranges(ranges: List<(char, char)>, character: char) -> bool {
+    ranges.any(|range| {
+        let (lo, hi) = range;
+        lo <= character && character <= hi
+    })
+}
+
+fn fuzz_char_set_model(input: (List<(char, char)>, List<(char, char)>, List<char>)) -> Outcome {
+    let (first, second, probes) = input;
+    let a = chars_of(first);
+    let b = chars_of(second);
+    let agree = probes.all(|character| {
+        let in_a = in_char_ranges(first, character);
+        let in_b = in_char_ranges(second, character);
+        a.contains(character) == in_a
+            && a.union(b).contains(character) == (in_a || in_b)
+            && a.intersect(b).contains(character) == (in_a && in_b)
+            && a.subtract(b).contains(character) == (in_a && !in_b)
+            && a.complement().contains(character) == !in_a
+    });
+    expect(agree, "a set of characters disagrees with the ranges")
+        .and_then(|| expect(a.union(b) == b.union(a) && a.intersect(b) == b.intersect(a), "union and intersect commute"))
+        .and_then(|| expect(a.complement().complement() == a, "complement twice"))
+        .and_then(|| expect(a.intersect(a.complement()).is_empty(), "a set and its complement are disjoint"))
+        .and_then(|| expect(a.union(a.complement()) == CharSet::full(), "a set and its complement are every character"))
+}
+
+// ---------------------------- Fuzz 4: Byte classes ----------------------------
+
+// The union of the classes whose numbers are in `numbers`.
+fn bytes_of_classes(classes: ByteClasses, numbers: Bits) -> Bits {
+    let (_, set) = while [number = (0 as u64), set = Bits::empty()] (number < classes.len()) {
+        (number + 1, if numbers.contains(number) { set.union(classes.class(number).unwrap_or(Bits::empty())) } else { set })
+    };
+    set
+}
+
+fn fuzz_byte_classes(ranges: List<(u8, u8)>) -> Outcome {
+    let sets = ranges.map(|range| {
+        let (lo, hi) = range;
+        Bits::range(lo as u64, hi as u64)
+    });
+    let classes = sets.fold_left(ByteClasses::whole(), |classes, set| classes.refine(set));
+    // Every class has a member, they come in the order of their smallest
+    // members, and their sizes add up to every byte with no byte twice.
+    let (_, ordered, all, total, _) = while
+        [number = (0 as u64), ordered = true, all = Bits::empty(), total = (0 as u64), above = (0 as u64)]
+        (number < classes.len()) {
+        let class = classes.class(number).unwrap_or(Bits::empty());
+        (
+            number + 1,
+            ordered && !class.is_empty() && (number == 0 || class.least() >= above),
+            all.union(class),
+            total + class.len(),
+            class.least() + 1
+        )
+    };
+    expect(ordered, "a class is empty or out of order")
+        .and_then(|| expect(all == Bits::full() && total == 256, "the classes are not every byte once"))
+        .and_then(|| expect(
+            sets.all(|set| bytes_of_classes(classes, classes.inside(set)) == set),
+            "the classes of a set do not make up the set"
+        ))
+        .and_then(|| should_be(sets.fold_left(classes, |classes, set| classes.refine(set)).len(), classes.len()))
+        // The number of classes does not depend on the order of the sets.
+        .and_then(|| should_be(
+            sets.reverse().fold_left(ByteClasses::whole(), |classes, set| classes.refine(set)).len(),
+            classes.len()
+        ))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex alphabet")
+        .with_case("bits", test_bits)
+        .with_case("char set", test_char_set)
+        .with_case("byte classes", test_byte_classes)
+        .with_fuzz(
+            "bits & range model (fuzz)",
+            tuple2(u8_domain(), u8_domain()).list_with_len(0, 8),
+            fuzz_bits_model
+        )
+        .with_fuzz(
+            "bits set algebra (fuzz)",
+            tuple2(
+                tuple2(u8_domain(), u8_domain()).list_with_len(0, 6),
+                tuple2(u8_domain(), u8_domain()).list_with_len(0, 6)
+            ),
+            fuzz_bits_algebra
+        )
+        .with_fuzz(
+            "char set & range model (fuzz)",
+            tuple3(
+                tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 6),
+                tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 6),
+                char_domain().utf8().list_with_len(0, 16)
+            ),
+            fuzz_char_set_model
+        )
+        .with_fuzz(
+            "byte classes (fuzz)",
+            tuple2(u8_domain(), u8_domain()).list_with_len(0, 8),
+            fuzz_byte_classes
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

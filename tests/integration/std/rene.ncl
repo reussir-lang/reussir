@@ -30,6 +30,7 @@
     list = { kind = 'executable, path = "list.rr", fuzzer = true },
     option = { kind = 'executable, path = "option.rr" },
     random = { kind = 'executable, path = "random.rr" },
+    regex_alphabet = { kind = 'executable, path = "regex_alphabet.rr", fuzzer = true },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr", fuzzer = true },
     test_cli = { kind = 'executable, path = "test_cli.rr" },

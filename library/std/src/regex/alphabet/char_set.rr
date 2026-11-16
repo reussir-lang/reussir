@@ -1,0 +1,109 @@
+//! A set of characters.
+
+import std::collections::pure::list::List;
+import std::regex::alphabet::steps::Span;
+import std::regex::alphabet::steps::Steps;
+
+/// A set of characters: for every code point whether it is a member, held
+/// as the code points at which that changes.
+pub struct CharSet {
+    members: Steps
+}
+
+// One past the last code point.
+fn limit() -> u32 { 1114112 }
+
+// `members` with `value` over every span of `spans` whose value is `wanted`.
+fn fill_spans(members: Steps, spans: List<Span>, wanted: bool, value: bool) -> Steps {
+    match spans {
+        Nil => members,
+        Cons(span, rest) => {
+            let members = if span.value == wanted { members.fill(span.start, span.end, value) } else { members };
+            fill_spans(members, rest, wanted, value)
+        }
+    }
+}
+
+impl CharSet {
+    pub fn empty() -> Self {
+        CharSet { members: Steps::constant(false) }
+    }
+
+    /// Every character: the code points up to U+10FFFF without the
+    /// surrogates U+D800 to U+DFFF.
+    pub fn full() -> Self {
+        CharSet { members: Steps::constant(false).fill(0, 55296, true).fill(57344, limit(), true) }
+    }
+
+    /// The characters whose code points run from `start` up to `end`, `end`
+    /// not included.
+    pub fn code_points(start: u32, end: u32) -> Self {
+        let span = CharSet { members: Steps::constant(false).fill(start, end, true) };
+        span.intersect(CharSet::full())
+    }
+
+    /// The characters from `lo` to `hi`, both included.
+    pub fn range(lo: char, hi: char) -> Self {
+        CharSet::code_points(lo as u32, (hi as u32) + 1)
+    }
+
+    pub fn single(character: char) -> Self {
+        CharSet::range(character, character)
+    }
+
+    /// O(log n).
+    pub fn contains(self: Self, character: char) -> bool {
+        self.members.at(character as u32)
+    }
+
+    pub fn is_empty(self: Self) -> bool {
+        self.members.len() == 1 && !self.members.at(0)
+    }
+
+    /// The code point of the smallest member, or one past the last code
+    /// point when there is none.
+    pub fn least(self: Self) -> u64 {
+        if self.members.at(0) { 0 } else {
+            self.members.next_key(0).unwrap_or(limit()) as u64
+        }
+    }
+
+    /// The stretches of members in order, each from `start` up to `end`.
+    pub fn spans(self: Self) -> List<Span> {
+        self.members.spans(limit()).filter(|span| span.value)
+    }
+
+    // The set operations walk the set with fewer changes and fill the other,
+    // so a small set against a large one costs the small one times a
+    // logarithm.
+
+    pub fn union(self: Self, other: Self) -> Self {
+        if self.members.len() < other.members.len() { other.union(self) } else {
+            CharSet { members: fill_spans(self.members, other.members.spans(limit()), true, true) }
+        }
+    }
+
+    pub fn intersect(self: Self, other: Self) -> Self {
+        if self.members.len() < other.members.len() { other.intersect(self) } else {
+            CharSet { members: fill_spans(self.members, other.members.spans(limit()), false, false) }
+        }
+    }
+
+    /// The members of `self` that are not in `other`.
+    pub fn subtract(self: Self, other: Self) -> Self {
+        CharSet { members: fill_spans(self.members, other.members.spans(limit()), true, false) }
+    }
+
+    /// The characters that are not in `self`.
+    pub fn complement(self: Self) -> Self {
+        CharSet::full().subtract(self)
+    }
+}
+
+impl PartialEq for CharSet {
+    fn eq(self: Self, other: Self) -> bool {
+        self.members == other.members
+    }
+}
+
+impl Eq for CharSet {}

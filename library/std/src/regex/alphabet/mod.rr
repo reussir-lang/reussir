@@ -1,0 +1,23 @@
+//! Sets of bytes and of characters for a regex, and the classes of bytes.
+//!
+//! A matcher reads bytes. Two bytes that lie in exactly the same sets of
+//! bytes of its regexes behave alike, so the bytes fall into classes, and an
+//! automaton needs one transition per class instead of one per byte:
+//!
+//! ```text
+//! let classes = ByteClasses::whole().refine(lower).refine(digit);
+//! // three classes: [a-z], [0-9], every other byte
+//! let lower_classes = classes.inside(lower);
+//! ```
+//!
+//! - `bits`: `Bits`, a set of numbers below 256: a set of bytes, or a set
+//!   of classes.
+//! - `byte_classes`: `ByteClasses`, the classes of bytes.
+//! - `char_set`: `CharSet`, a set of characters.
+//! - `steps`: `Steps`, in or out for every code point, changing at a few of
+//!   them, on the WAVL map; a `CharSet` is one.
+
+pub mod bits;
+pub mod byte_classes;
+pub mod char_set;
+pub mod steps;

@@ -1,0 +1,96 @@
+//! The classes of bytes that a group of sets cannot tell apart.
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+
+/// The bytes divided into classes: disjoint sets that together hold every
+/// byte, in the order of their smallest members. The number of a class is
+/// its place in that order, so there are at most 256 numbers, from zero
+/// without gaps.
+pub struct ByteClasses {
+    classes: List<Bits>
+}
+
+// Puts `class` into `sorted` at its place by smallest member.
+fn place(sorted: List<Bits>, class: Bits) -> List<Bits> {
+    match sorted {
+        Nil => List::Cons { class, List::Nil },
+        Cons(first, rest) => if class.least() < first.least() {
+            List::Cons { class, List::Cons { first, rest } }
+        } else {
+            List::Cons { first, place(rest, class) }
+        }
+    }
+}
+
+// `class` cut into `inner` and `outer`, in front of `rest`: the part with the
+// smallest member of `class` stays in front, the other finds its place.
+fn cut(inner: Bits, outer: Bits, rest: List<Bits>) -> List<Bits> {
+    if inner.least() < outer.least() {
+        List::Cons { inner, place(rest, outer) }
+    } else {
+        List::Cons { outer, place(rest, inner) }
+    }
+}
+
+fn refine_classes(classes: List<Bits>, set: Bits) -> List<Bits> {
+    match classes {
+        Nil => List::Nil,
+        Cons(class, rest) => {
+            let rest = refine_classes(rest, set);
+            let inner = class.intersect(set);
+            let outer = class.subtract(set);
+            if inner.is_empty() || outer.is_empty() {
+                List::Cons { class, rest }
+            } else {
+                cut(inner, outer, rest)
+            }
+        }
+    }
+}
+
+fn mark_inside(classes: List<Bits>, set: Bits, number: u64, marked: Bits) -> Bits {
+    match classes {
+        Nil => marked,
+        Cons(class, rest) => {
+            let marked = if class.intersect(set).is_empty() { marked } else { marked.insert(number) };
+            mark_inside(rest, set, number + 1, marked)
+        }
+    }
+}
+
+fn nth(classes: List<Bits>, number: u64) -> Option<Bits> {
+    match classes {
+        Nil => Option::None,
+        Cons(class, rest) => if number == 0 { Option::Some { class } } else { nth(rest, number - 1) }
+    }
+}
+
+impl ByteClasses {
+    /// One class of all bytes: nothing tells two bytes apart yet.
+    pub fn whole() -> Self {
+        ByteClasses { classes: List::Cons { Bits::full(), List::Nil } }
+    }
+
+    /// Splits every class into its part inside `set` and its part outside.
+    pub fn refine(self: Self, set: Bits) -> Self {
+        ByteClasses { classes: refine_classes(self.classes, set) }
+    }
+
+    /// The classes that make up `set`, by number. `self` must have been
+    /// refined with `set`.
+    pub fn inside(self: Self, set: Bits) -> Bits {
+        mark_inside(self.classes, set, 0, Bits::empty())
+    }
+
+    /// The number of classes.
+    pub fn len(self: Self) -> u64 {
+        self.classes.len()
+    }
+
+    /// The bytes of the class with this number.
+    pub fn class(self: Self, number: u64) -> Option<Bits> {
+        nth(self.classes, number)
+    }
+}
