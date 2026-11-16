@@ -95,6 +95,28 @@ bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
                               bool isNonTemporal, bool isInvariant,
                               bool isInvariantGroup, uint64_t alignment);
 
+// How `vector.reduction` combines lanes, as `mlir::vector::CombiningKind`.
+typedef enum ReussirVectorCombiningKind {
+  ReussirVectorCombiningKindAdd = 0,
+  ReussirVectorCombiningKindMul = 1,
+  ReussirVectorCombiningKindMinUI = 2,
+  ReussirVectorCombiningKindMinSI = 3,
+  ReussirVectorCombiningKindMinNumF = 4,
+  ReussirVectorCombiningKindMaxUI = 5,
+  ReussirVectorCombiningKindMaxSI = 6,
+  ReussirVectorCombiningKindMaxNumF = 7,
+  ReussirVectorCombiningKindAnd = 8,
+  ReussirVectorCombiningKindOr = 9,
+  ReussirVectorCombiningKindXor = 10,
+  ReussirVectorCombiningKindMinimumF = 11,
+  ReussirVectorCombiningKindMaximumF = 12,
+} ReussirVectorCombiningKind;
+
+// `#vector.kind<...>`, the `kind` attribute of a `vector.reduction`.
+MlirAttribute
+reussirVectorCombiningKindAttrGet(MlirContext context,
+                                  ReussirVectorCombiningKind kind);
+
 // The flags of a `ptr.ptr_add`, as `mlir::ptr::PtrAddFlags`.
 typedef enum ReussirPtrAddFlags {
   ReussirPtrAddFlagsNone = 0,

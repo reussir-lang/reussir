@@ -48,6 +48,26 @@ pub enum ReussirPtrAddFlags {
     Inbounds = 3,
 }
 
+/// How a `vector.reduction` combines lanes. Mirrors
+/// `mlir::vector::CombiningKind`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReussirVectorCombiningKind {
+    Add = 0,
+    Mul = 1,
+    MinUI = 2,
+    MinSI = 3,
+    MinNumF = 4,
+    MaxUI = 5,
+    MaxSI = 6,
+    MaxNumF = 7,
+    And = 8,
+    Or = 9,
+    Xor = 10,
+    MinimumF = 11,
+    MaximumF = 12,
+}
+
 /// Reference-count atomicity. Mirrors `reussir::AtomicKind`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -585,6 +605,12 @@ unsafe extern "C" {
         is_invariant_group: bool,
         alignment: u64,
     ) -> bool;
+
+    /// `#vector.kind<...>`, the `kind` attribute of a `vector.reduction`.
+    pub fn reussirVectorCombiningKindAttrGet(
+        context: mlir_sys::MlirContext,
+        kind: ReussirVectorCombiningKind,
+    ) -> mlir_sys::MlirAttribute;
 
     /// Set the flags of a `ptr.ptr_add`, an operation property. Returns
     /// false if the operation is not a `ptr.ptr_add`.

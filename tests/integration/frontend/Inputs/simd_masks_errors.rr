@@ -1,0 +1,14 @@
+import core::simd;
+
+// ERR-DAG: `core::simd::add` expects 2 argument(s) and an optional mask, got 4
+fn many(a: Simd<[i32; 4]>, m: Simd<[bool; 4]>) -> Simd<[i32; 4]> { simd::add(a, a, m, m) }
+// ERR-DAG: expected `Simd<[bool; 4]>`
+fn shaped(a: Simd<[i32; 4]>, m: Simd<[bool; 8]>) -> Simd<[i32; 4]> { simd::add(a, a, m) }
+// ERR-DAG: `core::simd::any` takes a mask, found `Simd<[i32; 4]>`
+fn lanes(a: Simd<[i32; 4]>) -> bool { simd::any(a) }
+// ERR-DAG: `core::simd::first_set` takes a one-dimensional mask, found `Simd<[bool; 2, 4]>`
+fn nested(m: Simd<[bool; 2, 4]>) -> u64 { simd::first_set(m) }
+// ERR-DAG: `core::simd::mask_first` makes a mask from one count per dimension, not a `Simd<[bool; 2, 4]>` from 1 count(s)
+fn counts(n: u64) -> Simd<[bool; 2, 4]> { simd::mask_first<Simd<[bool; 2, 4]>>(n) }
+// ERR-DAG: `core::simd::mask_first` makes a mask from one count per dimension, not a `Simd<[i32; 4]>` from 1 count(s)
+fn values(n: u64) -> Simd<[i32; 4]> { simd::mask_first<Simd<[i32; 4]>>(n) }

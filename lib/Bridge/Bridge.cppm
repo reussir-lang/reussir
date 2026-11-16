@@ -71,6 +71,7 @@ module;
 #include <mlir/Pass/PassManager.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/LogicalResult.h>
+#include <mlir/Target/LLVMIR/Dialect/ArmSVE/ArmSVEToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMIRToLLVMTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
@@ -412,6 +413,7 @@ std::unique_ptr<mlir::MLIRContext> buildMLIRContext() {
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   registerLLVMDialectTranslation(registry);
   registerBuiltinDialectTranslation(registry);
+  registerArmSVEDialectTranslation(registry);
   auto context = std::make_unique<mlir::MLIRContext>(registry);
   context->loadAllAvailableDialects();
   return context;

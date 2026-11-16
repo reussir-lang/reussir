@@ -1,0 +1,18 @@
+import core::simd;
+
+// The tail mask of a loop is the SVE `whilelt`.
+// CHECK-LABEL: define {{.*}}<vscale x 16 x i1> @{{.*}}tail
+// CHECK: call <vscale x 16 x i1> @llvm.aarch64.sve.whilelt.nxv16i1.i64(i64 0, i64 %0)
+pub fn tail(n: u64) -> Simd<[bool; [16]]> { simd::mask_first<Simd<[bool; [16]]>>(n) }
+
+// A predicated addition under the tail mask.
+// CHECK-LABEL: define {{.*}}<vscale x 4 x float> @{{.*}}masked
+// CHECK: %[[SUM:.*]] = fadd <vscale x 4 x float> %0, %1
+// CHECK: select <vscale x 4 x i1> %{{.*}}, <vscale x 4 x float> %[[SUM]], <vscale x 4 x float> %0
+pub fn masked(a: Simd<[f32; [4]]>, b: Simd<[f32; [4]]>, n: u64) -> Simd<[f32; [4]]> {
+    simd::add(a, b, simd::mask_first<Simd<[bool; [4]]>>(n))
+}
+
+// CHECK-LABEL: define {{.*}}i64 @{{.*}}position
+// CHECK: call i32 @llvm.vector.reduce.umin.nxv16i32
+pub fn position(m: Simd<[bool; [16]]>) -> u64 { simd::first_set(m) }

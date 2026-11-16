@@ -45,6 +45,10 @@ pub fn insert<V, T>(v: V, x: T, index: u64) -> V;
 
 // The lanewise operations take vectors of one type `V` and apply to each
 // lane. Signedness follows the lane type.
+//
+// Each of them, and each comparison, also accepts a mask as a last argument.
+// A lane whose mask bit is clear keeps the lane of the first operand, or is
+// false in a comparison, and never traps.
 
 /// Lanewise `a + b`. Integer lanes wrap.
 #[lang("core::simd::add")]
@@ -139,3 +143,28 @@ pub fn ge<V, M>(a: V, b: V) -> M;
 /// The lanes of `a` where the mask is set and of `b` elsewhere.
 #[lang("core::simd::select")]
 pub fn select<V, M>(mask: M, a: V, b: V) -> V;
+
+// Masks. `M` is a mask type.
+
+/// The mask whose leading `n` lanes are set. A call passes one count per
+/// dimension. A count past the extent sets every lane, which makes
+/// `mask_first(len - i)` the mask of the lanes left in a loop over `len`.
+#[lang("core::simd::mask_first")]
+pub fn mask_first<M>(n: u64) -> M;
+
+/// Whether some lane of the mask is set.
+#[lang("core::simd::any")]
+pub fn any<M>(mask: M) -> bool;
+
+/// Whether every lane of the mask is set.
+#[lang("core::simd::all")]
+pub fn all<M>(mask: M) -> bool;
+
+/// The number of set lanes.
+#[lang("core::simd::count")]
+pub fn count<M>(mask: M) -> u64;
+
+/// The index of the first set lane of a one-dimensional mask, or its number
+/// of lanes when none is set.
+#[lang("core::simd::first_set")]
+pub fn first_set<M>(mask: M) -> u64;
