@@ -178,6 +178,23 @@ fn occurs(g: GenericId, ty: Ty<'_>, subst: &FxHashMap<GenericId, Ty<'_>>) -> boo
     }
 }
 
+/// Whether two builtin impls of one trait for vectors, with the self types
+/// `a` and `b`, apply to a common vector. `None` when either is not such a
+/// target (`Simd<[T; ..]>`, a vector without extents). The impls share a
+/// header shape and are told apart by their clauses (`impl<T: BitAnd> BitAnd
+/// for Simd<[T; ..]>` beside `impl BitAnd for Simd<[bool; ..]>`), so they
+/// overlap when both leave the element type to a parameter or both name the
+/// same one.
+pub fn vector_impls_overlap<'tcx>(a: Ty<'tcx>, b: Ty<'tcx>) -> Option<bool> {
+    let elem = |ty: Ty<'tcx>| match *ty.kind() {
+        TyKind::Simd { elem, dims: [], .. } => Some(elem),
+        _ => None,
+    };
+    let (a, b) = (elem(a)?, elem(b)?);
+    let parameter = |ty: Ty<'tcx>| matches!(ty.kind(), TyKind::Generic(_));
+    Some(a == b || (parameter(a) && parameter(b)))
+}
+
 fn unify_ty<'tcx>(
     a: Ty<'tcx>,
     b: Ty<'tcx>,
@@ -255,6 +272,23 @@ fn unify_ty<'tcx>(
         }
         (TyKind::Array { elem: x, dims: dx }, TyKind::Array { elem: y, dims: dy }) => {
             dx == dy && unify_ty(*x, *y, vars, subst)
+        }
+        // A vector without extents is the target of a builtin impl
+        // (`impl Add for Simd<[T; ..]>`): every vector of that element type.
+        (
+            TyKind::Simd {
+                elem: x,
+                dims: dx,
+                scalable: sx,
+            },
+            TyKind::Simd {
+                elem: y,
+                dims: dy,
+                scalable: sy,
+            },
+        ) => {
+            (dx.is_empty() || dy.is_empty() || (dx == dy && sx == sy))
+                && unify_ty(*x, *y, vars, subst)
         }
         _ => false,
     }

@@ -1,0 +1,39 @@
+// A builtin impl for vectors names the element type and leaves the extents
+// out with `..`: it applies to every vector of that element type.
+
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %s --emit mir --no-source-locations -o %t.mir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.rt.mir
+// RUN: diff %t.mir %t.rt.mir
+// RUN: %rrc %s --package-name ops --emit rri -o %t.rri
+// RUN: %FileCheck %s --check-prefix=RRI < %t.rri
+// RUN: %rrc %S/Inputs/simd_impl_any_extents_app.rr --package-name app --extern ops=%t.rri --emit mir --no-source-locations -o - | %FileCheck %S/Inputs/simd_impl_any_extents_app.rr
+// RUN: %not %rrc %S/Inputs/simd_impl_any_extents_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_impl_any_extents_errors.rr
+
+#[lang("add")]
+pub trait Plus { fn add(self: Self, other: Self) -> Self; }
+#[lang("bit_and")]
+pub trait And { fn bitand(self: Self, other: Self) -> Self; }
+
+impl Plus for i32 { }
+impl Plus for f32 { }
+impl And for i32 { }
+
+// HIR-DAG: impl<[[T:\$[0-9]+]]: Plus> #Plus::<Simd<{{\[}}[[T]]; ..{{\]}}>>
+// RRI-DAG: impl<[[T:\$[0-9]+]]: ops::Plus> #ops::Plus::<Simd<{{\[}}[[T]]; ..{{\]}}>>
+impl<T: Plus> Plus for Simd<[T; ..]> { }
+// Two impls of one trait are told apart by the element type.
+// HIR-DAG: impl<[[T:\$[0-9]+]]: And> #And::<Simd<{{\[}}[[T]]; ..{{\]}}>>
+// HIR-DAG: impl #And::<Simd<{{\[}}bool; ..{{\]}}>>
+// RRI-DAG: impl #ops::And::<Simd<{{\[}}bool; ..{{\]}}>>
+impl<T: And> And for Simd<[T; ..]> { }
+impl And for Simd<[bool; ..]> { }
+
+pub fn added<V: Plus>(a: V) -> V { a }
+pub fn masked<V: And>(a: V) -> V { a }
+
+pub fn one_extent(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { added(a) }
+pub fn two_extents(a: Simd<[i32; 2, 8]>) -> Simd<[i32; 2, 8]> { added(a) }
+pub fn by_element(a: Simd<[i32; 4]>) -> Simd<[i32; 4]> { masked(a) }
+pub fn by_mask(a: Simd<[bool; 8]>) -> Simd<[bool; 8]> { masked(a) }

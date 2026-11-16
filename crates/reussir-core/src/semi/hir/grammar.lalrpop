@@ -511,6 +511,12 @@ Ty: raw::Ty = {
         => raw::Ty::Array { elem: Box::new(elem), dims },
     "DefaultPlacement" => raw::Ty::DefaultPlacement,
     "GenericAddrSpace" => raw::Ty::GenericAddrSpace,
+    // The target of a builtin impl: every vector of the element type.
+    "Simd" "<" "[" <elem:Ty> ";" ".." "]" ">" => raw::Ty::Simd {
+        elem: Box::new(elem),
+        dims: Vec::new(),
+        scalable: false,
+    },
     <l:@L> "Simd" "<" "[" <elem:Ty> ";" <dims:CommaPlus<SimdExtent>> "]" ">" <r:@R> =>? {
         // Only the last extent may be scalable.
         let last = dims.len() - 1;

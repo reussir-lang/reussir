@@ -811,16 +811,23 @@ impl Parser<'_> {
     /// then a runtime operand of the constructing intrinsic), mirroring
     /// MLIR's `memref<?x…>`. The grammar accepts any expression so the tree
     /// stays forward-compatible with constant expressions; what an extent
-    /// may evaluate to is the elaborator's concern.
+    /// may evaluate to is the elaborator's concern. `[T; ..]` leaves the
+    /// extents out altogether.
     fn array_type(&mut self) -> CompletedMarker {
         let m = self.start();
         self.bump();
         self.type_();
         self.expect(Semicolon);
-        self.array_extent();
-        while self.at(Comma) {
+        if self.at(DotDot) {
+            let any = self.start();
             self.bump();
+            any.complete(self, AnyExtents);
+        } else {
             self.array_extent();
+            while self.at(Comma) {
+                self.bump();
+                self.array_extent();
+            }
         }
         self.expect(RBracket);
         m.complete(self, ArrayType)

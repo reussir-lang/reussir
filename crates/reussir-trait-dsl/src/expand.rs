@@ -12,7 +12,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 
-use crate::ast::{AssocTy, Input, Item, MethodSig, TypeRef};
+use crate::ast::{AssocTy, ImplTarget, Input, Item, MethodSig, TypeRef};
 
 /// The closed vocabulary an impl clause may name (the scalars and the
 /// `Generic` address space), with the type
@@ -179,17 +179,29 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         ),
                     ));
                 }
+                if let Some((_, bound)) = &decl.generic
+                    && !index.contains_key(&bound.to_string())
+                {
+                    return Err(syn::Error::new_spanned(
+                        bound,
+                        format!("`impl` bounds its parameter by undeclared trait `{bound}`"),
+                    ));
+                }
                 for ty in &decl.self_tys {
-                    if scalar_ctor(ty).is_none() {
-                        return Err(unknown_scalar(ty));
+                    let parameter = decl.generic.as_ref().map(|(name, _)| name);
+                    let is_parameter =
+                        matches!(ty, ImplTarget::Simd(elem) if Some(elem) == parameter);
+                    if !is_parameter && scalar_ctor(ty.ident()).is_none() {
+                        return Err(unknown_scalar(ty.ident()));
                     }
+                    let spelled = ty.spelling();
                     if seen_impl
-                        .insert((tname.clone(), ty.to_string()), ())
+                        .insert((tname.clone(), spelled.clone()), ())
                         .is_some()
                     {
                         return Err(syn::Error::new_spanned(
-                            ty,
-                            format!("duplicate impl of `{tname}` for `{ty}`"),
+                            ty.ident(),
+                            format!("duplicate impl of `{tname}` for `{spelled}`"),
                         ));
                     }
                 }
@@ -272,7 +284,33 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         decl.self_tys
             .iter()
             .map(|ty| {
-                let ctor = scalar_ctor(ty).expect("validated above");
+                // A vector target leaves the extents out: impl matching
+                // reads such a vector as every vector of the element type.
+                let parameter = decl.generic.as_ref().map(|(name, _)| name);
+                let (ctor, generics, where_clauses) = match ty {
+                    ImplTarget::Scalar(ident) => (
+                        scalar_ctor(ident).expect("validated above"),
+                        quote!(vec![]),
+                        quote!(vec![]),
+                    ),
+                    ImplTarget::Simd(elem) if Some(elem) == parameter => {
+                        let (_, bound) = decl.generic.as_ref().expect("matched its parameter");
+                        let bound = &field_idents[index[&bound.to_string()]];
+                        (
+                            quote!(tcx.mk_simd(tcx.mk_generic(self_g), &[], false)),
+                            quote!(vec![self_g]),
+                            quote!(vec![crate::semi::traits::Obligation::Trait(self_ref(#bound))]),
+                        )
+                    }
+                    ImplTarget::Simd(elem) => {
+                        let elem = scalar_ctor(elem).expect("validated above");
+                        (
+                            quote!(tcx.mk_simd(#elem, &[], false)),
+                            quote!(vec![]),
+                            quote!(vec![]),
+                        )
+                    }
+                };
                 let assoc_tys = traits[*t].assoc_tys.len();
                 let id = proc_macro2::Literal::u32_unsuffixed(next_impl);
                 next_impl += 1;
@@ -281,13 +319,13 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                         let self_ty = #ctor;
                         db.add_impl(crate::semi::traits::def::ImplDef {
                             id: crate::semi::traits::ImplId(#id),
-                            generics: vec![],
+                            generics: #generics,
                             trait_ref: crate::semi::traits::TraitRef {
                                 trait_id: #field,
                                 args: vec![self_ty],
                             },
                             self_ty,
-                            where_clauses: vec![],
+                            where_clauses: #where_clauses,
                             methods: vec![],
                             assoc_consts: vec![],
                             assoc_tys: vec![None; #assoc_tys],
@@ -489,6 +527,28 @@ mod tests {
             trait Bad { fn bad(self: Self, other: Self::Missing); }
         });
         assert!(msg.contains("no associated type `Missing`"), "{msg}");
+    }
+
+    #[test]
+    fn vector_targets_leave_the_extents_out() {
+        let out = expand_ok(quote! {
+            trait Add { fn add(self: Self, other: Self) -> Self; }
+            trait Not { fn not(self: Self) -> Self; }
+            impl Add for i32;
+            impl<T: Add> Add for Simd<[T; ..]>;
+            impl Not for bool | Simd<[bool; ..]>;
+        });
+        assert_eq!(out.matches("mk_simd").count(), 2);
+        assert_eq!(out.matches("generics : vec ! [self_g]").count(), 1);
+        assert_eq!(
+            out.matches("Obligation :: Trait (self_ref (add))").count(),
+            1
+        );
+        let msg = expand_err(quote! {
+            trait Add;
+            impl Add for Simd<[T; ..]>;
+        });
+        assert!(msg.contains("unknown scalar `T`"), "{msg}");
     }
 
     #[test]

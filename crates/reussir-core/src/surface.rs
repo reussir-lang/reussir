@@ -429,6 +429,10 @@ pub enum TypeKind {
     /// per dimension (`[f64; 512]`, `[f64; 5, 16, 8]`). The extents are kept
     /// as expressions; the elaborator decides which forms it can evaluate.
     TypeArray(Type, SmallVec<[ArrayExtent; 2]>),
+    /// `[T; ..]`: an element type with the extents left out. Only the
+    /// argument of `Simd` in the target of a builtin impl, where it stands
+    /// for every vector of that element type.
+    TypeArrayAny(Type),
 }
 
 /// One dimension of an array (or tensor) type: an extent expression, `_`
@@ -482,6 +486,9 @@ impl Type {
                 let elem = nodes(node)
                     .find(|n| is_type_kind(n.kind()))
                     .expect("array element type");
+                if node.children().any(|n| n.kind() == AnyExtents) {
+                    return TypeKind::TypeArrayAny(Type::new(elem));
+                }
                 let extents = node
                     .children()
                     .filter(|n| {

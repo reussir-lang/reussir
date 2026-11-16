@@ -173,7 +173,10 @@ impl<'a, 'tcx> SelectCtxt<'a, 'tcx> {
         };
 
         // The direct candidates: impls of the goal trait bucketed under this
-        // head. Coherence makes at most one match; commit to it.
+        // head. Coherence makes at most one of them apply; the builtin impls
+        // of a vector share a header shape and differ in their clauses, so a
+        // failing clause moves on to the next candidate.
+        let mut failed_clause = None;
         for &id in db.impls_for(goal.trait_id, head) {
             let imp = db.impl_def(id);
             let Some(subst) = match_impl(&imp.trait_ref.args, goal.args.as_slice(), imp) else {
@@ -190,8 +193,6 @@ impl<'a, 'tcx> SelectCtxt<'a, 'tcx> {
                 .copied()
                 .zip(args.iter().copied())
                 .collect();
-            // A failing clause on the unique applicable impl is the root
-            // cause; bubble the *inner* goal for the diagnostic.
             let sub = imp
                 .where_clauses
                 .iter()
@@ -207,12 +208,26 @@ impl<'a, 'tcx> SelectCtxt<'a, 'tcx> {
                     };
                     self.select_trait(&inst, depth + 1)
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>();
+            let sub = match sub {
+                Ok(sub) => sub,
+                Err(err @ SelectError::DepthLimit(_)) => return Err(err),
+                Err(err) => {
+                    failed_clause.get_or_insert(err);
+                    continue;
+                }
+            };
             return Ok(Evidence::Impl {
                 impl_id: id,
                 args,
                 sub,
             });
+        }
+
+        // A failing clause on an applicable impl is the root cause; bubble
+        // the *inner* goal for the diagnostic.
+        if let Some(err) = failed_clause {
+            return Err(err);
         }
 
         Err(SelectError::NoImpl(goal.clone()))
