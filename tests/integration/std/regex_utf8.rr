@@ -1,0 +1,239 @@
+// Unit suite and coverage-guided fuzz driver for `std::regex::alphabet::utf8`:
+// the UTF-8 encodings of a set of characters as sequences of byte ranges.
+// Unit cases spell out the sequences of small sets and of every character.
+// The fuzz target checks, for random sets, that the sequences are in order,
+// that each is exactly the encodings of a stretch of members, and that
+// together they hold as many strings as the set has members.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_utf8 %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_utf8
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_utf8%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_utf8%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex utf8/small sets: unit
+// CHECK-NEXT: regex utf8/across lengths: unit
+// CHECK-NEXT: regex utf8/every character: unit
+// CHECK-NEXT: regex utf8/sequences & members (fuzz):
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::alphabet::steps::Span;
+import std::regex::alphabet::utf8::Utf8Range;
+import std::regex::alphabet::utf8::Utf8Sequence;
+import std::regex::alphabet::utf8::fold_sequences;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ------------------------------ Unit cases ------------------------------
+
+fn r(start: u32, end: u32) -> Utf8Range {
+    Utf8Range { start: start as u8, end: end as u8 }
+}
+
+fn one(a: Utf8Range) -> Utf8Sequence { Utf8Sequence::One { a } }
+fn two(a: Utf8Range, b: Utf8Range) -> Utf8Sequence { Utf8Sequence::Two { a, b } }
+fn three(a: Utf8Range, b: Utf8Range, c: Utf8Range) -> Utf8Sequence { Utf8Sequence::Three { a, b, c } }
+fn four(a: Utf8Range, b: Utf8Range, c: Utf8Range, d: Utf8Range) -> Utf8Sequence { Utf8Sequence::Four { a, b, c, d } }
+
+// The sequences of `set`, in the order they are given.
+fn sequences(set: CharSet) -> List<Utf8Sequence> {
+    fold_sequences(
+        set,
+        List::Nil,
+        |found: List<Utf8Sequence>, sequence: Utf8Sequence| List::Cons { sequence, found }
+    ).reverse()
+}
+
+fn same(found: List<Utf8Sequence>, wanted: List<Utf8Sequence>) -> bool {
+    match found {
+        Nil => wanted.is_nil(),
+        Cons(sequence, rest) => match wanted {
+            Nil => false,
+            Cons(other, others) => sequence == other && same(rest, others)
+        }
+    }
+}
+
+fn list2(a: Utf8Sequence, b: Utf8Sequence) -> List<Utf8Sequence> {
+    List::Cons { a, List::Cons { b, List::Nil } }
+}
+
+fn test_small() -> Outcome {
+    let greek = sequences(CharSet::range('α', 'ω'));
+    let ascii = sequences(CharSet::range(' ', '~'));
+    let euro = sequences(CharSet::single('€'));
+    let face = sequences(CharSet::single('😀'));
+    expect(
+        same(greek, list2(two(r(0xCE, 0xCE), r(0xB1, 0xBF)), two(r(0xCF, 0xCF), r(0x80, 0x89)))),
+        "[α-ω] is CE [B1-BF] and CF [80-89]"
+    )
+        .and_then(|| expect(same(ascii, List::Cons { one(r(0x20, 0x7E)), List::Nil }), "ASCII is one byte range"))
+        .and_then(|| expect(
+            same(euro, List::Cons { three(r(0xE2, 0xE2), r(0x82, 0x82), r(0xAC, 0xAC)), List::Nil }),
+            "€ is E2 82 AC"
+        ))
+        .and_then(|| expect(
+            same(face, List::Cons { four(r(0xF0, 0xF0), r(0x9F, 0x9F), r(0x98, 0x98), r(0x80, 0x80)), List::Nil }),
+            "U+1F600 is F0 9F 98 80"
+        ))
+        .and_then(|| expect(sequences(CharSet::empty()).is_nil(), "the empty set has no sequence"))
+        .and_then(|| should_be(four(r(0xF0, 0xF0), r(0x9F, 0x9F), r(0x98, 0x98), r(0x80, 0x80)).len(), 4))
+}
+
+// A stretch is cut where the encoding gets longer, and where the last bytes
+// would not run over all of 80 to BF.
+fn test_across() -> Outcome {
+    // U+0061 to U+00E9: one byte up to 7F, then C2 [80-BF] and C3 [80-A9].
+    let latin = sequences(CharSet::range('a', 'é'));
+    let wanted = List::Cons {
+        one(r(0x61, 0x7F)),
+        list2(two(r(0xC2, 0xC2), r(0x80, 0xBF)), two(r(0xC3, 0xC3), r(0x80, 0xA9)))
+    };
+    // Two stretches of one set come one after the other.
+    let both = sequences(CharSet::range('a', 'c').union(CharSet::range('α', 'ω')));
+    expect(same(latin, wanted), "a stretch across one and two bytes")
+        .and_then(|| expect(
+            same(both, List::Cons {
+                one(r(0x61, 0x63)),
+                list2(two(r(0xCE, 0xCE), r(0xB1, 0xBF)), two(r(0xCF, 0xCF), r(0x80, 0x89)))
+            }),
+            "the sequences of two stretches"
+        ))
+}
+
+// Every character: the nine sequences of well-formed UTF-8.
+fn test_every() -> Outcome {
+    let tail = r(0x80, 0xBF);
+    let wanted = List::Cons { one(r(0x00, 0x7F)),
+        List::Cons { two(r(0xC2, 0xDF), tail),
+        List::Cons { three(r(0xE0, 0xE0), r(0xA0, 0xBF), tail),
+        List::Cons { three(r(0xE1, 0xEC), tail, tail),
+        List::Cons { three(r(0xED, 0xED), r(0x80, 0x9F), tail),
+        List::Cons { three(r(0xEE, 0xEF), tail, tail),
+        List::Cons { four(r(0xF0, 0xF0), r(0x90, 0xBF), tail, tail),
+        List::Cons { four(r(0xF1, 0xF3), tail, tail, tail),
+        List::Cons { four(r(0xF4, 0xF4), r(0x80, 0x8F), tail, tail), List::Nil } } } } } } } } };
+    expect(same(sequences(CharSet::full()), wanted), "the sequences of every character")
+}
+
+// --------------------- Fuzz: sequences and members ---------------------
+
+fn size(range: Utf8Range) -> u64 {
+    (range.end as u64) + 1 - (range.start as u64)
+}
+
+fn is_tail(range: Utf8Range) -> bool {
+    range.start >= 0x80 && range.end <= 0xBF
+}
+
+// The six low bits of a later byte.
+fn low(byte: u8) -> u32 {
+    (byte as u32) & 0x3F
+}
+
+// What one sequence says: whether its ranges are well formed, how many
+// strings it holds, and the code points its smallest and its largest string
+// decode to.
+struct [value] Reading {
+    formed: bool,
+    strings: u64,
+    lo: u32,
+    hi: u32
+}
+
+fn read(sequence: Utf8Sequence) -> Reading {
+    match sequence {
+        One(a) => Reading {
+            formed: a.end <= 0x7F,
+            strings: size(a),
+            lo: a.start as u32,
+            hi: a.end as u32
+        },
+        Two(a, b) => Reading {
+            formed: a.start >= 0xC2 && a.end <= 0xDF && is_tail(b),
+            strings: size(a) * size(b),
+            lo: (((a.start as u32) & 0x1F) << 6) | low(b.start),
+            hi: (((a.end as u32) & 0x1F) << 6) | low(b.end)
+        },
+        Three(a, b, c) => Reading {
+            formed: a.start >= 0xE0 && a.end <= 0xEF && is_tail(b) && is_tail(c),
+            strings: size(a) * size(b) * size(c),
+            lo: (((a.start as u32) & 0x0F) << 12) | (low(b.start) << 6) | low(c.start),
+            hi: (((a.end as u32) & 0x0F) << 12) | (low(b.end) << 6) | low(c.end)
+        },
+        Four(a, b, c, d) => Reading {
+            formed: a.start >= 0xF0 && a.end <= 0xF4 && is_tail(b) && is_tail(c) && is_tail(d),
+            strings: size(a) * size(b) * size(c) * size(d),
+            lo: (((a.start as u32) & 0x07) << 18) | (low(b.start) << 12) | (low(c.start) << 6) | low(d.start),
+            hi: (((a.end as u32) & 0x07) << 18) | (low(b.end) << 12) | (low(c.end) << 6) | low(d.end)
+        }
+    }
+}
+
+// What the sequences seen so far say: whether each was right, how many
+// strings they hold, and one past the last code point covered.
+struct [value] Seen {
+    right: bool,
+    strings: u64,
+    next: u32
+}
+
+// A sequence is right when its ranges are well formed, it comes after the
+// one before, it holds one string for each code point from its smallest to
+// its largest, and every one of those is a member. With well-formed ranges
+// every string in between is an encoding, so these make it exactly the
+// encodings of that stretch.
+fn check(set: CharSet, seen: Seen, sequence: Utf8Sequence) -> Seen {
+    let reading = read(sequence);
+    let stretch = CharSet::code_points(reading.lo, reading.hi + 1);
+    Seen {
+        right: seen.right
+            && reading.formed
+            && reading.lo >= seen.next
+            && reading.lo <= reading.hi
+            && reading.strings == ((reading.hi - reading.lo) as u64) + 1
+            && set.intersect(stretch) == stretch,
+        strings: seen.strings + reading.strings,
+        next: reading.hi + 1
+    }
+}
+
+fn fuzz_sequences(ranges: List<(char, char)>) -> Outcome {
+    let set = ranges.fold_left(CharSet::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(CharSet::range(lo, hi))
+    });
+    let members = set.spans().fold_left(0, |count: u64, span: Span| count + ((span.end - span.start) as u64));
+    let seen = fold_sequences(
+        set,
+        Seen { right: true, strings: 0, next: 0 },
+        |seen: Seen, sequence: Utf8Sequence| check(set, seen, sequence)
+    );
+    expect(seen.right, "a sequence is not the encodings of a stretch of members, in order")
+        .and_then(|| should_be(seen.strings, members))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex utf8")
+        .with_case("small sets", test_small)
+        .with_case("across lengths", test_across)
+        .with_case("every character", test_every)
+        .with_fuzz(
+            "sequences & members (fuzz)",
+            tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 6),
+            fuzz_sequences
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

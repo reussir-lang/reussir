@@ -16,8 +16,11 @@
 //! - `char_set`: `CharSet`, a set of characters.
 //! - `steps`: `Steps`, in or out for every code point, changing at a few of
 //!   them, on the WAVL map; a `CharSet` is one.
+//! - `utf8`: the UTF-8 encodings of a `CharSet`, as sequences of byte
+//!   ranges.
 
 pub mod bits;
 pub mod byte_classes;
 pub mod char_set;
 pub mod steps;
+pub mod utf8;
