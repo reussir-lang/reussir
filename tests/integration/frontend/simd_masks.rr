@@ -44,7 +44,11 @@ pub fn less(a: Simd<[i32; 8]>, b: Simd<[i32; 8]>, m: Simd<[bool; 8]>) -> Simd<[b
 }
 
 // HIR-DAG: intrinsic#simd#mask_first#0(v0 : u64, v1 : u64) : Simd<[bool; 2, 8]>
+// A count past the extent sets every lane, so each count is brought down to
+// its extent first.
 // CHECK-LABEL: func.func @{{.*}}tail
+// CHECK: %[[ROWS:.*]] = arith.minui %arg0, %{{.*}} : i64
+// CHECK: %[[LANES:.*]] = arith.minui %arg1, %{{.*}} : i64
 // CHECK: vector.create_mask %{{.*}}, %{{.*}} : vector<2x8xi1>
 pub fn tail(rows: u64, n: u64) -> Simd<[bool; 2, 8]> { simd::mask_first<Simd<[bool; 2, 8]>>(rows, n) }
 

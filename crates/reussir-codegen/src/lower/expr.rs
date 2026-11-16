@@ -4422,11 +4422,34 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 builders::ptr_masked_load(values[0], values[1], values[2], align, loc)
             }
             SimdFn::MaskFirst => {
+                let TyKind::Simd { dims, scalable, .. } = *e.ty.kind() else {
+                    return err("`core::simd::mask_first` makes a mask");
+                };
                 let index_ty = Type::index(self.context);
-                let counts: Vec<_> = values
-                    .iter()
-                    .map(|&n| self.append(block, arith::index_castui(n, index_ty, loc)))
-                    .collect();
+                let count_ty: Type = IntegerType::new(self.context, 64).into();
+                let last = dims.len() - 1;
+                // `vector.create_mask` reads a count as signed, so a count
+                // past the extent is first brought down to the extent.
+                let mut counts = Vec::with_capacity(values.len());
+                for (dim, (&n, &extent)) in values.iter().zip(dims).enumerate() {
+                    let extent = self.append(
+                        block,
+                        arith::constant(
+                            self.context,
+                            IntegerAttribute::new(count_ty, extent as i64).into(),
+                            loc,
+                        ),
+                    );
+                    let extent = if scalable && dim == last {
+                        let vscale = self.append(block, builders::vector_vscale(self.context, loc));
+                        let vscale = self.append(block, arith::index_castui(vscale, count_ty, loc));
+                        self.append(block, arith::muli(vscale, extent, loc))
+                    } else {
+                        extent
+                    };
+                    let n = self.append(block, arith::minui(n, extent, loc));
+                    counts.push(self.append(block, arith::index_castui(n, index_ty, loc)));
+                }
                 builders::vector_create_mask(&counts, result, loc)
             }
             SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => {

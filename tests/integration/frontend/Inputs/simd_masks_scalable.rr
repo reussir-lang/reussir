@@ -2,7 +2,8 @@ import core::simd;
 
 // The tail mask of a loop is the SVE `whilelt`.
 // CHECK-LABEL: define {{.*}}<vscale x 16 x i1> @{{.*}}tail
-// CHECK: call <vscale x 16 x i1> @llvm.aarch64.sve.whilelt.nxv16i1.i64(i64 0, i64 %0)
+// CHECK: %[[N:.*]] = tail call i64 @llvm.umin.i64(i64 %0, i64 %{{.*}})
+// CHECK: call <vscale x 16 x i1> @llvm.aarch64.sve.whilelt.nxv16i1.i64(i64 0, i64 %[[N]])
 pub fn tail(n: u64) -> Simd<[bool; [16]]> { simd::mask_first<Simd<[bool; [16]]>>(n) }
 
 // A predicated addition under the tail mask.
