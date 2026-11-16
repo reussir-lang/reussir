@@ -4025,7 +4025,37 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
     }
 
     /// The operations that change the shape of vectors. Their positions are
-    /// constants, checked here against the extents.
+    /// constants, checked here against the extents. With `v` the first
+    /// operand, a `Simd<[T; d1, ..., dk]>`, each call is accepted when:
+    ///
+    /// - `shape_cast<W>(v)`: `W` has the lane type, the scalability and the
+    ///   number of lanes of `v`. Gives `W`.
+    /// - `bitcast<W>(v)`: `W` has the scalability and all extents but the
+    ///   last of `v`, both lane types are integers or floats, and the bits
+    ///   of a lane times the last extent agree. Gives `W`.
+    /// - `broadcast<W>(v)`: `W` has the lane type and the scalability of
+    ///   `v`, and its extents end with those of `v`. Gives `W`.
+    /// - `transpose(v, order)`: `order` is a permutation of `0..k` that
+    ///   keeps a scalable extent last. Gives the extents in that order.
+    /// - `shuffle(a, b, picks)`: `b` has the type of `a`, which is fixed and
+    ///   one-dimensional, and each of the one or more picks is in
+    ///   `0..2 * d1`. Gives `Simd<[T; picks.len()]>`.
+    /// - `interleave(a, b)`: `b` has the type of `a`. Gives the last extent
+    ///   doubled.
+    /// - `deinterleave_even(v)`, `deinterleave_odd(v)`: the last extent is
+    ///   even. Gives the last extent halved.
+    /// - `slice(v, offsets, sizes)`: `v` is fixed, the sequences have one
+    ///   length `n` in `1..=k`, and each range lies inside its extent. Gives
+    ///   `sizes` for the first `n` extents and the rest of `v` after them.
+    /// - `insert_slice(v, part, offsets)`: both are fixed with one lane
+    ///   type, `part` covers trailing extents of `v`, and `offsets` has `k`
+    ///   entries that keep `part` inside `v`. Gives the type of `v`.
+    /// - `scalable_extract<P>(v, pos)`, `scalable_insert(v, part, pos)`: `v`
+    ///   is scalable and one-dimensional, the sub-vector is one-dimensional
+    ///   with the lane type of `v`, and the literal `pos` is a multiple of
+    ///   its extent. Give `P` and the type of `v`.
+    /// - `outer(a, b)`: `a` is fixed, both are one-dimensional with one lane
+    ///   type, an integer or a float. Gives `Simd<[T; da, db]>`.
     fn infer_simd_shape(
         &mut self,
         fc: &surface::FuncCall,
@@ -4050,13 +4080,6 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             );
             return self.poison(span);
         }
-        let target = match typed {
-            true => match self.simd_type_arg(fc, shown, span) {
-                Some(target) => Some(target),
-                None => return self.poison(span),
-            },
-            false => None,
-        };
         let Some((first, elem, dims, scalable)) = self.infer_simd_operand(&fc.args[0], shown)
         else {
             return self.poison(span);
@@ -4077,7 +4100,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         let mut args = vec![first];
         let result = match func {
             SimdFn::ShapeCast => {
-                let (ty, to_elem, to_dims, to_scalable) = target.expect("typed");
+                let Some((ty, to_elem, to_dims, to_scalable)) = self.simd_type_arg(fc, shown, span)
+                else {
+                    return self.poison(span);
+                };
                 if to_elem != elem || to_scalable != scalable || lanes(to_dims) != lanes(dims) {
                     let shown_ty = self.ty_display(ty);
                     return fail(self, format!("`{shown_ty}` does not have the same lanes"));
@@ -4085,7 +4111,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ty
             }
             SimdFn::Bitcast => {
-                let (ty, to_elem, to_dims, to_scalable) = target.expect("typed");
+                let Some((ty, to_elem, to_dims, to_scalable)) = self.simd_type_arg(fc, shown, span)
+                else {
+                    return self.poison(span);
+                };
                 let (rank, to_rank) = (dims.len(), to_dims.len());
                 let same_bits = bits(elem) != 0
                     && bits(to_elem) != 0
@@ -4100,7 +4129,10 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 ty
             }
             SimdFn::Broadcast => {
-                let (ty, to_elem, to_dims, to_scalable) = target.expect("typed");
+                let Some((ty, to_elem, to_dims, to_scalable)) = self.simd_type_arg(fc, shown, span)
+                else {
+                    return self.poison(span);
+                };
                 if to_elem != elem || to_scalable != scalable || !to_dims.ends_with(dims) {
                     let shown_ty = self.ty_display(ty);
                     return fail(self, format!("`{shown_ty}` does not end with its extents"));
@@ -4209,20 +4241,18 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             SimdFn::ScalableExtract | SimdFn::ScalableInsert => {
                 // The sub-vector: the type argument of an extract, the
                 // second operand of an insert.
-                let (part_ty, part_elem, part_dims, at) = match func {
-                    SimdFn::ScalableExtract => {
-                        let (ty, e, d, _) = target.expect("typed");
-                        (ty, e, d, 1)
-                    }
-                    _ => {
-                        let Some((part, e, d, _)) = self.infer_simd_operand(&fc.args[1], shown)
-                        else {
-                            return self.poison(span);
-                        };
-                        let ty = part.ty;
-                        args.push(part);
-                        (ty, e, d, 2)
-                    }
+                let (part_ty, part_elem, part_dims, at) = if func == SimdFn::ScalableExtract {
+                    let Some((ty, e, d, _)) = self.simd_type_arg(fc, shown, span) else {
+                        return self.poison(span);
+                    };
+                    (ty, e, d, 1)
+                } else {
+                    let Some((part, e, d, _)) = self.infer_simd_operand(&fc.args[1], shown) else {
+                        return self.poison(span);
+                    };
+                    let ty = part.ty;
+                    args.push(part);
+                    (ty, e, d, 2)
                 };
                 let u64_ty = self.tcx.mk_int(crate::semi::ty::IntTy::Unsigned(64));
                 let pos = self.check_expr(&fc.args[at], u64_ty);
@@ -4260,7 +4290,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 self.tcx
                     .mk_simd(elem, &[dims[0], other_dims[0]], other_scalable)
             }
-            _ => unreachable!("routed here only for shape operations"),
+            // Only the functions with a `shape()` are checked here.
+            _ => return fail(self, "it does not change the shape of a vector".into()),
         };
         self.mk_expr(
             ExprKind::Intrinsic {
