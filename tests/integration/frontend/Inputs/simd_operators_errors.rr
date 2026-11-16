@@ -8,6 +8,9 @@ fn complement(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { !a }
 // As with `simd::neg`, an unsigned vector does not negate.
 // ERR-DAG: `Simd<[u32; 4]>` does not implement `Neg`
 fn unsigned(a: Simd<[u32; 4]>) -> Simd<[u32; 4]> { -a }
+// A method is found through the traits the vector implements.
+// ERR-DAG: no method `add` on `Simd<[bool; 4]>`
+fn method(a: Simd<[bool; 4]>) -> Simd<[bool; 4]> { a.add(a) }
 // The other operand has the vector type; a scalar is spread with `splat`.
 // ERR-DAG: expected `Simd<[f32; 4]>`
 fn spread(a: Simd<[f32; 4]>, x: f32) -> Simd<[f32; 4]> { a * x }
