@@ -281,6 +281,7 @@ unsafe extern "C" {
     pub fn reussirCreateExpandStridedMetadataPass() -> MlirPass;
     pub fn reussirCreateLowerAffinePass() -> MlirPass;
     pub fn reussirCreateConvertVectorToLLVMPass(arm_sve: bool) -> MlirPass;
+    pub fn reussirCreateFixVectorScalePass(scale: u32) -> MlirPass;
     pub fn reussirCreateArmSVELegalizeVectorStoragePass() -> MlirPass;
     pub fn reussirCreateConvertToLLVMPass() -> MlirPass;
     pub fn reussirCreateReconcileUnrealizedCastsPass() -> MlirPass;

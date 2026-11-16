@@ -361,6 +361,28 @@ def ReussirConvertToLLVMPass
 }
 
 //===----------------------------------------------------------------------===//
+// FixVectorScale
+//===----------------------------------------------------------------------===//
+def ReussirFixVectorScalePass
+    : Pass<"reussir-fix-vector-scale", "::mlir::ModuleOp"> {
+  let summary = "give scalable vectors a fixed scale";
+  let description = [{
+    `reussir-fix-vector-scale` is run for a target that has no scalable
+    vectors. The scale of a scalable vector is any positive constant of the
+    machine, so such a target takes the one given as `scale`: every scalable
+    vector type becomes the fixed type whose scalable extent is multiplied by
+    it, `vector.vscale` becomes that constant, and `vector.scalable.extract`
+    and `vector.scalable.insert` become the strided-slice operations on fixed
+    vectors.
+  }];
+  // The default is `DEFAULT_FALLBACK_VSCALE` of the Rust pipeline.
+  let options = [Option<"scale", "scale", "unsigned", /*default=*/"4",
+                        "The scale a scalable vector takes">];
+  let dependentDialects = ["::mlir::arith::ArithDialect",
+                           "::mlir::vector::VectorDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // AttachNativeTarget
 //===----------------------------------------------------------------------===//
 def ReussirAttachNativeTargetPass

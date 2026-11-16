@@ -7,6 +7,10 @@ extern uint64_t simd_count(const uint8_t *base, uint64_t len, uint8_t needle);
 extern uint64_t simd_find(const uint8_t *base, uint64_t len, uint8_t needle);
 extern int64_t simd_sum(const int32_t *base, uint64_t len);
 extern uint64_t simd_leading(uint64_t n);
+extern uint64_t simd_count_scalable(const uint8_t *base, uint64_t len,
+                                    uint8_t needle);
+extern uint64_t simd_find_scalable(const uint8_t *base, uint64_t len,
+                                   uint8_t needle);
 
 int main(void) {
   const uint64_t counts[] = {0,          1,          15,         16,
@@ -32,6 +36,9 @@ int main(void) {
     assert(simd_count(text, len, 'c') == expected);
     assert(simd_find(text, len, 'c') == first);
     assert(simd_find(text, len, 'z') == len);
+    assert(simd_count_scalable(text, len, 'c') == expected);
+    assert(simd_find_scalable(text, len, 'c') == first);
+    assert(simd_find_scalable(text, len, 'z') == len);
   }
 
   int32_t values[20];
