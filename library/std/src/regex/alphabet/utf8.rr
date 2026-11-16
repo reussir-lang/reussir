@@ -1,0 +1,150 @@
+//! The UTF-8 encodings of a set of characters, as sequences of byte ranges.
+//!
+//! UTF-8 keeps order: a larger code point has a larger encoding, compared
+//! byte by byte. So a stretch of code points is a stretch of byte strings,
+//! and it is cut until each piece is one range of bytes at every position:
+//!
+//! ```text
+//! [α-ω] = U+03B1 to U+03C9      CE [B1-BF]
+//!                               CF [80-89]
+//! ```
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::alphabet::steps::Span;
+
+/// The bytes from `start` to `end`, both included.
+pub struct [value] Utf8Range {
+    pub start: u8,
+    pub end: u8
+}
+
+/// One to four ranges of bytes: every string that takes one byte from each
+/// range in turn.
+pub enum [value] Utf8Sequence {
+    One(Utf8Range),
+    Two(Utf8Range, Utf8Range),
+    Three(Utf8Range, Utf8Range, Utf8Range),
+    Four(Utf8Range, Utf8Range, Utf8Range, Utf8Range)
+}
+
+fn above(point: u32, most: u32) -> u64 {
+    if point > most { 1 } else { 0 }
+}
+
+// The number of bytes that encode `point`.
+fn width(point: u32) -> u64 {
+    1 + above(point, 0x7F) + above(point, 0x7FF) + above(point, 0xFFFF)
+}
+
+// `most`, when the stretch runs across it: after `most` the encoding is one
+// byte longer.
+fn across(lo: u32, hi: u32, most: u32) -> Option<u32> {
+    if lo <= most && most < hi { Option::Some { most } } else { Option::None }
+}
+
+// Where to cut a stretch of one width, as the last code point of its first
+// part, so that the bytes holding its low `bits` bits run over all of 80 to
+// BF whenever the bytes before them differ at the two ends.
+fn ragged(lo: u32, hi: u32, bits: u32) -> Option<u32> {
+    let mask = (1 << bits) - 1;
+    if (lo >> bits) == (hi >> bits) { Option::None } else {
+        let after_lo = if (lo & mask) != 0 { Option::Some { lo | mask } } else { Option::None };
+        let before_hi = if (hi & mask) != mask { Option::Some { ((hi >> bits) << bits) - 1 } } else { Option::None };
+        after_lo.or(before_hi)
+    }
+}
+
+fn range(start: u32, end: u32) -> Utf8Range {
+    Utf8Range { start: start as u8, end: end as u8 }
+}
+
+// The first byte: the marker of the width over the bits from `bits` up.
+fn lead(lo: u32, hi: u32, bits: u32, marker: u32) -> Utf8Range {
+    range(marker | (lo >> bits), marker | (hi >> bits))
+}
+
+// A later byte: 80 over the six bits from `bits` up.
+fn tail(lo: u32, hi: u32, bits: u32) -> Utf8Range {
+    range(0x80 | ((lo >> bits) & 0x3F), 0x80 | ((hi >> bits) & 0x3F))
+}
+
+// The sequence of a stretch that needs no more cuts.
+fn sequence(lo: u32, hi: u32) -> Utf8Sequence {
+    match width(hi) {
+        1 => Utf8Sequence::One { range(lo, hi) },
+        2 => Utf8Sequence::Two { lead(lo, hi, 6, 0xC0), tail(lo, hi, 0) },
+        3 => Utf8Sequence::Three { lead(lo, hi, 12, 0xE0), tail(lo, hi, 6), tail(lo, hi, 0) },
+        // Four bytes: U+10000 and above.
+        _ => Utf8Sequence::Four { lead(lo, hi, 18, 0xF0), tail(lo, hi, 12), tail(lo, hi, 6), tail(lo, hi, 0) }
+    }
+}
+
+// Feeds `step` the sequences of the code points from `lo` to `hi`, both
+// included, in order. No surrogate lies between them.
+fn stretch<A>(lo: u32, hi: u32, acc: A, step: (A, Utf8Sequence) -> A) -> A {
+    let longer = across(lo, hi, 0x7F).or(across(lo, hi, 0x7FF)).or(across(lo, hi, 0xFFFF));
+    // One byte is any range; later bytes must be whole.
+    let whole = if hi > 0x7F { ragged(lo, hi, 6).or(ragged(lo, hi, 12)).or(ragged(lo, hi, 18)) } else { Option::None };
+    match longer.or(whole) {
+        Some(last) => stretch(last + 1, hi, stretch(lo, last, acc, step), step),
+        None => step(acc, sequence(lo, hi))
+    }
+}
+
+/// Feeds `step` the sequences of the encodings of the members of `set`, in
+/// the order of the bytes. Together they hold the encoding of every member
+/// and no other string.
+pub fn fold_sequences<A>(set: CharSet, initial: A, step: (A, Utf8Sequence) -> A) -> A {
+    set.spans().fold_left(initial, |acc: A, span: Span| stretch(span.start, span.end - 1, acc, step))
+}
+
+impl Utf8Sequence {
+    /// The number of bytes of its strings.
+    pub fn len(self: Self) -> u64 {
+        match self {
+            One(_) => 1,
+            Two(_, _) => 2,
+            Three(_, _, _) => 3,
+            Four(_, _, _, _) => 4
+        }
+    }
+}
+
+impl PartialEq for Utf8Range {
+    fn eq(self: Self, other: Self) -> bool {
+        self.start == other.start && self.end == other.end
+    }
+}
+
+impl Eq for Utf8Range {}
+
+impl PartialEq for Utf8Sequence {
+    fn eq(self: Self, other: Self) -> bool {
+        match self {
+            One(a) => match other {
+                One(b) => a == b,
+                // A sequence of another length.
+                _ => false
+            },
+            Two(a, b) => match other {
+                Two(c, d) => a == c && b == d,
+                // A sequence of another length.
+                _ => false
+            },
+            Three(a, b, c) => match other {
+                Three(d, e, f) => a == d && b == e && c == f,
+                // A sequence of another length.
+                _ => false
+            },
+            Four(a, b, c, d) => match other {
+                Four(e, f, g, h) => a == e && b == f && c == g && d == h,
+                // A sequence of another length.
+                _ => false
+            }
+        }
+    }
+}
+
+impl Eq for Utf8Sequence {}
