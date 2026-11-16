@@ -130,6 +130,17 @@ bool reussirPtrAccessSetFlags(MlirOperation op, bool isVolatile,
     set(store);
     return !isInvariant;
   }
+  // A masked access has an alignment and none of the flags.
+  auto align = [&](auto access) {
+    access.setAlignment(alignment == 0
+                            ? std::nullopt
+                            : std::optional(static_cast<int64_t>(alignment)));
+    return !isVolatile && !isNonTemporal && !isInvariant && !isInvariantGroup;
+  };
+  if (auto load = llvm::dyn_cast<mlir::ptr::MaskedLoadOp>(unwrap(op)))
+    return align(load);
+  if (auto store = llvm::dyn_cast<mlir::ptr::MaskedStoreOp>(unwrap(op)))
+    return align(store);
   return false;
 }
 
