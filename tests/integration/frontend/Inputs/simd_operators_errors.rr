@@ -1,0 +1,16 @@
+// A vector supports an operator when it implements the operator's trait.
+// ERR-DAG: `Simd<[bool; 4]>` does not implement `Add`: `bool` does not implement `Add`
+fn masks(a: Simd<[bool; 4]>) -> Simd<[bool; 4]> { a + a }
+// ERR-DAG: `Simd<[f32; 4]>` does not implement `Shift`: `f32` does not implement `Shift`
+fn shift(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { a << a }
+// ERR-DAG: `Simd<[f32; 4]>` does not implement `Not`: `f32` does not implement `Integral`
+fn complement(a: Simd<[f32; 4]>) -> Simd<[f32; 4]> { !a }
+// As with `simd::neg`, an unsigned vector does not negate.
+// ERR-DAG: `Simd<[u32; 4]>` does not implement `Neg`
+fn unsigned(a: Simd<[u32; 4]>) -> Simd<[u32; 4]> { -a }
+// The other operand has the vector type; a scalar is spread with `splat`.
+// ERR-DAG: expected `Simd<[f32; 4]>`
+fn spread(a: Simd<[f32; 4]>, x: f32) -> Simd<[f32; 4]> { a * x }
+// The impls of vectors are the language's own.
+// ERR-DAG: `Add` is a built-in trait and cannot be implemented
+impl Add for Simd<[bool; ..]> { }

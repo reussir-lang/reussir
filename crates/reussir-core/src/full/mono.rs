@@ -1266,6 +1266,61 @@ struct Driver<'a, 'tcx> {
     lifted: FxHashSet<DefId>,
 }
 
+/// A built-in operator applied to its lowered operands.
+#[derive(Clone, Copy)]
+enum Operation<'tcx> {
+    Arith(hir::ArithOp, &'tcx [mir::Expr<'tcx>; 2]),
+    Negate(&'tcx [mir::Expr<'tcx>; 1]),
+    Not(&'tcx [mir::Expr<'tcx>; 1]),
+}
+
+impl<'tcx> Operation<'tcx> {
+    /// The `core::simd` function that applies the operator to each lane.
+    fn lanewise(self) -> Option<crate::intrinsic::SimdFn> {
+        use crate::intrinsic::SimdFn;
+        use hir::ArithOp;
+        Some(match self {
+            Operation::Arith(ArithOp::Add, _) => SimdFn::Add,
+            Operation::Arith(ArithOp::Sub, _) => SimdFn::Sub,
+            Operation::Arith(ArithOp::Mul, _) => SimdFn::Mul,
+            Operation::Arith(ArithOp::Div, _) => SimdFn::Div,
+            Operation::Arith(ArithOp::Mod, _) => SimdFn::Rem,
+            Operation::Arith(ArithOp::BitAnd, _) => SimdFn::And,
+            Operation::Arith(ArithOp::BitOr, _) => SimdFn::Or,
+            Operation::Arith(ArithOp::BitXor, _) => SimdFn::Xor,
+            Operation::Arith(ArithOp::Shl, _) => SimdFn::Shl,
+            Operation::Arith(ArithOp::Shr, _) => SimdFn::Shr,
+            Operation::Arith(ArithOp::And | ArithOp::Or, _) => return None,
+            Operation::Negate(_) => SimdFn::Neg,
+            Operation::Not(_) => SimdFn::Not,
+        })
+    }
+
+    fn operands(self) -> &'tcx [mir::Expr<'tcx>] {
+        match self {
+            Operation::Arith(_, operands) => operands,
+            Operation::Negate(operand) | Operation::Not(operand) => operand,
+        }
+    }
+
+    /// The MIR node of the operation, whose result type is `ty`. On a
+    /// vector it is the lanewise `core::simd` function of the same meaning.
+    fn node(self, ty: Ty<'tcx>) -> mir::ExprKind<'tcx> {
+        use mir::ExprKind as M;
+        if let (TyKind::Simd { .. }, Some(func)) = (ty.kind(), self.lanewise()) {
+            return M::Intrinsic {
+                op: crate::intrinsic::IntrinsicOp::Simd { func },
+                args: self.operands(),
+            };
+        }
+        match self {
+            Operation::Arith(op, [l, r]) => M::Arith(l, op, r),
+            Operation::Negate([e]) => M::Negate(e),
+            Operation::Not([e]) => M::Not(e),
+        }
+    }
+}
+
 /// What a [`hir::ExprKind::TraitCall`] resolves to at instance time.
 enum TraitCallTarget<'tcx> {
     /// An impl method body: an ordinary call.
@@ -2831,18 +2886,25 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                             return M::Poison;
                         }
                         use crate::semi::lang::OperatorMethod;
-                        match (method, method.arith(), self.lower_slice(args, subst)) {
-                            (_, Some(arith), [l, r]) => M::Arith(l, arith, r),
-                            (OperatorMethod::Neg, None, [e]) => M::Negate(e),
-                            (OperatorMethod::Not, None, [e]) => M::Not(e),
-                            _ => {
-                                self.error(
-                                    span,
-                                    "wrong number of operands to an operator-trait method",
-                                );
-                                M::Poison
+                        let operands = self.lower_slice(args, subst);
+                        let operation = match (method, method.arith()) {
+                            (_, Some(arith)) => operands
+                                .try_into()
+                                .ok()
+                                .map(|operands| Operation::Arith(arith, operands)),
+                            (OperatorMethod::Neg, None) => {
+                                operands.try_into().ok().map(Operation::Negate)
                             }
-                        }
+                            (_, None) => operands.try_into().ok().map(Operation::Not),
+                        };
+                        let Some(operation) = operation else {
+                            self.error(
+                                span,
+                                "wrong number of operands to an operator-trait method",
+                            );
+                            return M::Poison;
+                        };
+                        operation.node(result_ty)
                     }
                     Some(TraitCallTarget::ThreeWay) => {
                         if self.inside_kernel {
@@ -2909,11 +2971,18 @@ impl<'a, 'tcx> Driver<'a, 'tcx> {
                 ExprKind::ConstFloat(f) if *f.mantissa() != 0 => {
                     M::ConstFloat(self.tcx.alloc(f.neg()))
                 }
-                _ => M::Negate(self.lower_ref(e, subst)),
+                _ => {
+                    let operand = self.tcx.alloc([self.lower_expr(e, subst)]);
+                    Operation::Negate(operand).node(result_ty)
+                }
             },
-            ExprKind::Not(e) => M::Not(self.lower_ref(e, subst)),
+            ExprKind::Not(e) => {
+                let operand = self.tcx.alloc([self.lower_expr(e, subst)]);
+                Operation::Not(operand).node(result_ty)
+            }
             ExprKind::Arith(l, op, r) => {
-                M::Arith(self.lower_ref(l, subst), *op, self.lower_ref(r, subst))
+                let operands = [self.lower_expr(l, subst), self.lower_expr(r, subst)];
+                Operation::Arith(*op, self.tcx.alloc(operands)).node(result_ty)
             }
             ExprKind::Cmp(l, op, r) => {
                 // Only scalars lower intrinsically. A non-scalar can reach
