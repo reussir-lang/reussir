@@ -35,6 +35,7 @@
 #include <mlir/Conversion/PtrToLLVM/PtrToLLVM.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Conversion/UBToLLVM/UBToLLVM.h>
+#include <mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
@@ -46,6 +47,7 @@
 #include <mlir/Dialect/Ptr/IR/PtrDialect.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
+#include <mlir/Dialect/Vector/IR/VectorOps.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -4428,6 +4430,34 @@ struct BasicOpsLoweringPass
     moduleOp->setAttr(kClosureWpdModuleAttr, mlir::UnitAttr::get(ctx));
   }
 
+  // A lane position that is computed is an `index`. The upstream
+  // `convert-vector-to-llvm` builds a converter of its own with a 64-bit
+  // `index` (it reads the module's layout only from
+  // llvm/llvm-project#206380 on), so on a target where `index` is narrower
+  // its position disagrees with the rest of the lowering. Convert those
+  // accesses here, with the upstream patterns at the target's width.
+  bool convertComputedLanePositions(mlir::ModuleOp moduleOp,
+                                    const mlir::LLVMTypeConverter &converter) {
+    if (converter.getIndexTypeBitwidth() == 64)
+      return true;
+    mlir::MLIRContext *context = moduleOp.getContext();
+    mlir::RewritePatternSet patterns(context);
+    mlir::populateVectorToLLVMConversionPatterns(converter, patterns);
+    mlir::ConversionTarget target(*context);
+    target.markUnknownOpDynamicallyLegal(
+        [](mlir::Operation *) { return true; });
+    target.addDynamicallyLegalOp<mlir::vector::ExtractOp>(
+        [](mlir::vector::ExtractOp op) {
+          return op.getDynamicPosition().empty();
+        });
+    target.addDynamicallyLegalOp<mlir::vector::InsertOp>(
+        [](mlir::vector::InsertOp op) {
+          return op.getDynamicPosition().empty();
+        });
+    return mlir::succeeded(
+        mlir::applyPartialConversion(moduleOp, target, std::move(patterns)));
+  }
+
   void runOnOperation() override {
     mlir::ModuleOp moduleOp = getOperation();
     mlir::LLVMTypeConverter converter(moduleOp.getContext(),
@@ -4435,6 +4465,8 @@ struct BasicOpsLoweringPass
     ensureRuntimeFunctions(moduleOp, converter);
     if (closureWpd)
       stampClosureWpdTypeIds(moduleOp);
+    if (!convertComputedLanePositions(moduleOp, converter))
+      return signalPassFailure();
     // Fused debug-info attributes are converted to LLVM DI by the separate
     // `reussir-lowering-debug-info` pass, which runs after `convert-to-llvm`
     // so the functions are already `llvm.func` (a function's DI only survives

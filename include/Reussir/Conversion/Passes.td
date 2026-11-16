@@ -34,6 +34,10 @@ def ReussirBasicOpsLoweringPass
     information. The actual lowering of Reussir basic operations is provided by
     the registered LLVM lowering interface and is driven by `convert-to-llvm`.
 
+    Where the target's `index` is not 64 bits wide, the pass also converts
+    `vector.extract` and `vector.insert` at a computed position, which the
+    upstream `convert-vector-to-llvm` would convert at 64 bits.
+
     With `closure-wpd` enabled, the pass stamps each outlined closure vtable
     with its whole-program-devirtualization type id (one per closure RETURN
     type — apply/uniqify/clone never change a vtable, so the return type is

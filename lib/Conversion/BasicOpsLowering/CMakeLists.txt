@@ -24,6 +24,8 @@ add_mlir_conversion_library(MLIRReussirBasicOpsLowering
   MLIRPtrDialect
   MLIRPtrToLLVM
   MLIRTransforms
+  MLIRVectorDialect
+  MLIRVectorToLLVM
   MLIRSync
   MLIRSyncConvertSyncToLLVM
   MLIRSyncTypeConverter
