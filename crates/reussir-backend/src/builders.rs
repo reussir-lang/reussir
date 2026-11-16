@@ -1188,6 +1188,19 @@ pub fn vector_bitcast<'c>(
         .expect("valid vector.bitcast")
 }
 
+/// `reussir.vector.cttz_elts %mask : <mask> -> <result_type>`.
+pub fn vector_cttz_elts<'c>(
+    mask: Value<'c, '_>,
+    result_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("reussir.vector.cttz_elts", location)
+        .add_operands(&[mask])
+        .add_results(&[result_type])
+        .build()
+        .expect("valid reussir.vector.cttz_elts")
+}
+
 fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
     set_inherent_attribute(operation, "static_position", positions);
 }
