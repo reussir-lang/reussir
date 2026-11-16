@@ -8,6 +8,8 @@
 // RUN: diff %t.mlir %t.rt.mlir
 // RUN: %rrc %s --emit llvm-ir -O aggressive -o %t.ll
 // RUN: %FileCheck %s --check-prefix=LLVM < %t.ll
+// RUN: %rrc %s --target-triple wasm32-unknown-unknown --emit llvm-ir -O aggressive -o %t.wasm.ll
+// RUN: %FileCheck %s --check-prefix=WASM < %t.wasm.ll
 // RUN: %rrc %S/Inputs/simd_construct_scalable.rr --target-triple aarch64-unknown-linux-gnu --target-features=+sve --emit llvm-ir -O aggressive -o %t.sve.ll
 // RUN: %FileCheck %S/Inputs/simd_construct_scalable.rr < %t.sve.ll
 // RUN: %not %rrc %S/Inputs/simd_construct_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_construct_errors.rr --check-prefix=ERR
@@ -18,7 +20,19 @@ import core::simd;
 // CHECK-LABEL: func.func @{{.*}}at
 // CHECK: %[[J:.*]] = arith.index_castui %arg1 : i64 to index
 // CHECK: vector.extract %arg0[2, %[[J]]] : f32 from vector<4x8xf32>
+// A computed position is an `index`, 32 bits wide on a 32-bit target.
+// WASM-LABEL: define {{.*}}float @{{.*}}at
+// WASM: %[[J:.*]] = trunc i64 %{{.*}} to i32
+// WASM: extractelement <8 x float> %{{.*}}, i32 %[[J]]
 pub fn at(m: Simd<[f32; 4, 8]>, j: u64) -> f32 { simd::extract(m, 2, j) }
+
+// CHECK-LABEL: func.func @{{.*}}put
+// CHECK: %[[J:.*]] = arith.index_castui %arg2 : i64 to index
+// CHECK: vector.insert %arg1, %arg0 [%[[J]]] : i64 into vector<4xi64>
+// WASM-LABEL: define {{.*}}<4 x i64> @{{.*}}put
+// WASM: %[[J:.*]] = trunc i64 %{{.*}} to i32
+// WASM: insertelement <4 x i64> %{{.*}}, i64 %{{.*}}, i32 %[[J]]
+pub fn put(v: Simd<[u64; 4]>, x: u64, j: u64) -> Simd<[u64; 4]> { simd::insert(v, x, j) }
 
 // A sub-vector is selected by fewer indices than dimensions.
 // HIR-DAG: intrinsic#simd#extract#0(v0 : Simd<[f32; 4, 8]>, 3 : u64) : Simd<[f32; 8]>
