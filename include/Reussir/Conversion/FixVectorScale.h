@@ -16,14 +16,8 @@
 #ifndef REUSSIR_CONVERSION_FIXVECTORSCALE_H
 #define REUSSIR_CONVERSION_FIXVECTORSCALE_H
 
-#include <memory>
-
-namespace mlir {
-class Pass;
-} // namespace mlir
-
-namespace reussir {
-std::unique_ptr<mlir::Pass> createReussirFixVectorScalePass();
-} // namespace reussir
+// The pass and its options are declared by the blanket `GEN_PASS_DECL`
+// expansion in Passes.h.
+#include "Reussir/Conversion/Passes.h"
 
 #endif // REUSSIR_CONVERSION_FIXVECTORSCALE_H

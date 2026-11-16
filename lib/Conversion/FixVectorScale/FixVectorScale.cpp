@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file implements the pass that gives scalable vectors a scale of one.
+/// This file implements the pass that gives scalable vectors a fixed scale.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -32,38 +32,45 @@ using namespace mlir;
 
 struct ReussirFixVectorScalePass
     : public impl::ReussirFixVectorScalePassBase<ReussirFixVectorScalePass> {
+  using impl::ReussirFixVectorScalePassBase<
+      ReussirFixVectorScalePass>::ReussirFixVectorScalePassBase;
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    if (scale == 0) {
+      module->emitError("the scale of a scalable vector is positive");
+      return signalPassFailure();
+    }
+    const int64_t factor = scale;
     IRRewriter rewriter(&getContext());
 
-    // The operations that exist only for scalable vectors get their fixed
-    // counterparts. Their operand types are replaced below.
-    llvm::SmallVector<Operation *> scaled;
+    // The operations that exist only for scalable vectors, with the position
+    // of a sub-vector in lanes: it counts multiples of the scale when the
+    // sub-vector is scalable.
+    llvm::SmallVector<vector::VectorScaleOp> scales;
+    llvm::SmallVector<std::pair<vector::ScalableExtractOp, int64_t>> extracts;
+    llvm::SmallVector<std::pair<vector::ScalableInsertOp, int64_t>> inserts;
+    auto lanes = [&](VectorType part, uint64_t pos) {
+      return static_cast<int64_t>(pos) * (part.isScalable() ? factor : 1);
+    };
     module->walk([&](Operation *op) {
-      if (llvm::isa<vector::VectorScaleOp, vector::ScalableExtractOp,
-                    vector::ScalableInsertOp>(op))
-        scaled.push_back(op);
+      if (auto vscale = llvm::dyn_cast<vector::VectorScaleOp>(op))
+        scales.push_back(vscale);
+      else if (auto extract = llvm::dyn_cast<vector::ScalableExtractOp>(op))
+        extracts.emplace_back(
+            extract, lanes(extract.getResultVectorType(), extract.getPos()));
+      else if (auto insert = llvm::dyn_cast<vector::ScalableInsertOp>(op))
+        inserts.emplace_back(
+            insert, lanes(insert.getSourceVectorType(), insert.getPos()));
     });
-    for (Operation *op : scaled) {
-      rewriter.setInsertionPoint(op);
-      if (auto scale = llvm::dyn_cast<vector::VectorScaleOp>(op)) {
-        rewriter.replaceOpWithNewOp<arith::ConstantIndexOp>(scale, 1);
-      } else if (auto extract = llvm::dyn_cast<vector::ScalableExtractOp>(op)) {
-        int64_t size = extract.getResultVectorType().getDimSize(0);
-        rewriter.replaceOpWithNewOp<vector::ExtractStridedSliceOp>(
-            extract, extract.getSource(),
-            llvm::ArrayRef<int64_t>{static_cast<int64_t>(extract.getPos())},
-            llvm::ArrayRef<int64_t>{size}, llvm::ArrayRef<int64_t>{1});
-      } else if (auto insert = llvm::dyn_cast<vector::ScalableInsertOp>(op)) {
-        rewriter.replaceOpWithNewOp<vector::InsertStridedSliceOp>(
-            insert, insert.getValueToStore(), insert.getDest(),
-            llvm::ArrayRef<int64_t>{static_cast<int64_t>(insert.getPos())},
-            llvm::ArrayRef<int64_t>{1});
-      }
-    }
 
-    auto fixed = [](VectorType type) {
-      return VectorType::get(type.getShape(), type.getElementType());
+    auto fixed = [&](VectorType type) {
+      llvm::SmallVector<int64_t> shape(type.getShape());
+      for (auto [extent, scalable] :
+           llvm::zip_equal(shape, type.getScalableDims()))
+        if (scalable)
+          extent *= factor;
+      return VectorType::get(shape, type.getElementType());
     };
     AttrTypeReplacer replacer;
     replacer.addReplacement([&](VectorType type) -> std::optional<Type> {
@@ -71,17 +78,37 @@ struct ReussirFixVectorScalePass
         return std::nullopt;
       return fixed(type);
     });
-    // The type of a constant's elements is not one of its sub-elements.
+    // The type of a constant's elements is not one of its sub-elements. A
+    // constant of a scalable vector type is a splat.
     replacer.addReplacement(
         [&](DenseElementsAttr attr) -> std::optional<Attribute> {
           auto type = llvm::dyn_cast<VectorType>(attr.getType());
-          if (!type || !type.isScalable())
+          if (!type || !type.isScalable() || !attr.isSplat())
             return std::nullopt;
-          return attr.reshape(fixed(type));
+          return attr.resizeSplat(fixed(type));
         });
     replacer.recursivelyReplaceElementsIn(module, /*replaceAttrs=*/true,
                                           /*replaceLocs=*/false,
                                           /*replaceTypes=*/true);
+
+    // With every type fixed, they get their fixed counterparts.
+    for (vector::VectorScaleOp vscale : scales) {
+      rewriter.setInsertionPoint(vscale);
+      rewriter.replaceOpWithNewOp<arith::ConstantIndexOp>(vscale, factor);
+    }
+    for (auto [extract, pos] : extracts) {
+      rewriter.setInsertionPoint(extract);
+      int64_t size = extract.getResultVectorType().getDimSize(0);
+      rewriter.replaceOpWithNewOp<vector::ExtractStridedSliceOp>(
+          extract, extract.getSource(), llvm::ArrayRef<int64_t>{pos},
+          llvm::ArrayRef<int64_t>{size}, llvm::ArrayRef<int64_t>{1});
+    }
+    for (auto [insert, pos] : inserts) {
+      rewriter.setInsertionPoint(insert);
+      rewriter.replaceOpWithNewOp<vector::InsertStridedSliceOp>(
+          insert, insert.getValueToStore(), insert.getDest(),
+          llvm::ArrayRef<int64_t>{pos}, llvm::ArrayRef<int64_t>{1});
+    }
   }
 };
 } // namespace

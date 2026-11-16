@@ -6,6 +6,7 @@
 //! with `func.func`-nested passes placed in their original order so the
 //! interleaving with module-level passes is preserved.
 
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 use melior::Context;
@@ -183,6 +184,12 @@ fn resolve_drop_order(
     Ok(saved.or(requested).unwrap_or_default())
 }
 
+/// The scale a scalable vector takes on a target without scalable vectors
+/// when none is asked for. With it `Simd<[u8; [16]]>` is 64 bytes: one
+/// AVX-512 register, two AVX2 ones, four of SSE2 or NEON. The default of the
+/// `scale` option of `reussir-fix-vector-scale` is the same number.
+pub const DEFAULT_FALLBACK_VSCALE: NonZeroU32 = NonZeroU32::new(4).unwrap();
+
 /// Knobs for [`run_lowering_pipeline`].
 #[derive(Clone, Debug)]
 pub struct LoweringOptions {
@@ -209,9 +216,10 @@ pub struct LoweringOptions {
     /// Lower vectors with the Arm SVE legalizations. Set for an AArch64
     /// target that has SVE.
     pub arm_sve: bool,
-    /// The target has scalable vectors. Without them a scalable vector is
-    /// lowered with a scale of one, as a fixed vector.
-    pub scalable_vectors: bool,
+    /// The scale a scalable vector takes on a target without scalable
+    /// vectors, where it is lowered as a fixed vector. `None` for a target
+    /// that has them.
+    pub fallback_vscale: Option<NonZeroU32>,
     /// Lay out compound record members in packed physical order (descending
     /// storage alignment) rather than declaration order. On by default — the
     /// layout contract external consumers compile against; `rrc` exposes the
@@ -257,7 +265,7 @@ impl Default for LoweringOptions {
             // (`enableInvariantAnalysis = false`).
             enable_invariant_analysis: false,
             arm_sve: false,
-            scalable_vectors: false,
+            fallback_vscale: Some(DEFAULT_FALLBACK_VSCALE),
             // On by default: packed layout is the shipped default and the
             // layout contract; only an explicit driver flag turns it off.
             pack_record_members: true,
@@ -339,6 +347,13 @@ macro_rules! lowering_pipeline {
     ($pm:ident, func: $factory:expr; $($rest:tt)*) => {{
         // SAFETY: each factory returns a freshly created, owned MlirPass.
         $pm.nested_under("func.func").add_pass(pass(unsafe { $factory }));
+        lowering_pipeline!($pm, $($rest)*);
+    }};
+    // Group of steps gated on a pattern, which may bind for them.
+    ($pm:ident, if let $pattern:pat = $value:expr => { $($body:tt)* } $($rest:tt)*) => {{
+        if let $pattern = $value {
+            lowering_pipeline!($pm, $($body)*);
+        }
         lowering_pipeline!($pm, $($rest)*);
     }};
     // Group of steps gated on a condition.
@@ -581,8 +596,8 @@ pub fn run_lowering_pipeline(
         module: sys::reussirCreateCanonicalizerPass();
         module: sys::reussirCreateControlFlowSinkPass();
         module: sys::reussirCreateSCFToControlFlowPass();
-        if !options.scalable_vectors => {
-            module: sys::reussirCreateFixVectorScalePass();
+        if let Some(scale) = options.fallback_vscale => {
+            module: sys::reussirCreateFixVectorScalePass(scale.get());
         }
         module: sys::reussirCreateBasicOpsLoweringPass(options.closure_wpd);
         if options.arm_sve => {

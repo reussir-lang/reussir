@@ -152,6 +152,14 @@ pub(crate) struct Cli {
     #[arg(long = "target-features")]
     pub(crate) target_features: Option<String>,
 
+    /// The scale of scalable vectors on a target without them (anything but
+    /// AArch64 with SVE and RISC-V with the vector extension), where
+    /// `Simd<[u8; [16]]>` is compiled as a fixed vector of 16 times this many
+    /// lanes. Defaults to 4. Every package linked into one program must use
+    /// the same scale: a scalable vector in a signature has that size.
+    #[arg(long = "fallback-vscale", value_name = "N")]
+    pub(crate) fallback_vscale: Option<std::num::NonZeroU32>,
+
     /// A dependency package interface: `NAME=PATH` loads the `.rri` at PATH
     /// under the package name NAME (which must match the interface's own
     /// header). Repeatable; names must be distinct, and neither `core` nor

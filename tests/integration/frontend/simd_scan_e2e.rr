@@ -11,6 +11,9 @@
 // RUN: %rrc %s --package-name scan --extern core=%t.core.rri -Oaggressive --relocation-mode pic -o %t.opt.o
 // RUN: %cc %t.opt.o %S/simd_scan_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
 // RUN: %t.opt.exe
+// RUN: %rrc %s --package-name scan --extern core=%t.core.rri -Oaggressive --fallback-vscale 3 --relocation-mode pic -o %t.three.o
+// RUN: %cc %t.three.o %S/simd_scan_e2e.c -o %t.three.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.three.exe
 
 import core::ptr;
 import core::ptr::Generic;
@@ -87,7 +90,7 @@ extern "C" trampoline "simd_sum" = sum;
 
 // The same count written with a scalable vector: the step is `lanes`, known
 // only when the program runs. A target without scalable vectors runs it with
-// a scale of one.
+// a fixed scale.
 fn count_scalable(base: ConstPtr<Generic>, len: u64, needle: u8) -> u64 {
     let width = simd::lanes<Simd<[u8; [16]]>>();
     let wanted = simd::splat<Simd<[u8; [16]]>>(needle);
