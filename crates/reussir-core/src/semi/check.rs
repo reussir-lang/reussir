@@ -2512,23 +2512,8 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[surface::Expr],
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        let mut candidates: Vec<(TraitId, usize)> = match recv_ty.kind() {
-            // An impl for vectors leaves the extents out (`Simd<[T; ..]>`),
-            // so selection finds the traits a vector implements.
-            TyKind::Simd { .. } => self.ground_trait_candidates(recv_ty, method_named(name)),
-            _ => self
-                .traits
-                .impls()
-                .filter(|imp| imp.self_ty == recv_ty)
-                .filter_map(|imp| {
-                    let tid = imp.trait_ref.trait_id;
-                    method_named(name)(self.traits.trait_def(tid)).map(|midx| (tid, midx))
-                })
-                .collect(),
-        };
+        let mut candidates = self.ground_trait_candidates(recv_ty, method_named(name));
         candidates.retain(|&(tid, _)| !self.lang.is_superseded(tid));
-        candidates.sort_unstable_by_key(|(tid, _)| tid.0);
-        candidates.dedup();
         match candidates.as_slice() {
             [] => {
                 self.error(
