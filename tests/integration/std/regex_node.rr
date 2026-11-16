@@ -1,0 +1,371 @@
+// Unit suite and coverage-guided fuzz driver for `std::regex::node`: regexes
+// as nodes of a table, and their derivatives.
+// Unit cases spell out the rewrite rules on sets and the two fixed nodes,
+// and follow the derivatives of a small lexer until no new node appears.
+// One fuzz target builds a random regex and compares matching by repeated
+// derivative of its node with a small matcher on the tree, which rewrites
+// nothing. The other checks the laws that make equal regexes one node.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_node %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_node
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_node%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_node%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex node/rewrite rules: unit
+// CHECK-NEXT: regex node/derivatives of a lexer: unit
+// CHECK-NEXT: regex node/nodes & the tree (fuzz):
+// CHECK-NEXT: regex node/equal regexes are one node (fuzz):
+
+import std::collections::pure::list::List;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::node::Node;
+import std::regex::node::Nodes;
+import std::regex::node::refine;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ----------------------- A matcher for the tests -----------------------
+
+// Whether `regex` matches the empty string.
+fn nullable(regex: ByteRegex) -> bool {
+    match regex {
+        Empty => false,
+        Epsilon => true,
+        Set(_) => false,
+        Concat(a, b) => nullable(a) && nullable(b),
+        Union(a, b) => nullable(a) || nullable(b),
+        Intersect(a, b) => nullable(a) && nullable(b),
+        Star(_) => true,
+        Not(a) => !nullable(a)
+    }
+}
+
+// What may follow `byte` for `regex` to match.
+fn derive(regex: ByteRegex, byte: u64) -> ByteRegex {
+    match regex {
+        Empty => ByteRegex::Empty,
+        Epsilon => ByteRegex::Empty,
+        Set(set) => if set.contains(byte) { ByteRegex::Epsilon } else { ByteRegex::Empty },
+        Concat(a, b) => {
+            let after = ByteRegex::Concat { derive(a, byte), b };
+            if nullable(a) { ByteRegex::Union { after, derive(b, byte) } } else { after }
+        },
+        Union(a, b) => ByteRegex::Union { derive(a, byte), derive(b, byte) },
+        Intersect(a, b) => ByteRegex::Intersect { derive(a, byte), derive(b, byte) },
+        Star(a) => ByteRegex::Concat { derive(a, byte), ByteRegex::Star { a } },
+        Not(a) => ByteRegex::Not { derive(a, byte) }
+    }
+}
+
+fn matches(regex: ByteRegex, bytes: List<u8>) -> bool {
+    match bytes {
+        Nil => nullable(regex),
+        Cons(byte, rest) => matches(derive(regex, byte as u64), rest)
+    }
+}
+
+// ------------------------- Strings for the tests -------------------------
+
+fn above(point: u32, most: u32) -> u64 {
+    if point > most { 1 } else { 0 }
+}
+
+fn later(point: u32, bits: u32) -> u8 {
+    (0x80 | ((point >> bits) & 0x3F)) as u8
+}
+
+// The UTF-8 encoding of one character, written out here on its own.
+fn encode(character: char) -> List<u8> {
+    let point = character as u32;
+    match 1 + above(point, 0x7F) + above(point, 0x7FF) + above(point, 0xFFFF) {
+        1 => List::Cons { point as u8, List::Nil },
+        2 => List::Cons { (0xC0 | (point >> 6)) as u8, List::Cons { later(point, 0), List::Nil } },
+        3 => List::Cons {
+            (0xE0 | (point >> 12)) as u8,
+            List::Cons { later(point, 6), List::Cons { later(point, 0), List::Nil } }
+        },
+        // Four bytes: U+10000 and above.
+        _ => List::Cons {
+            (0xF0 | (point >> 18)) as u8,
+            List::Cons { later(point, 12), List::Cons { later(point, 6), List::Cons { later(point, 0), List::Nil } } }
+        }
+    }
+}
+
+fn join(first: List<u8>, second: List<u8>) -> List<u8> {
+    match first {
+        Nil => second,
+        Cons(byte, rest) => List::Cons { byte, join(rest, second) }
+    }
+}
+
+fn text(characters: List<char>) -> List<u8> {
+    match characters {
+        Nil => List::Nil,
+        Cons(character, rest) => join(encode(character), text(rest))
+    }
+}
+
+// ------------------------- Matching with nodes -------------------------
+
+// The class of a byte: the one class its set of one byte meets.
+fn class_of(classes: ByteClasses, byte: u8) -> u64 {
+    classes.inside(Bits::single(byte as u64)).least()
+}
+
+// Whether the node matches the bytes, one derivative for each byte.
+fn accepts(nodes: Nodes, node: Node, classes: ByteClasses, bytes: List<u8>) -> bool {
+    match bytes {
+        Nil => nodes.accepts_empty(node),
+        Cons(byte, rest) => {
+            let (nodes, next) = nodes.derive(node, class_of(classes, byte));
+            accepts(nodes, next, classes, rest)
+        }
+    }
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+fn test_rules() -> Outcome {
+    let nodes = Nodes::new();
+    let (nodes, zero) = nodes.set(Bits::single(0));
+    let (nodes, one) = nodes.set(Bits::single(1));
+    let (nodes, both) = nodes.set(Bits::range(0, 1));
+    let (nodes, none) = nodes.set(Bits::empty());
+    let (nodes, all) = nodes.all();
+    let (nodes, union) = nodes.union(zero, one);
+    let (nodes, meet) = nodes.intersect(both, one);
+    let (nodes, apart) = nodes.intersect(zero, one);
+    let (nodes, zeros) = nodes.star(zero);
+    let (nodes, again) = nodes.star(zeros);
+    let (nodes, not_zero) = nodes.not(zero);
+    let (nodes, back) = nodes.not(not_zero);
+    let (nodes, with_all) = nodes.union(zeros, all);
+    let (nodes, within_all) = nodes.intersect(zeros, all);
+    let (nodes, after_nothing) = nodes.concat(Node::nothing(), zero);
+    let (nodes, after_epsilon) = nodes.concat(Node::epsilon(), zero);
+    let (nodes, before_epsilon) = nodes.concat(zero, Node::epsilon());
+    let (nodes, no_times) = nodes.star(Node::nothing());
+    let count = nodes.len();
+    let (nodes, same_union) = nodes.union(one, zero);
+    expect(none == Node::nothing(), "the empty set matches nothing")
+        .and_then(|| expect(union == both, "a union of sets is one set"))
+        .and_then(|| expect(meet == one && apart == Node::nothing(), "an intersection of sets is one set"))
+        .and_then(|| expect(again == zeros && no_times == Node::epsilon(), "a repetition of a repetition"))
+        .and_then(|| expect(back == zero, "a complement of a complement"))
+        .and_then(|| expect(with_all == all && within_all == zeros, "the node of every string"))
+        .and_then(|| expect(
+            after_nothing == Node::nothing() && after_epsilon == zero && before_epsilon == zero,
+            "nothing and the empty string in a concatenation"
+        ))
+        .and_then(|| expect(same_union == both && nodes.len() == count, "an existing node is found, not made"))
+        .and_then(|| expect(
+            nodes.accepts_empty(zeros) && !nodes.accepts_empty(zero) && nodes.accepts_empty(not_zero)
+                && nodes.accepts_empty(all) && !nodes.accepts_empty(Node::nothing()),
+            "which nodes match the empty string"
+        ))
+}
+
+// The rules `[a-z]+` and `[0-9]+` as one regex: after one letter the
+// derivative by a letter is the same node again, so the nodes run out.
+fn test_lexer() -> Outcome {
+    let lower = Regex::range(97, 122);
+    let digit = Regex::range(48, 57);
+    let regex = lower.plus().or(digit.plus()).to_bytes();
+    let classes = refine(ByteClasses::whole(), regex);
+    let (nodes, start) = Nodes::new().add(regex, classes);
+    let letter = class_of(classes, 97);
+    let number = class_of(classes, 48);
+    let other = class_of(classes, 33);
+    let (nodes, word) = nodes.derive(start, letter);
+    let (nodes, longer) = nodes.derive(word, letter);
+    let (nodes, mixed) = nodes.derive(word, number);
+    let (nodes, lost) = nodes.derive(start, other);
+    let count = nodes.len();
+    let (nodes, longest) = nodes.derive(longer, letter);
+    should_be(classes.len(), 3)
+        .and_then(|| expect(!nodes.accepts_empty(start) && nodes.accepts_empty(word), "one letter is a word"))
+        .and_then(|| expect(longer == word && longest == word, "more letters stay in one node"))
+        .and_then(|| expect(mixed == Node::nothing() && lost == Node::nothing(), "a digit after a letter matches nothing"))
+        .and_then(|| should_be(nodes.len(), count))
+}
+
+// ------------------ Fuzz 1: nodes against the tree ------------------
+
+fn chars_of(ranges: List<(char, char)>) -> CharSet {
+    ranges.fold_left(CharSet::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(CharSet::range(lo, hi))
+    })
+}
+
+fn bits_of(ranges: List<(u8, u8)>) -> Bits {
+    ranges.fold_left(Bits::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(Bits::range(lo as u64, hi as u64))
+    })
+}
+
+// The two regexes on top of the stack, combined into one.
+fn combine(stack: List<Regex>, both: (Regex, Regex) -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, below) => match below {
+            Cons(under, rest) => List::Cons { both(under, top), rest },
+            Nil => stack
+        },
+        Nil => stack
+    }
+}
+
+// The regex on top of the stack, changed.
+fn change(stack: List<Regex>, one: Regex -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, rest) => List::Cons { one(top), rest },
+        Nil => stack
+    }
+}
+
+// One step of a small program that builds regexes on a stack.
+fn step(stack: List<Regex>, op: u8, characters: CharSet, bytes: Bits) -> List<Regex> {
+    match op % 9 {
+        0 => List::Cons { Regex::chars(characters), stack },
+        1 => List::Cons { Regex::bytes(bytes), stack },
+        2 => List::Cons { Regex::any_char(), stack },
+        3 => List::Cons { Regex::epsilon(), stack },
+        4 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        5 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        6 => combine(stack, |first: Regex, second: Regex| first.and(second)),
+        7 => change(stack, |inner: Regex| inner.star()),
+        // 8: the complement.
+        _ => change(stack, |inner: Regex| inner.not())
+    }
+}
+
+// The regex a program builds: whatever is left on the stack, as a union.
+fn build(ops: List<u8>, characters: CharSet, bytes: Bits) -> Regex {
+    let stack = ops.fold_left(List::Nil, |stack: List<Regex>, op: u8| step(stack, op, characters, bytes));
+    stack.fold_left(Regex::empty(), |all: Regex, regex: Regex| all.or(regex))
+}
+
+fn fuzz_tree(input: ((List<(char, char)>, List<(u8, u8)>), List<u8>, (List<char>, List<u8>))) -> Outcome {
+    let (sets, ops, probe) = input;
+    let (char_ranges, byte_ranges) = sets;
+    let (characters, tail) = probe;
+    let regex = build(ops, chars_of(char_ranges), bits_of(byte_ranges)).to_bytes();
+    let string = join(text(characters), tail);
+    let classes = refine(ByteClasses::whole(), regex);
+    let (nodes, node) = Nodes::new().add(regex, classes);
+    expect(
+        accepts(nodes, node, classes, string) == matches(regex, string),
+        "a node and its tree disagree on a string"
+    )
+}
+
+// ---------------- Fuzz 2: equal regexes are one node ----------------
+
+fn fuzz_laws(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>))) -> Outcome {
+    let (sets, programs) = input;
+    let (char_ranges, byte_ranges) = sets;
+    let (first, second, third) = programs;
+    let characters = chars_of(char_ranges);
+    let bytes = bits_of(byte_ranges);
+    let a = build(first, characters, bytes).to_bytes();
+    let b = build(second, characters, bytes).to_bytes();
+    let c = build(third, characters, bytes).to_bytes();
+    let classes = refine(refine(refine(ByteClasses::whole(), a), b), c);
+    let (nodes, r) = Nodes::new().add(a, classes);
+    let (nodes, s) = nodes.add(b, classes);
+    let (nodes, t) = nodes.add(c, classes);
+    let (nodes, all) = nodes.all();
+    let (nodes, rs) = nodes.union(r, s);
+    let (nodes, sr) = nodes.union(s, r);
+    let (nodes, st) = nodes.union(s, t);
+    let (nodes, rs_t) = nodes.union(rs, t);
+    let (nodes, r_st) = nodes.union(r, st);
+    let (nodes, rr) = nodes.union(r, r);
+    let (nodes, r_nothing) = nodes.union(r, Node::nothing());
+    let (nodes, r_all) = nodes.union(r, all);
+    let (nodes, both) = nodes.intersect(r, s);
+    let (nodes, both_back) = nodes.intersect(s, r);
+    let (nodes, later) = nodes.intersect(s, t);
+    let (nodes, both_t) = nodes.intersect(both, t);
+    let (nodes, r_later) = nodes.intersect(r, later);
+    let (nodes, twice) = nodes.intersect(r, r);
+    let (nodes, within_all) = nodes.intersect(r, all);
+    let (nodes, within_nothing) = nodes.intersect(r, Node::nothing());
+    let (nodes, then_s) = nodes.concat(r, s);
+    let (nodes, s_then) = nodes.concat(s, t);
+    let (nodes, left) = nodes.concat(then_s, t);
+    let (nodes, right) = nodes.concat(r, s_then);
+    let (nodes, then_epsilon) = nodes.concat(r, Node::epsilon());
+    let (nodes, then_nothing) = nodes.concat(r, Node::nothing());
+    let (nodes, not_r) = nodes.not(r);
+    let (nodes, not_not) = nodes.not(not_r);
+    let (nodes, star) = nodes.star(r);
+    let (nodes, star_star) = nodes.star(star);
+    expect(rs == sr && rs_t == r_st && rr == r, "union: order, grouping, repeats")
+        .and_then(|| expect(r_nothing == r && r_all == all, "union with nothing and with every string"))
+        .and_then(|| expect(both == both_back && both_t == r_later && twice == r, "intersection: order, grouping, repeats"))
+        .and_then(|| expect(
+            within_all == r && within_nothing == Node::nothing(),
+            "intersection with every string and with nothing"
+        ))
+        .and_then(|| expect(left == right, "concatenation: grouping"))
+        .and_then(|| expect(
+            then_epsilon == r && then_nothing == Node::nothing(),
+            "concatenation with the empty string and with nothing"
+        ))
+        .and_then(|| expect(not_not == r, "a complement of a complement"))
+        .and_then(|| expect(star_star == star, "a repetition of a repetition"))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex node")
+        .with_case("rewrite rules", test_rules)
+        .with_case("derivatives of a lexer", test_lexer)
+        .with_fuzz(
+            "nodes & the tree (fuzz)",
+            tuple3(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                u8_domain().list_with_len(0, 8),
+                tuple2(char_domain().utf8().list_with_len(0, 2), u8_domain().list_with_len(0, 2))
+            ),
+            fuzz_tree
+        )
+        .with_fuzz(
+            "equal regexes are one node (fuzz)",
+            tuple2(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                tuple3(
+                    u8_domain().list_with_len(0, 6),
+                    u8_domain().list_with_len(0, 6),
+                    u8_domain().list_with_len(0, 6)
+                )
+            ),
+            fuzz_laws
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

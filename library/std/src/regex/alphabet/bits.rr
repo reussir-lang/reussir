@@ -1,6 +1,8 @@
 //! A set of numbers below 256.
 
 import core::simd;
+import std::hash::Hash;
+import std::hash::Hasher;
 
 /// A set of numbers from 0 to 255, one bit each: a set of bytes, or a set of
 /// class numbers. The bits are four 64-bit words held as one vector, so a
@@ -106,3 +108,13 @@ impl PartialEq for Bits {
 }
 
 impl Eq for Bits {}
+
+impl Hash for Bits {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        let w0: u64 = simd::extract(self.words, 0);
+        let w1: u64 = simd::extract(self.words, 1);
+        let w2: u64 = simd::extract(self.words, 2);
+        let w3: u64 = simd::extract(self.words, 3);
+        state.write_u64(w0).write_u64(w1).write_u64(w2).write_u64(w3)
+    }
+}
