@@ -640,9 +640,7 @@ impl<'tcx> Analyzer<'_, 'tcx> {
                     let mut free = self.free(st);
                     free.subtract(&bound);
                     s.union_with(&free);
-                    if let ExprKind::Let { var, .. } = st.kind {
-                        bound.insert(var);
-                    }
+                    bind_statement(st, &mut bound);
                 }
             }
             ExprKind::While {
@@ -1453,6 +1451,22 @@ impl<'tcx> Analyzer<'_, 'tcx> {
 }
 
 /// The immediate sub-trees of a switch's cases, in source order.
+/// Add the variables that statement `st` binds for the statements after it:
+/// its own `let`, and the `let`s of a block in statement position. A
+/// destructuring `let` lowers to such a block, and its bindings are used by
+/// the statements that follow it.
+fn bind_statement(st: &Expr<'_>, bound: &mut VarSet) {
+    match st.kind {
+        ExprKind::Let { var, .. } => bound.insert(var),
+        ExprKind::Seq(es) => {
+            for inner in es {
+                bind_statement(inner, bound);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn subtrees<'tcx>(cases: &SwitchCases<'tcx>) -> SmallVec<[&'tcx DecisionTree<'tcx>; 8]> {
     let mut v = SmallVec::new();
     match *cases {
