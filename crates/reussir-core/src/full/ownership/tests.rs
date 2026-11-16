@@ -2628,6 +2628,55 @@ fn while_state_and_captures_balance_across_iterations() {
     });
 }
 
+/// `while .. { let (_, x) = pair(); use(x) }`: a destructuring `let` is a
+/// block in statement position whose bindings the next statement uses. `x`
+/// is bound in the loop body, so it is no capture of the loop and its use is
+/// a last use.
+#[test]
+fn while_body_owns_bindings_of_a_statement_block() {
+    with_tcx(|tcx| {
+        let mut b = MirBuilder::new(tcx);
+        let ty = b.shared();
+        let pair_ty = b.value(vec![b.i64(), ty]);
+        let state = b.fresh_var();
+        let pair = b.fresh_var();
+        let x = b.fresh_var();
+        let initial = tcx.alloc(b.const_int(0));
+        let condition = tcx.alloc(b.const_bool(true));
+        let made = b.call("pair", vec![], pair_ty);
+        let bind_pair = b.let_(pair, made);
+        let whole = b.var(pair, pair_ty);
+        let part = b.proj(whole, vec![1], ty);
+        let bind_x = b.let_(x, part);
+        let unit = tcx.mk_unit();
+        let block = b.seq(vec![bind_pair, bind_x], unit);
+        let x_use = b.var(x, ty);
+        let x_use_id = x_use.id;
+        let used = b.call("use", vec![x_use], b.i64());
+        let body = tcx.alloc(b.seq(vec![block, used], b.i64()));
+        let loop_expr = b.mk(
+            ExprKind::While {
+                state,
+                initial,
+                condition,
+                body,
+            },
+            b.i64(),
+        );
+        let loop_id = loop_expr.id;
+        let f = b.function("loop", vec![], b.i64(), loop_expr);
+        let ot = run(tcx, &f, &b);
+        assert!(
+            !ot.before(x_use_id).contains(&RcOp::Dup(x)),
+            "the use of x is its last use in the body"
+        );
+        assert!(
+            !ot.after(loop_id).contains(&RcOp::Drop(x)),
+            "x is not a capture of the loop"
+        );
+    });
+}
+
 #[test]
 fn device_transfers_borrow_live_inputs_and_release_last_use() {
     use crate::intrinsic::{IntrinsicOp, PjrtFn};
