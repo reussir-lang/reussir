@@ -1,0 +1,446 @@
+// Unit suite and coverage-guided fuzz driver for `std::regex::tree`: the
+// regex a caller builds and its translation to a regex over bytes.
+// The tests match byte strings against a translated regex with a small
+// matcher that takes derivatives of the tree as it stands; it is slow and
+// only for strings of a few bytes.
+// Unit cases cover the builder, sets of characters beyond ASCII, any
+// character, and complement over text and over bytes.
+// Fuzz targets compare every operator, over random sets of characters and
+// over random sets of bytes, with what membership in the sets says.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_tree %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_tree
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_tree%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_tree%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex tree/builder: unit
+// CHECK-NEXT: regex tree/characters: unit
+// CHECK-NEXT: regex tree/any character: unit
+// CHECK-NEXT: regex tree/literal: unit
+// CHECK-NEXT: regex tree/complement: unit
+// CHECK-NEXT: regex tree/text operators (fuzz):
+// CHECK-NEXT: regex tree/byte operators (fuzz):
+
+import std::collections::pure::list::List;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import std::string::String;
+import std::text::Text;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ----------------------- A matcher for the tests -----------------------
+
+// Whether `regex` matches the empty string.
+fn nullable(regex: ByteRegex) -> bool {
+    match regex {
+        Empty => false,
+        Epsilon => true,
+        Set(_) => false,
+        Concat(a, b) => nullable(a) && nullable(b),
+        Union(a, b) => nullable(a) || nullable(b),
+        Intersect(a, b) => nullable(a) && nullable(b),
+        Star(_) => true,
+        Not(a) => !nullable(a)
+    }
+}
+
+// What may follow `byte` for `regex` to match.
+fn derive(regex: ByteRegex, byte: u64) -> ByteRegex {
+    match regex {
+        Empty => ByteRegex::Empty,
+        Epsilon => ByteRegex::Empty,
+        Set(set) => if set.contains(byte) { ByteRegex::Epsilon } else { ByteRegex::Empty },
+        Concat(a, b) => {
+            let after = ByteRegex::Concat { derive(a, byte), b };
+            if nullable(a) { ByteRegex::Union { after, derive(b, byte) } } else { after }
+        },
+        Union(a, b) => ByteRegex::Union { derive(a, byte), derive(b, byte) },
+        Intersect(a, b) => ByteRegex::Intersect { derive(a, byte), derive(b, byte) },
+        Star(a) => ByteRegex::Concat { derive(a, byte), ByteRegex::Star { a } },
+        Not(a) => ByteRegex::Not { derive(a, byte) }
+    }
+}
+
+fn matches(regex: ByteRegex, bytes: List<u8>) -> bool {
+    match bytes {
+        Nil => nullable(regex),
+        Cons(byte, rest) => matches(derive(regex, byte as u64), rest)
+    }
+}
+
+// ------------------------- Strings for the tests -------------------------
+
+fn above(point: u32, most: u32) -> u64 {
+    if point > most { 1 } else { 0 }
+}
+
+fn later(point: u32, bits: u32) -> u8 {
+    (0x80 | ((point >> bits) & 0x3F)) as u8
+}
+
+// The UTF-8 encoding of one character, written out here on its own.
+fn encode(character: char) -> List<u8> {
+    let point = character as u32;
+    match 1 + above(point, 0x7F) + above(point, 0x7FF) + above(point, 0xFFFF) {
+        1 => List::Cons { point as u8, List::Nil },
+        2 => List::Cons { (0xC0 | (point >> 6)) as u8, List::Cons { later(point, 0), List::Nil } },
+        3 => List::Cons {
+            (0xE0 | (point >> 12)) as u8,
+            List::Cons { later(point, 6), List::Cons { later(point, 0), List::Nil } }
+        },
+        // Four bytes: U+10000 and above.
+        _ => List::Cons {
+            (0xF0 | (point >> 18)) as u8,
+            List::Cons { later(point, 12), List::Cons { later(point, 6), List::Cons { later(point, 0), List::Nil } } }
+        }
+    }
+}
+
+fn join(first: List<u8>, second: List<u8>) -> List<u8> {
+    match first {
+        Nil => second,
+        Cons(byte, rest) => List::Cons { byte, join(rest, second) }
+    }
+}
+
+fn text(characters: List<char>) -> List<u8> {
+    match characters {
+        Nil => List::Nil,
+        Cons(character, rest) => join(encode(character), text(rest))
+    }
+}
+
+fn chars2(a: char, b: char) -> List<char> {
+    List::Cons { a, List::Cons { b, List::Nil } }
+}
+
+fn chars3(a: char, b: char, c: char) -> List<char> {
+    List::Cons { a, chars2(b, c) }
+}
+
+fn bytes1(a: u8) -> List<u8> {
+    List::Cons { a, List::Nil }
+}
+
+fn bytes2(a: u8, b: u8) -> List<u8> {
+    List::Cons { a, bytes1(b) }
+}
+
+fn bytes3(a: u8, b: u8, c: u8) -> List<u8> {
+    List::Cons { a, bytes2(b, c) }
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+fn test_builder() -> Outcome {
+    let digit = Regex::range(48, 57);
+    let number = digit.plus().to_bytes();
+    let signed = Regex::byte(45).optional().then(digit.plus()).to_bytes();
+    let two = digit.then(digit).or(Regex::byte(120)).to_bytes();
+    expect(
+        matches(number, bytes2(52, 50)) && !matches(number, List::Nil) && !matches(number, bytes2(52, 97)),
+        "one or more digits"
+    )
+        .and_then(|| expect(
+            matches(signed, bytes2(45, 55)) && matches(signed, bytes1(55)) && !matches(signed, bytes1(45)),
+            "an optional sign"
+        ))
+        .and_then(|| expect(
+            matches(two, bytes2(49, 50)) && matches(two, bytes1(120)) && !matches(two, bytes1(49)),
+            "two digits or an x"
+        ))
+        .and_then(|| expect(
+            !matches(Regex::empty().to_bytes(), List::Nil) && matches(Regex::epsilon().to_bytes(), List::Nil),
+            "nothing and the empty string"
+        ))
+        .and_then(|| expect(
+            matches(digit.and(Regex::range(53, 100)).to_bytes(), bytes1(55))
+                && !matches(digit.and(Regex::range(53, 100)).to_bytes(), bytes1(50)),
+            "both of two sets"
+        ))
+}
+
+fn test_characters() -> Outcome {
+    let greek = Regex::chars(CharSet::range('α', 'ω')).plus().to_bytes();
+    expect(matches(greek, text(chars3('α', 'β', 'ω'))), "Greek letters")
+        .and_then(|| expect(!matches(greek, text(chars2('α', 'b'))), "a Latin letter among them"))
+        // CE is the first byte of α and half a character on its own.
+        .and_then(|| expect(!matches(greek, bytes1(0xCE)), "half a character"))
+        .and_then(|| expect(!matches(greek, bytes2(0xCE, 0xB0)), "the character before α"))
+        .and_then(|| expect(
+            matches(Regex::char('€').to_bytes(), bytes3(0xE2, 0x82, 0xAC)),
+            "one character of three bytes"
+        ))
+}
+
+fn test_any() -> Outcome {
+    let any = Regex::any_char().to_bytes();
+    expect(
+        matches(any, text(List::Cons { 'a', List::Nil }))
+            && matches(any, text(List::Cons { 'é', List::Nil }))
+            && matches(any, text(List::Cons { '€', List::Nil }))
+            && matches(any, text(List::Cons { '😀', List::Nil })),
+        "characters of one to four bytes"
+    )
+        .and_then(|| expect(!matches(any, bytes1(0x80)), "a later byte alone"))
+        .and_then(|| expect(!matches(any, bytes2(0xC0, 0x80)), "an encoding longer than needed"))
+        .and_then(|| expect(!matches(any, bytes3(0xED, 0xA0, 0x80)), "a surrogate"))
+        .and_then(|| expect(!matches(any, text(chars2('a', 'b'))), "two characters"))
+}
+
+fn test_literal() -> Outcome {
+    let keyword = Regex::literal(Text::from_str("while")).to_bytes();
+    let greek = Regex::literal(Text::from_str("αβ"));
+    expect(
+        matches(keyword, text(List::Cons { 'w', List::Cons { 'h', chars3('i', 'l', 'e') } }))
+            && !matches(keyword, text(List::Cons { 'w', chars3('h', 'i', 'l') }))
+            && !matches(keyword, List::Nil),
+        "a keyword and nothing shorter"
+    )
+        .and_then(|| expect(
+            matches(greek.to_bytes(), text(chars2('α', 'β'))) && !matches(greek.to_bytes(), text(chars2('α', 'α'))),
+            "a literal beyond ASCII"
+        ))
+        .and_then(|| expect(
+            matches(Regex::literal(Text::from_str("")).to_bytes(), List::Nil)
+                && !matches(Regex::literal(Text::from_str("")).to_bytes(), bytes1(97)),
+            "the empty literal"
+        ))
+        // A literal is text: its complement holds no half character.
+        .and_then(|| expect(
+            !matches(greek.not().to_bytes(), bytes1(0xCE)) && matches(greek.not().to_bytes(), text(chars2('α', 'α'))),
+            "the complement of a literal"
+        ))
+}
+
+fn test_complement() -> Outcome {
+    // Over text: every string of whole characters but `a`.
+    let not_a = Regex::char('a').not().to_bytes();
+    // Over bytes: every string of bytes but the byte 61.
+    let not_61 = Regex::byte(97).not().to_bytes();
+    expect(
+        matches(not_a, List::Nil)
+            && matches(not_a, text(List::Cons { 'b', List::Nil }))
+            && matches(not_a, text(chars2('a', 'b')))
+            && matches(not_a, text(List::Cons { 'é', List::Nil })),
+        "strings that are not `a`"
+    )
+        .and_then(|| expect(!matches(not_a, bytes1(97)), "`a` itself"))
+        .and_then(|| expect(!matches(not_a, bytes1(0xC3)), "half a character is not text"))
+        .and_then(|| expect(
+            matches(not_61, bytes1(0xC3)) && matches(not_61, List::Nil) && !matches(not_61, bytes1(97)),
+            "over bytes, any other string of bytes"
+        ))
+        // One set of bytes makes the whole regex one over bytes.
+        .and_then(|| expect(
+            matches(Regex::char('a').then(Regex::byte(98)).not().to_bytes(), bytes1(0xC3)),
+            "a regex with a set of bytes is complemented over bytes"
+        ))
+}
+
+// ------------------- Fuzz 1: operators over characters -------------------
+
+fn chars_of(ranges: List<(char, char)>) -> CharSet {
+    ranges.fold_left(CharSet::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(CharSet::range(lo, hi))
+    })
+}
+
+// Whether the string is one character of `set`.
+fn one_of(characters: List<char>, set: CharSet) -> bool {
+    match characters {
+        Cons(only, rest) => rest.is_nil() && set.contains(only),
+        Nil => false
+    }
+}
+
+// Whether the string is one character of `first`, then one of `second`.
+fn pair_of(characters: List<char>, first: CharSet, second: CharSet) -> bool {
+    match characters {
+        Cons(head, rest) => first.contains(head) && one_of(rest, second),
+        Nil => false
+    }
+}
+
+// The string without its last byte.
+fn cut(bytes: List<u8>) -> List<u8> {
+    match bytes {
+        Nil => List::Nil,
+        Cons(byte, rest) => if rest.is_nil() { List::Nil } else { List::Cons { byte, cut(rest) } }
+    }
+}
+
+// Whether the last character takes more than one byte.
+fn ends_wide(characters: List<char>) -> bool {
+    match characters {
+        Nil => false,
+        Cons(character, rest) => if rest.is_nil() { (character as u32) > 0x7F } else { ends_wide(rest) }
+    }
+}
+
+fn fuzz_text(input: (List<(char, char)>, List<(char, char)>, List<char>)) -> Outcome {
+    let (first, second, characters) = input;
+    let a = chars_of(first);
+    let b = chars_of(second);
+    let bytes = text(characters);
+    let in_a = Regex::chars(a);
+    let in_b = Regex::chars(b);
+    let all_a = characters.all(|character| a.contains(character));
+    let all_both = characters.all(|character| a.contains(character) && b.contains(character));
+    // A string that ends in the middle of a character is no text.
+    let half = cut(bytes);
+    let spelled = Regex::literal(Text::from_string(
+        characters.fold_left(String::new(), |string: String, character: char| string.push_char(character))
+    ));
+    expect(matches(in_a.to_bytes(), bytes) == one_of(characters, a), "one character of a set")
+        .and_then(|| expect(matches(in_a.star().to_bytes(), bytes) == all_a, "any number of characters of a set"))
+        .and_then(|| expect(
+            matches(in_a.then(in_b).to_bytes(), bytes) == pair_of(characters, a, b),
+            "one character, then another"
+        ))
+        .and_then(|| expect(
+            matches(in_a.or(in_b).to_bytes(), bytes) == one_of(characters, a.union(b)),
+            "a character of either set"
+        ))
+        .and_then(|| expect(
+            matches(in_a.and(in_b).to_bytes(), bytes) == one_of(characters, a.intersect(b)),
+            "a character of both sets"
+        ))
+        .and_then(|| expect(
+            matches(in_a.star().and(in_b.star()).to_bytes(), bytes) == all_both,
+            "characters of both sets"
+        ))
+        .and_then(|| expect(
+            matches(in_a.not().to_bytes(), bytes) == !one_of(characters, a),
+            "the complement of one character"
+        ))
+        .and_then(|| expect(
+            matches(in_a.star().not().to_bytes(), bytes) == !all_a,
+            "the complement of a repetition"
+        ))
+        .and_then(|| expect(
+            matches(in_a.then(in_b).not().to_bytes(), bytes) == !pair_of(characters, a, b),
+            "the complement of a concatenation"
+        ))
+        .and_then(|| expect(
+            matches(spelled.to_bytes(), bytes) && (characters.is_nil() || !matches(spelled.to_bytes(), half)),
+            "a literal matches its own bytes and nothing shorter"
+        ))
+        .and_then(|| expect(
+            !matches(spelled.not().to_bytes(), bytes) && (!ends_wide(characters) || !matches(spelled.not().to_bytes(), half)),
+            "the complement of a literal"
+        ))
+        // The complement of a text regex holds no string that ends inside a
+        // character, whatever operator the regex is made with.
+        .and_then(|| expect(
+            !ends_wide(characters)
+                || (!matches(in_a.not().to_bytes(), half)
+                    && !matches(in_a.star().not().to_bytes(), half)
+                    && !matches(in_a.then(in_b).not().to_bytes(), half)
+                    && !matches(in_a.star().or(in_b.star()).not().to_bytes(), half)
+                    && !matches(in_a.star().and(in_b.star()).not().to_bytes(), half)
+                    && !matches(in_a.optional().not().to_bytes(), half)
+                    && !matches(in_a.not().not().to_bytes(), half)
+                    && !matches(Regex::any_char().star().to_bytes(), half)),
+            "half a character matched as text"
+        ))
+}
+
+// --------------------- Fuzz 2: operators over bytes ---------------------
+
+fn bits_of(ranges: List<(u8, u8)>) -> Bits {
+    ranges.fold_left(Bits::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(Bits::range(lo as u64, hi as u64))
+    })
+}
+
+fn one_byte_of(bytes: List<u8>, set: Bits) -> bool {
+    match bytes {
+        Cons(only, rest) => rest.is_nil() && set.contains(only as u64),
+        Nil => false
+    }
+}
+
+fn pair_of_bytes(bytes: List<u8>, first: Bits, second: Bits) -> bool {
+    match bytes {
+        Cons(head, rest) => first.contains(head as u64) && one_byte_of(rest, second),
+        Nil => false
+    }
+}
+
+fn fuzz_bytes(input: (List<(u8, u8)>, List<(u8, u8)>, List<u8>)) -> Outcome {
+    let (first, second, bytes) = input;
+    let a = bits_of(first);
+    let b = bits_of(second);
+    let in_a = Regex::bytes(a);
+    let in_b = Regex::bytes(b);
+    let all_a = bytes.all(|byte| a.contains(byte as u64));
+    expect(matches(in_a.to_bytes(), bytes) == one_byte_of(bytes, a), "one byte of a set")
+        .and_then(|| expect(matches(in_a.star().to_bytes(), bytes) == all_a, "any number of bytes of a set"))
+        .and_then(|| expect(
+            matches(in_a.then(in_b).to_bytes(), bytes) == pair_of_bytes(bytes, a, b),
+            "one byte, then another"
+        ))
+        .and_then(|| expect(
+            matches(in_a.or(in_b).to_bytes(), bytes) == one_byte_of(bytes, a.union(b)),
+            "a byte of either set"
+        ))
+        .and_then(|| expect(
+            matches(in_a.and(in_b).to_bytes(), bytes) == one_byte_of(bytes, a.intersect(b)),
+            "a byte of both sets"
+        ))
+        // Over bytes the complement is every other string of bytes.
+        .and_then(|| expect(
+            matches(in_a.not().to_bytes(), bytes) == !one_byte_of(bytes, a),
+            "the complement of one byte"
+        ))
+        .and_then(|| expect(
+            matches(in_a.star().not().to_bytes(), bytes) == !all_a,
+            "the complement of a repetition"
+        ))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex tree")
+        .with_case("builder", test_builder)
+        .with_case("characters", test_characters)
+        .with_case("any character", test_any)
+        .with_case("literal", test_literal)
+        .with_case("complement", test_complement)
+        .with_fuzz(
+            "text operators (fuzz)",
+            tuple3(
+                tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 4),
+                tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 4),
+                char_domain().utf8().list_with_len(0, 3)
+            ),
+            fuzz_text
+        )
+        .with_fuzz(
+            "byte operators (fuzz)",
+            tuple3(
+                tuple2(u8_domain(), u8_domain()).list_with_len(0, 4),
+                tuple2(u8_domain(), u8_domain()).list_with_len(0, 4),
+                u8_domain().list_with_len(0, 3)
+            ),
+            fuzz_bytes
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

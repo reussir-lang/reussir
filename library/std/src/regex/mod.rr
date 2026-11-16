@@ -1,6 +1,8 @@
-//! Regular expressions matched with derivatives.
+//! Regular expressions matched with derivatives, over bytes.
 //!
-//! - `alphabet`: what one unit of input is, sets of units, and the classes
-//!   of units that a group of sets cannot tell apart.
+//! - `alphabet`: sets of bytes and of characters, the classes of bytes, and
+//!   the UTF-8 encodings of a set of characters.
+//! - `tree`: the regex a caller builds, and the same regex over bytes only.
 
 pub mod alphabet;
+pub mod tree;

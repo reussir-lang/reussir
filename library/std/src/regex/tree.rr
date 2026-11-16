@@ -1,0 +1,301 @@
+//! The regex a caller builds, and the same regex over bytes only.
+//!
+//! A `Regex` is a plain value: building one needs no table and no state. Its
+//! leaves are sets of bytes and sets of characters. `to_bytes` replaces every
+//! set of characters by the UTF-8 encodings of its members, the form a
+//! matcher over bytes works on:
+//!
+//! ```text
+//! let letter = Regex::chars(CharSet::range('α', 'ω'));
+//! letter.plus().to_bytes()
+//! // (CE [B1-BF] | CF [80-89]) (CE [B1-BF] | CF [80-89])*
+//! ```
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::alphabet::utf8::Utf8Range;
+import std::regex::alphabet::utf8::Utf8Sequence;
+import std::regex::alphabet::utf8::fold_sequences;
+import std::text::Text;
+
+/// A regex whose leaves are sets of bytes and sets of characters.
+pub enum Regex {
+    /// Matches nothing.
+    Empty,
+    /// Matches the empty string.
+    Epsilon,
+    /// One byte of the set.
+    Bytes(Bits),
+    /// One character of the set, as its UTF-8 encoding.
+    Chars(CharSet),
+    Concat(Regex, Regex),
+    Union(Regex, Regex),
+    Intersect(Regex, Regex),
+    Star(Regex),
+    Not(Regex)
+}
+
+/// A regex whose leaves are sets of bytes only.
+pub enum ByteRegex {
+    /// Matches nothing.
+    Empty,
+    /// Matches the empty string.
+    Epsilon,
+    /// One byte of the set.
+    Set(Bits),
+    Concat(ByteRegex, ByteRegex),
+    Union(ByteRegex, ByteRegex),
+    Intersect(ByteRegex, ByteRegex),
+    Star(ByteRegex),
+    Not(ByteRegex)
+}
+
+// `first`, then `rest`.
+fn before(first: Regex, rest: Regex) -> Regex {
+    match rest {
+        Epsilon => first,
+        // Anything that takes input.
+        _ => Regex::Concat { first, rest }
+    }
+}
+
+// The characters of `text` from the byte `at` on, one after another.
+fn spell(text: Text, at: u64) -> Regex {
+    if at >= text.len() { Regex::Epsilon } else {
+        match text.decode_char(at) {
+            Some(decoded) => {
+                let (character, next) = decoded;
+                before(Regex::Chars { CharSet::single(character) }, spell(text, next))
+            },
+            // No character starts here: the byte stands for itself.
+            None => before(Regex::Bytes { Bits::single(text.byte_at(at) as u64) }, spell(text, at + 1))
+        }
+    }
+}
+
+impl Regex {
+    /// Matches nothing.
+    pub fn empty() -> Self {
+        Regex::Empty
+    }
+
+    /// Matches the empty string.
+    pub fn epsilon() -> Self {
+        Regex::Epsilon
+    }
+
+    /// One byte of `set`.
+    pub fn bytes(set: Bits) -> Self {
+        Regex::Bytes { set }
+    }
+
+    pub fn byte(byte: u8) -> Self {
+        Regex::Bytes { Bits::single(byte as u64) }
+    }
+
+    /// One byte from `lo` to `hi`, both included.
+    pub fn range(lo: u8, hi: u8) -> Self {
+        Regex::Bytes { Bits::range(lo as u64, hi as u64) }
+    }
+
+    /// One character of `set`.
+    pub fn chars(set: CharSet) -> Self {
+        Regex::Chars { set }
+    }
+
+    pub fn char(character: char) -> Self {
+        Regex::Chars { CharSet::single(character) }
+    }
+
+    /// One character, whichever.
+    pub fn any_char() -> Self {
+        Regex::Chars { CharSet::full() }
+    }
+
+    /// The characters of `text`, one after another.
+    pub fn literal(text: Text) -> Self {
+        spell(text, 0)
+    }
+
+    /// `self`, then `next`.
+    pub fn then(self: Self, next: Self) -> Self {
+        Regex::Concat { self, next }
+    }
+
+    /// `self` or `other`. Two sets of one kind become one set.
+    pub fn or(self: Self, other: Self) -> Self {
+        match self {
+            Bytes(mine) => match other {
+                Bytes(theirs) => Regex::Bytes { mine.union(theirs) },
+                // Anything but a set of bytes.
+                _ => Regex::Union { self, other }
+            },
+            Chars(mine) => match other {
+                Chars(theirs) => Regex::Chars { mine.union(theirs) },
+                // Anything but a set of characters.
+                _ => Regex::Union { self, other }
+            },
+            // `self` is no set.
+            _ => Regex::Union { self, other }
+        }
+    }
+
+    /// Both `self` and `other`. Two sets of one kind become one set.
+    pub fn and(self: Self, other: Self) -> Self {
+        match self {
+            Bytes(mine) => match other {
+                Bytes(theirs) => Regex::Bytes { mine.intersect(theirs) },
+                // Anything but a set of bytes.
+                _ => Regex::Intersect { self, other }
+            },
+            Chars(mine) => match other {
+                Chars(theirs) => Regex::Chars { mine.intersect(theirs) },
+                // Anything but a set of characters.
+                _ => Regex::Intersect { self, other }
+            },
+            // `self` is no set.
+            _ => Regex::Intersect { self, other }
+        }
+    }
+
+    /// Everything `self` does not match. For a regex whose sets are all sets
+    /// of characters that is every string of whole characters it does not
+    /// match; for any other regex, every string of bytes.
+    pub fn not(self: Self) -> Self {
+        Regex::Not { self }
+    }
+
+    /// `self` any number of times.
+    pub fn star(self: Self) -> Self {
+        Regex::Star { self }
+    }
+
+    /// `self` once or more.
+    pub fn plus(self: Self) -> Self {
+        Regex::Concat { self, Regex::Star { self } }
+    }
+
+    /// `self` or the empty string.
+    pub fn optional(self: Self) -> Self {
+        Regex::Union { Regex::Epsilon, self }
+    }
+
+    /// The same regex with every set of characters replaced by the UTF-8
+    /// encodings of its members.
+    pub fn to_bytes(self: Self) -> ByteRegex {
+        let (regex, _) = lower(self);
+        regex
+    }
+}
+
+// `first`, then `rest`.
+fn follow(first: ByteRegex, rest: ByteRegex) -> ByteRegex {
+    match rest {
+        Epsilon => first,
+        // Anything that takes bytes.
+        _ => ByteRegex::Concat { first, rest }
+    }
+}
+
+// `one` or `others`.
+fn either(one: ByteRegex, others: ByteRegex) -> ByteRegex {
+    match others {
+        Empty => one,
+        // Anything that matches something.
+        _ => ByteRegex::Union { one, others }
+    }
+}
+
+// The ranges of a sequence, first byte first.
+fn ranges(sequence: Utf8Sequence) -> List<Utf8Range> {
+    match sequence {
+        One(a) => List::Cons { a, List::Nil },
+        Two(a, b) => List::Cons { a, List::Cons { b, List::Nil } },
+        Three(a, b, c) => List::Cons { a, List::Cons { b, List::Cons { c, List::Nil } } },
+        Four(a, b, c, d) => List::Cons { a, List::Cons { b, List::Cons { c, List::Cons { d, List::Nil } } } }
+    }
+}
+
+// The sequences at the front of `sequences` that begin with `head`, without
+// it, and the sequences after them.
+fn beginning(
+    sequences: List<List<Utf8Range>>,
+    head: Utf8Range
+) -> (List<List<Utf8Range>>, List<List<Utf8Range>>) {
+    match sequences {
+        Nil => (List::Nil, List::Nil),
+        Cons(first, rest) => match first {
+            Cons(range, tail) if range == head => {
+                let (same, others) = beginning(rest, head);
+                (List::Cons { tail, same }, others)
+            },
+            // A sequence that begins with another range, or has ended.
+            _ => (List::Nil, sequences)
+        }
+    }
+}
+
+// The strings of `sequences`, which come in the order of the bytes.
+// Sequences with one first range share it: `CE B1` and `CE B3` become
+// `CE (B1 | B3)`, so no byte is tried twice.
+fn strings(sequences: List<List<Utf8Range>>) -> ByteRegex {
+    match sequences {
+        Nil => ByteRegex::Empty,
+        Cons(first, rest) => match first {
+            Nil => either(ByteRegex::Epsilon, strings(rest)),
+            Cons(head, tail) => {
+                let (same, others) = beginning(rest, head);
+                let set = ByteRegex::Set { Bits::range(head.start as u64, head.end as u64) };
+                either(follow(set, strings(List::Cons { tail, same })), strings(others))
+            }
+        }
+    }
+}
+
+// The UTF-8 encodings of the members of `set`.
+fn encodings(set: CharSet) -> ByteRegex {
+    let sequences = fold_sequences(
+        set,
+        List::Nil,
+        |found: List<List<Utf8Range>>, sequence: Utf8Sequence| List::Cons { ranges(sequence), found }
+    );
+    strings(sequences.reverse())
+}
+
+// The regex over bytes, and whether every set in it was a set of characters.
+fn lower(regex: Regex) -> (ByteRegex, bool) {
+    match regex {
+        Empty => (ByteRegex::Empty, true),
+        Epsilon => (ByteRegex::Epsilon, true),
+        Bytes(set) => (ByteRegex::Set { set }, false),
+        Chars(set) => (encodings(set), true),
+        Concat(first, second) => {
+            let (a, a_text) = lower(first);
+            let (b, b_text) = lower(second);
+            (ByteRegex::Concat { a, b }, a_text && b_text)
+        },
+        Union(first, second) => {
+            let (a, a_text) = lower(first);
+            let (b, b_text) = lower(second);
+            (ByteRegex::Union { a, b }, a_text && b_text)
+        },
+        Intersect(first, second) => {
+            let (a, a_text) = lower(first);
+            let (b, b_text) = lower(second);
+            (ByteRegex::Intersect { a, b }, a_text && b_text)
+        },
+        Star(inner) => {
+            let (a, text) = lower(inner);
+            (ByteRegex::Star { a }, text)
+        },
+        Not(inner) => {
+            let (a, text) = lower(inner);
+            let all = ByteRegex::Not { a };
+            // Over text, only strings of whole characters.
+            let within = ByteRegex::Intersect { ByteRegex::Star { encodings(CharSet::full()) }, all };
+            (if text { within } else { all }, text)
+        }
+    }
+}

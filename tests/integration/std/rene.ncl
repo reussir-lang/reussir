@@ -31,6 +31,7 @@
     option = { kind = 'executable, path = "option.rr" },
     random = { kind = 'executable, path = "random.rr" },
     regex_alphabet = { kind = 'executable, path = "regex_alphabet.rr", fuzzer = true },
+    regex_tree = { kind = 'executable, path = "regex_tree.rr", fuzzer = true },
     regex_utf8 = { kind = 'executable, path = "regex_utf8.rr", fuzzer = true },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr", fuzzer = true },
