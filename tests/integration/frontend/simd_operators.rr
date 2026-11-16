@@ -20,6 +20,7 @@
 // CORE-DAG: arith.shrui %{{.*}}, %{{.*}} : vector<4xi32>
 // CORE-DAG: arith.negf %{{.*}} : vector<2xf64>
 // CORE-DAG: arith.addi %arg0, %arg1 : vector<2x8xi8>
+// CORE-DAG: arith.addi %arg0, %arg1 : vector<4xi32>
 
 import core::simd;
 
@@ -52,6 +53,15 @@ pub fn both(a: Simd<[i16; 8]>, b: Simd<[i16; 8]>) -> Simd<[bool; 8]> {
 // CHECK: arith.xori
 pub fn mixed(a: Simd<[u32; 4]>, b: Simd<[u32; 4]>) -> Simd<[u32; 4]> {
     !((((a - b) / b % b) << b >> b | a) ^ b)
+}
+
+// The method of an operator's trait is called on a vector as on a number.
+// HIR-DAG: (v0 : Simd<[i32; 4]> + v1 : Simd<[i32; 4]>) : Simd<[i32; 4]>
+// CHECK-LABEL: func.func @{{.*}}method
+// CHECK: arith.addi %arg0, %arg1 : vector<4xi32>
+// CHECK: arith.negf %arg2 : vector<2xf64>
+pub fn method(a: Simd<[i32; 4]>, b: Simd<[i32; 4]>, x: Simd<[f64; 2]>) -> (Simd<[i32; 4]>, Simd<[f64; 2]>) {
+    (a.add(b), x.neg())
 }
 
 // A scalar `!` is unchanged.

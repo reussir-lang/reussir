@@ -1990,11 +1990,11 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             };
             return self.dispatch_generic_dot(g, cur, receiver, *name, args, span);
         }
-        // A scalar (or `str`) receiver has no fields either; its dot calls
-        // dispatch through the traits the builtin impls provide (`a.eq(b)`,
-        // `a.cmp(b)` — lowered intrinsically by the selected impl, or a
-        // method-carrying builtin impl like `Hash for str`).
-        if (cur.is_scalar() || matches!(cur.kind(), TyKind::Str))
+        // A scalar, `str` or vector receiver has no fields either; its dot
+        // calls dispatch through the traits the builtin impls provide
+        // (`a.eq(b)`, `a.cmp(b)` — lowered intrinsically by the selected
+        // impl, or a method-carrying builtin impl like `Hash for str`).
+        if (cur.is_scalar() || matches!(cur.kind(), TyKind::Str | TyKind::Simd { .. }))
             && let surface::Access::Named(name) = last
         {
             let receiver = if indices.is_empty() {
@@ -2501,9 +2501,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
     }
 
-    /// Dot dispatch on a scalar receiver: the traits its impls provide
-    /// are the only method sources (there are no fields and no inherent
-    /// methods). The unique named candidate wins.
+    /// Dot dispatch on a scalar or vector receiver: the traits its impls
+    /// provide are the only method sources (there are no fields and no
+    /// inherent methods). The unique named candidate wins.
     fn dispatch_scalar_dot(
         &mut self,
         recv_ty: Ty<'tcx>,
@@ -2512,23 +2512,21 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         args: &[surface::Expr],
         span: Option<Span>,
     ) -> Expr<'tcx> {
-        let mut candidates: Vec<(TraitId, usize)> = self
-            .traits
-            .impls()
-            .filter(|imp| imp.self_ty == recv_ty)
-            .filter_map(|imp| {
-                let tid = imp.trait_ref.trait_id;
-                if self.lang.is_superseded(tid) {
-                    return None;
-                }
-                self.traits
-                    .trait_def(tid)
-                    .methods
-                    .iter()
-                    .position(|m| m.name == name)
-                    .map(|midx| (tid, midx))
-            })
-            .collect();
+        let mut candidates: Vec<(TraitId, usize)> = match recv_ty.kind() {
+            // An impl for vectors leaves the extents out (`Simd<[T; ..]>`),
+            // so selection finds the traits a vector implements.
+            TyKind::Simd { .. } => self.ground_trait_candidates(recv_ty, method_named(name)),
+            _ => self
+                .traits
+                .impls()
+                .filter(|imp| imp.self_ty == recv_ty)
+                .filter_map(|imp| {
+                    let tid = imp.trait_ref.trait_id;
+                    method_named(name)(self.traits.trait_def(tid)).map(|midx| (tid, midx))
+                })
+                .collect(),
+        };
+        candidates.retain(|&(tid, _)| !self.lang.is_superseded(tid));
         candidates.sort_unstable_by_key(|(tid, _)| tid.0);
         candidates.dedup();
         match candidates.as_slice() {
