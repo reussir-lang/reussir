@@ -25,9 +25,9 @@ pub struct [value] Span {
 // one ends at `limit`.
 fn spans_from(start: u32, value: bool, entries: List<Entry<u32, bool>>, limit: u32) -> List<Span> {
     match entries {
-        Nil => List::Cons { Span { start: start, end: limit, value: value }, List::Nil },
+        Nil => List::Cons { Span { start, end: limit, value }, List::Nil },
         Cons(next, rest) => List::Cons {
-            Span { start: start, end: next.key, value: value },
+            Span { start, end: next.key, value },
             spans_from(next.key, next.value, rest, limit)
         }
     }

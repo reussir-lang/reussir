@@ -3,6 +3,9 @@
 //! - `alphabet`: sets of bytes and of characters, the classes of bytes, and
 //!   the UTF-8 encodings of a set of characters.
 //! - `tree`: the regex a caller builds, and the same regex over bytes only.
+//! - `node`: regexes as nodes of a table, where equal regexes are the same
+//!   node, and their derivatives.
 
 pub mod alphabet;
+pub mod node;
 pub mod tree;

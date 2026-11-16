@@ -1,0 +1,463 @@
+//! Regexes as nodes of a table, where equal regexes are the same node.
+//!
+//! Every node is made by a constructor that applies a few rewrite rules and
+//! then looks the result up among the nodes that exist, so a regex is a
+//! small number and comparing two regexes is comparing two numbers:
+//!
+//! ```text
+//! let (nodes, digits) = nodes.star(digit);
+//! let (nodes, again) = nodes.star(digits);      // (r*)* = r*
+//! // again == digits
+//! ```
+//!
+//! The constructors thread the table, because making a node may add to it.
+
+import core::cmp::Ordering;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::hashmap::HashMap;
+import std::collections::pure::list::List;
+import std::hash::Hash;
+import std::hash::Hasher;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::tree::ByteRegex;
+
+/// A regex of a table of nodes. Two nodes of one table are equal when the
+/// rewrite rules make their regexes the same.
+pub struct [value] Node {
+    number: u32
+}
+
+impl PartialEq for Node {
+    fn eq(self: Self, other: Self) -> bool {
+        self.number == other.number
+    }
+}
+
+impl Eq for Node {}
+
+impl Node {
+    /// The node that matches nothing; it is in every table.
+    pub fn nothing() -> Self {
+        Node { number: 0 }
+    }
+
+    /// The node that matches the empty string; it is in every table.
+    pub fn epsilon() -> Self {
+        Node { number: 1 }
+    }
+}
+
+/// What a node is made of; the representation inside `Nodes`. The children
+/// of a union and of an intersection are in the order of their numbers,
+/// without repeats, and at least two.
+pub enum Shape {
+    Empty,
+    Epsilon,
+    // One byte of these classes.
+    Set(Bits),
+    Concat(Node, Node),
+    Star(Node),
+    Union(List<Node>),
+    Intersect(List<Node>),
+    Not(Node)
+}
+
+/// A shape as the key under which `Nodes` finds its node.
+pub struct Key {
+    kind: u8,
+    set: Bits,
+    children: List<Node>
+}
+
+fn key(shape: Shape) -> Key {
+    match shape {
+        Empty => Key { kind: 0, set: Bits::empty(), children: List::Nil },
+        Epsilon => Key { kind: 1, set: Bits::empty(), children: List::Nil },
+        Set(classes) => Key { kind: 2, set: classes, children: List::Nil },
+        Concat(first, second) => Key {
+            kind: 3,
+            set: Bits::empty(),
+            children: List::Cons { first, List::Cons { second, List::Nil } }
+        },
+        Star(inner) => Key { kind: 4, set: Bits::empty(), children: List::Cons { inner, List::Nil } },
+        Union(children) => Key { kind: 5, set: Bits::empty(), children },
+        Intersect(children) => Key { kind: 6, set: Bits::empty(), children },
+        Not(inner) => Key { kind: 7, set: Bits::empty(), children: List::Cons { inner, List::Nil } }
+    }
+}
+
+fn same(first: List<Node>, second: List<Node>) -> bool {
+    match first {
+        Nil => second.is_nil(),
+        Cons(node, rest) => match second {
+            Nil => false,
+            Cons(other, others) => node == other && same(rest, others)
+        }
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(self: Self, other: Self) -> bool {
+        self.kind == other.kind && self.set == other.set && same(self.children, other.children)
+    }
+}
+
+impl Eq for Key {}
+
+impl Hash for Key {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        self.children.fold_left(
+            state.write_u8(self.kind).write(self.set),
+            |state: H, child: Node| state.write_u32(child.number)
+        )
+    }
+}
+
+/// A node as `Nodes` holds it.
+pub struct Entry {
+    shape: Shape,
+    // Whether it matches the empty string.
+    empty: bool
+}
+
+/// A table of nodes.
+pub struct Nodes {
+    entries: Vec<Entry>,
+    numbers: HashMap<Key, u32>
+}
+
+// `node` put into `sorted`, which is in the order of the numbers and has no
+// repeats.
+fn place(sorted: List<Node>, node: Node) -> List<Node> {
+    match sorted {
+        Nil => List::Cons { node, List::Nil },
+        Cons(first, rest) => match node.number.cmp(first.number) {
+            Less => List::Cons { node, sorted },
+            Equal => sorted,
+            Greater => List::Cons { first, place(rest, node) }
+        }
+    }
+}
+
+// What the children of a union or of an intersection come to.
+struct Gathered {
+    // A child decides the whole: every string for a union, none for an
+    // intersection.
+    decided: bool,
+    // The sets among the children, as one set.
+    set: Bits,
+    has_set: bool,
+    // The other children.
+    rest: List<Node>
+}
+
+impl Nodes {
+    /// A table with the two nodes that every table has.
+    pub fn new() -> Self {
+        let entries = Vec::new()
+            .push(Entry { shape: Shape::Empty, empty: false })
+            .push(Entry { shape: Shape::Epsilon, empty: true });
+        let numbers = HashMap::new().insert(key(Shape::Empty), 0).insert(key(Shape::Epsilon), 1);
+        Nodes { entries, numbers }
+    }
+
+    /// The number of nodes.
+    pub fn len(self: Self) -> u64 {
+        self.entries.len()
+    }
+
+    // A number this table does not have is read as the node that matches
+    // nothing.
+    fn entry(self: Self, node: Node) -> Entry {
+        self.entries.get(node.number as u64).unwrap_or(Entry { shape: Shape::Empty, empty: false })
+    }
+
+    /// Whether `node` matches the empty string.
+    pub fn accepts_empty(self: Self, node: Node) -> bool {
+        self.entry(node).empty
+    }
+
+    // The node of `shape`, made if it does not exist.
+    fn intern(self: Self, shape: Shape, empty: bool) -> (Self, Node) {
+        let found = key(shape);
+        match self.numbers.get(found) {
+            Some(number) => (self, Node { number }),
+            None => {
+                let number = self.entries.len() as u32;
+                let table = Nodes {
+                    entries: self.entries.push(Entry { shape, empty }),
+                    numbers: self.numbers.insert(found, number)
+                };
+                (table, Node { number })
+            }
+        }
+    }
+
+    /// The node that matches every string: the complement of nothing.
+    pub fn all(self: Self) -> (Self, Node) {
+        self.intern(Shape::Not { Node::nothing() }, true)
+    }
+
+    fn is_all(self: Self, node: Node) -> bool {
+        match self.entry(node).shape {
+            Not(inner) => inner == Node::nothing(),
+            // Any other shape.
+            _ => false
+        }
+    }
+
+    /// One byte of the classes in `classes`.
+    pub fn set(self: Self, classes: Bits) -> (Self, Node) {
+        if classes.is_empty() { (self, Node::nothing()) } else {
+            self.intern(Shape::Set { classes }, false)
+        }
+    }
+
+    /// `first`, then `second`.
+    pub fn concat(self: Self, first: Node, second: Node) -> (Self, Node) {
+        match self.entry(first).shape {
+            Empty => (self, Node::nothing()),
+            Epsilon => (self, second),
+            // (x y) z = x (y z)
+            Concat(head, tail) => {
+                let (table, rest) = self.concat(tail, second);
+                table.concat(head, rest)
+            },
+            // A set, a repetition, a union, an intersection or a complement.
+            _ => match self.entry(second).shape {
+                Empty => (self, Node::nothing()),
+                Epsilon => (self, first),
+                // Anything else follows `first`.
+                _ => self.intern(
+                    Shape::Concat { first, second },
+                    self.accepts_empty(first) && self.accepts_empty(second)
+                )
+            }
+        }
+    }
+
+    /// `inner` any number of times.
+    pub fn star(self: Self, inner: Node) -> (Self, Node) {
+        match self.entry(inner).shape {
+            Empty => (self, Node::epsilon()),
+            Epsilon => (self, Node::epsilon()),
+            // (r*)* = r*
+            Star(_) => (self, inner),
+            // Anything else is repeated.
+            _ => self.intern(Shape::Star { inner }, true)
+        }
+    }
+
+    /// Everything `inner` does not match.
+    pub fn not(self: Self, inner: Node) -> (Self, Node) {
+        match self.entry(inner).shape {
+            // ¬¬r = r
+            Not(positive) => (self, positive),
+            // Anything else is complemented.
+            _ => self.intern(Shape::Not { inner }, !self.accepts_empty(inner))
+        }
+    }
+
+    // The children of a union: nested unions are opened, nothing is dropped,
+    // sets are merged, and the node of every string decides.
+    fn gather_union(self: Self, children: List<Node>, so_far: Gathered) -> Gathered {
+        match children {
+            Nil => so_far,
+            Cons(child, rest) => {
+                let next = match self.entry(child).shape {
+                    Empty => so_far,
+                    Set(classes) => Gathered {
+                        decided: so_far.decided,
+                        set: so_far.set.union(classes),
+                        has_set: true,
+                        rest: so_far.rest
+                    },
+                    Union(inner) => self.gather_union(inner, so_far),
+                    // Any other shape is a child of its own.
+                    _ => Gathered {
+                        decided: so_far.decided || self.is_all(child),
+                        set: so_far.set,
+                        has_set: so_far.has_set,
+                        rest: place(so_far.rest, child)
+                    }
+                };
+                self.gather_union(rest, next)
+            }
+        }
+    }
+
+    // The children of an intersection: nested intersections are opened, the
+    // node of every string is dropped, sets are merged, and nothing decides.
+    fn gather_intersect(self: Self, children: List<Node>, so_far: Gathered) -> Gathered {
+        match children {
+            Nil => so_far,
+            Cons(child, rest) => {
+                let next = match self.entry(child).shape {
+                    Empty => Gathered { decided: true, set: so_far.set, has_set: so_far.has_set, rest: so_far.rest },
+                    Set(classes) => Gathered {
+                        decided: so_far.decided,
+                        set: so_far.set.intersect(classes),
+                        has_set: true,
+                        rest: so_far.rest
+                    },
+                    Intersect(inner) => self.gather_intersect(inner, so_far),
+                    // Any other shape is a child of its own, but for the
+                    // node of every string.
+                    _ => Gathered {
+                        decided: so_far.decided,
+                        set: so_far.set,
+                        has_set: so_far.has_set,
+                        rest: if self.is_all(child) { so_far.rest } else { place(so_far.rest, child) }
+                    }
+                };
+                self.gather_intersect(rest, next)
+            }
+        }
+    }
+
+    /// Any of `children`.
+    pub fn union_all(self: Self, children: List<Node>) -> (Self, Node) {
+        let gathered = self.gather_union(
+            children,
+            Gathered { decided: false, set: Bits::empty(), has_set: false, rest: List::Nil }
+        );
+        if gathered.decided { self.all() } else {
+            let (table, set) = self.set(gathered.set);
+            // An empty set is the node of nothing, which a union drops.
+            let members = if set == Node::nothing() { gathered.rest } else { place(gathered.rest, set) };
+            match members {
+                Nil => (table, Node::nothing()),
+                Cons(only, more) => if more.is_nil() { (table, only) } else {
+                    table.intern(Shape::Union { members }, members.any(|member: Node| table.accepts_empty(member)))
+                }
+            }
+        }
+    }
+
+    /// All of `children`.
+    pub fn intersect_all(self: Self, children: List<Node>) -> (Self, Node) {
+        let gathered = self.gather_intersect(
+            children,
+            Gathered { decided: false, set: Bits::full(), has_set: false, rest: List::Nil }
+        );
+        // Sets that share no class match nothing together.
+        if gathered.decided || (gathered.has_set && gathered.set.is_empty()) { (self, Node::nothing()) } else {
+            let (table, set) = self.set(gathered.set);
+            let members = if gathered.has_set { place(gathered.rest, set) } else { gathered.rest };
+            match members {
+                Nil => table.all(),
+                Cons(only, more) => if more.is_nil() { (table, only) } else {
+                    table.intern(Shape::Intersect { members }, members.all(|member: Node| table.accepts_empty(member)))
+                }
+            }
+        }
+    }
+
+    /// `first` or `second`.
+    pub fn union(self: Self, first: Node, second: Node) -> (Self, Node) {
+        self.union_all(List::Cons { first, List::Cons { second, List::Nil } })
+    }
+
+    /// Both `first` and `second`.
+    pub fn intersect(self: Self, first: Node, second: Node) -> (Self, Node) {
+        self.intersect_all(List::Cons { first, List::Cons { second, List::Nil } })
+    }
+
+    // The derivative of every node of `children`.
+    fn derive_each(self: Self, children: List<Node>, class: u64) -> (Self, List<Node>) {
+        match children {
+            Nil => (self, List::Nil),
+            Cons(child, rest) => {
+                let (table, derived) = self.derive(child, class);
+                let (table, others) = table.derive_each(rest, class);
+                (table, List::Cons { derived, others })
+            }
+        }
+    }
+
+    /// The derivative of `node` by a class: the regex of what may follow one
+    /// byte of that class.
+    pub fn derive(self: Self, node: Node, class: u64) -> (Self, Node) {
+        match self.entry(node).shape {
+            Empty => (self, Node::nothing()),
+            Epsilon => (self, Node::nothing()),
+            Set(classes) => (self, if classes.contains(class) { Node::epsilon() } else { Node::nothing() }),
+            Concat(first, second) => {
+                let (table, after) = self.derive(first, class);
+                let (table, left) = table.concat(after, second);
+                // Where `first` may be empty, the byte may also start `second`.
+                if table.accepts_empty(first) {
+                    let (table, right) = table.derive(second, class);
+                    table.union(left, right)
+                } else {
+                    (table, left)
+                }
+            },
+            Star(inner) => {
+                let (table, after) = self.derive(inner, class);
+                table.concat(after, node)
+            },
+            Union(children) => {
+                let (table, derived) = self.derive_each(children, class);
+                table.union_all(derived)
+            },
+            Intersect(children) => {
+                let (table, derived) = self.derive_each(children, class);
+                table.intersect_all(derived)
+            },
+            Not(inner) => {
+                let (table, after) = self.derive(inner, class);
+                table.not(after)
+            }
+        }
+    }
+
+    /// The node of `regex`. `classes` must have been refined with every set
+    /// of `regex`, as `refine` of this module does.
+    pub fn add(self: Self, regex: ByteRegex, classes: ByteClasses) -> (Self, Node) {
+        match regex {
+            Empty => (self, Node::nothing()),
+            Epsilon => (self, Node::epsilon()),
+            Set(bytes) => self.set(classes.inside(bytes)),
+            Concat(first, second) => {
+                let (table, a) = self.add(first, classes);
+                let (table, b) = table.add(second, classes);
+                table.concat(a, b)
+            },
+            Union(first, second) => {
+                let (table, a) = self.add(first, classes);
+                let (table, b) = table.add(second, classes);
+                table.union(a, b)
+            },
+            Intersect(first, second) => {
+                let (table, a) = self.add(first, classes);
+                let (table, b) = table.add(second, classes);
+                table.intersect(a, b)
+            },
+            Star(inner) => {
+                let (table, a) = self.add(inner, classes);
+                table.star(a)
+            },
+            Not(inner) => {
+                let (table, a) = self.add(inner, classes);
+                table.not(a)
+            }
+        }
+    }
+}
+
+/// `classes` refined with every set of `regex`.
+pub fn refine(classes: ByteClasses, regex: ByteRegex) -> ByteClasses {
+    match regex {
+        Empty => classes,
+        Epsilon => classes,
+        Set(bytes) => classes.refine(bytes),
+        Concat(first, second) => refine(refine(classes, first), second),
+        Union(first, second) => refine(refine(classes, first), second),
+        Intersect(first, second) => refine(refine(classes, first), second),
+        Star(inner) => refine(classes, inner),
+        Not(inner) => refine(classes, inner)
+    }
+}
