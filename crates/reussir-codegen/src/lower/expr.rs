@@ -4399,6 +4399,8 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 }
             }
             SimdFn::Lanes => return err("`core::simd::lanes` reached lowering unelaborated"),
+            // A reduction (`reduce_add`, ...) or the masked form of one
+            // (`reduce_add_masked`, ...).
             _ if func.unmasked().unwrap_or(func).reduction().is_some() => {
                 use builders::VectorCombiningKind as Kind;
                 let masked = func.unmasked();
