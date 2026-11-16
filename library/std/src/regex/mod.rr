@@ -1,0 +1,6 @@
+//! Regular expressions matched with derivatives.
+//!
+//! - `alphabet`: what one unit of input is, sets of units, and the classes
+//!   of units that a group of sets cannot tell apart.
+
+pub mod alphabet;

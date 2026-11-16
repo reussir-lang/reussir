@@ -1,0 +1,108 @@
+//! A set of numbers below 256.
+
+import core::simd;
+
+/// A set of numbers from 0 to 255, one bit each: a set of bytes, or a set of
+/// class numbers. The bits are four 64-bit words held as one vector, so a
+/// set operation is one vector operation.
+pub struct [value] Bits {
+    words: Simd<[u64; 4]>
+}
+
+fn zero() -> Simd<[u64; 4]> { simd::splat<Simd<[u64; 4]>>(0) }
+
+fn ones() -> Simd<[u64; 4]> { simd::splat<Simd<[u64; 4]>>(18446744073709551615) }
+
+impl Bits {
+    pub fn empty() -> Self {
+        Bits { words: zero() }
+    }
+
+    /// Every number from 0 to 255.
+    pub fn full() -> Self {
+        Bits { words: ones() }
+    }
+
+    /// The numbers from `lo` to `hi`, both included. Numbers above 255 are
+    /// left out.
+    pub fn range(lo: u64, hi: u64) -> Self {
+        // The first and the last number of each word.
+        let base = simd::from_elements<Simd<[u64; 4]>>(0, 64, 128, 192);
+        let last = simd::from_elements<Simd<[u64; 4]>>(63, 127, 191, 255);
+        // The range clipped to each word; a word it misses has `from > to`.
+        let from = simd::max(simd::splat<Simd<[u64; 4]>>(lo), base);
+        let to = simd::min(simd::splat<Simd<[u64; 4]>>(hi), last);
+        let met: Simd<[bool; 4]> = simd::le(from, to);
+        // Clamped once more, so the shift counts stay below 64 in a word the
+        // range misses.
+        let up = simd::sub(simd::min(from, last), base);
+        let down = simd::sub(last, simd::max(to, base));
+        Bits { words: simd::select(met, simd::and(simd::shr(ones(), down), simd::shl(ones(), up)), zero()) }
+    }
+
+    pub fn single(number: u64) -> Self {
+        let here: Simd<[bool; 4]> = simd::eq(simd::step<Simd<[u64; 4]>>(), simd::splat<Simd<[u64; 4]>>(number >> 6));
+        Bits { words: simd::select(here, simd::splat<Simd<[u64; 4]>>(1 << (number & 63)), zero()) }
+    }
+
+    pub fn insert(self: Self, number: u64) -> Self {
+        self.union(Bits::single(number))
+    }
+
+    pub fn contains(self: Self, number: u64) -> bool {
+        let word: u64 = simd::extract(self.words, (number >> 6) & 3);
+        number < 256 && ((word >> (number & 63)) & 1) == 1
+    }
+
+    pub fn union(self: Self, other: Self) -> Self {
+        Bits { words: simd::or(self.words, other.words) }
+    }
+
+    /// The numbers from 0 to 255 that are not in `self`.
+    pub fn complement(self: Self) -> Self {
+        Bits::full().subtract(self)
+    }
+
+    /// The number of members.
+    pub fn len(self: Self) -> u64 {
+        let w0: u64 = simd::extract(self.words, 0);
+        let w1: u64 = simd::extract(self.words, 1);
+        let w2: u64 = simd::extract(self.words, 2);
+        let w3: u64 = simd::extract(self.words, 3);
+        core::intrinsic::math::ctpop(w0) + core::intrinsic::math::ctpop(w1)
+            + core::intrinsic::math::ctpop(w2) + core::intrinsic::math::ctpop(w3)
+    }
+
+    pub fn intersect(self: Self, other: Self) -> Self {
+        Bits { words: simd::and(self.words, other.words) }
+    }
+
+    /// The members of `self` that are not in `other`.
+    pub fn subtract(self: Self, other: Self) -> Self {
+        Bits { words: simd::and(self.words, simd::not(other.words)) }
+    }
+
+    pub fn is_empty(self: Self) -> bool {
+        let any: u64 = simd::reduce_or(self.words);
+        any == 0
+    }
+
+    /// The smallest member, or 256 when there is none.
+    pub fn least(self: Self) -> u64 {
+        let set: Simd<[bool; 4]> = simd::ne(self.words, zero());
+        let word = simd::first_set(set);
+        if word == 4 { 256 } else {
+            let bits: u64 = simd::extract(self.words, word);
+            word * 64 + core::intrinsic::math::cttz(bits)
+        }
+    }
+}
+
+impl PartialEq for Bits {
+    fn eq(self: Self, other: Self) -> bool {
+        let same: Simd<[bool; 4]> = simd::eq(self.words, other.words);
+        simd::all(same)
+    }
+}
+
+impl Eq for Bits {}
