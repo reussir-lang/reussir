@@ -1210,6 +1210,22 @@ pub fn vector_create_mask<'c>(
         .expect("valid vector.create_mask")
 }
 
+/// `llvm.intr.get.active.lane.mask %base, %n : <int>, <int> to <mask_type>`:
+/// lane `i` of the one-dimensional mask is set when `base + i` is below `n`,
+/// compared unsigned.
+pub fn get_active_lane_mask<'c>(
+    base: Value<'c, '_>,
+    n: Value<'c, '_>,
+    mask_type: Type<'c>,
+    location: Location<'c>,
+) -> Operation<'c> {
+    OperationBuilder::new("llvm.intr.get.active.lane.mask", location)
+        .add_operands(&[base, n])
+        .add_results(&[mask_type])
+        .build()
+        .expect("valid llvm.intr.get.active.lane.mask")
+}
+
 /// `vector.shape_cast %vector : <vector> to <result_type>`.
 pub fn vector_shape_cast<'c>(
     vector: Value<'c, '_>,

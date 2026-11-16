@@ -1,9 +1,9 @@
 import core::simd;
 
-// The tail mask of a loop is the SVE `whilelt`.
+// The tail mask of a loop compares unsigned, so any count past the extent
+// sets every lane; it is the SVE `whilelo`.
 // CHECK-LABEL: define {{.*}}<vscale x 16 x i1> @{{.*}}tail
-// CHECK: %[[N:.*]] = tail call i64 @llvm.umin.i64(i64 %0, i64 %{{.*}})
-// CHECK: call <vscale x 16 x i1> @llvm.aarch64.sve.whilelt.nxv16i1.i64(i64 0, i64 %[[N]])
+// CHECK: call <vscale x 16 x i1> @llvm.get.active.lane.mask.nxv16i1.i64(i64 0, i64 %0)
 pub fn tail(n: u64) -> Simd<[bool; [16]]> { simd::mask_first<Simd<[bool; [16]]>>(n) }
 
 // A predicated addition under the tail mask.
