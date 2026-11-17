@@ -2,6 +2,8 @@
 
 import std::collections::pure::list::List;
 import std::collections::pure::wavlmap::Entry;
+import std::collections::pure::wavlmap::Iter;
+import std::collections::pure::wavlmap::Step;
 import std::collections::pure::wavlmap::WavlMap;
 import std::option::Option;
 
@@ -118,10 +120,22 @@ fn common(found: WavlMap<u32, u32>, stretches: WavlMap<u32, u32>, entries: List<
     }
 }
 
-fn spans_of(entries: List<Entry<u32, u32>>) -> List<Span> {
-    match entries {
-        Nil => List::Nil,
-        Cons(entry, rest) => List::Cons { Span { start: entry.key, end: entry.value }, spans_of(rest) }
+fn spans_of(entries: Iter<u32, u32>) -> List<Span> {
+    match entries.next() {
+        More(entry, rest) => List::Cons { Span { start: entry.key, end: entry.value }, spans_of(rest) },
+        Done => List::Nil
+    }
+}
+
+// Whether two iterators of the same length yield the same stretches.
+fn same(first: Iter<u32, u32>, second: Iter<u32, u32>) -> bool {
+    match first.next() {
+        More(a, first_rest) => match second.next() {
+            More(b, second_rest) if a.key == b.key && a.value == b.value => same(first_rest, second_rest),
+            // Another stretch.
+            _ => false
+        },
+        Done => true
     }
 }
 
@@ -176,7 +190,13 @@ impl CharSet {
 
     /// The stretches of members in order.
     pub fn spans(self: Self) -> List<Span> {
-        spans_of(self.stretches.to_list())
+        spans_of(self.stretches.iter())
+    }
+
+    /// The stretches of members in order, one at a time: the key of an
+    /// entry is the start of a stretch and its value the end.
+    pub fn iter(self: Self) -> Iter<u32, u32> {
+        self.stretches.iter()
     }
 
     // Union and intersection walk the set with fewer stretches, so a small
@@ -207,7 +227,7 @@ impl CharSet {
 
 impl PartialEq for CharSet {
     fn eq(self: Self, other: Self) -> bool {
-        self.stretches == other.stretches
+        self.stretches.len() == other.stretches.len() && same(self.stretches.iter(), other.stretches.iter())
     }
 }
 
