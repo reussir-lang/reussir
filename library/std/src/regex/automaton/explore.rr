@@ -1,21 +1,25 @@
 //! The search for the states of a list of rules.
 //!
 //! The states are numbered in the order they are found; the state of the
-//! rules as written is 0:
+//! rules as written is 0. A state holds the rules that can still match,
+//! each with the node of what is left of it; a rule whose node matches
+//! nothing is left out:
 //!
 //! ```text
-//! rules    [a-z]+    [0-9]+
+//! rules    0: [a-z]+    1: [0-9]+
 //!
-//! state    nodes                 accepts    letter    digit    other
-//! 0        [a-z]+ , [0-9]+                  1         2        3
-//! 1        [a-z]* , nothing      rule 0     1         3        3
-//! 2        nothing , [0-9]*      rule 1     3         2        3
-//! 3        nothing , nothing                3         3        3
+//! state    rules left                accepts    letter    digit    other
+//! 0        0: [a-z]+ , 1: [0-9]+                1         2        3
+//! 1        0: [a-z]*                 rule 0     1         3        3
+//! 2        1: [0-9]*                 rule 1     3         2        3
+//! 3                                             3         3        3
 //! ```
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::hashmap::HashMap;
 import std::collections::pure::list::List;
+import std::hash::Hash;
+import std::hash::Hasher;
 import std::option::Option;
 import std::regex::alphabet::byte_classes::ByteClasses;
 import std::regex::automaton::TooManyStates;
@@ -41,46 +45,74 @@ impl Explored {
     }
 }
 
+/// A rule that can still match, and the node of what is left of it.
+pub struct [value] Live {
+    rule: u32,
+    node: Node
+}
+
+impl PartialEq for Live {
+    fn eq(self: Self, other: Self) -> bool {
+        self.rule == other.rule && self.node == other.node
+    }
+}
+
+impl Eq for Live {}
+
+impl Hash for Live {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        state.write_u32(self.rule).write(self.node)
+    }
+}
+
 // The states found so far.
 struct StateTable {
     nodes: Nodes,
-    // The nodes of every state, by number.
-    states: Vec<List<Node>>,
-    // The number of every state, by its nodes.
-    numbers: HashMap<List<Node>, u32>,
+    // The rules left in every state, by number.
+    states: Vec<List<Live>>,
+    // The number of every state, by the rules left in it.
+    numbers: HashMap<List<Live>, u32>,
     // The transitions of the states expanded so far, row after row.
     next: Vec<u32>
 }
 
-// The node of every rule.
-fn add_all(nodes: Nodes, rules: List<ByteRegex>, classes: ByteClasses) -> (Nodes, List<Node>) {
+// `others` with `rule` in front of them, unless `node` matches nothing: the
+// derivative of nothing is nothing, so such a rule never matches again.
+fn keep(rule: u32, node: Node, others: List<Live>) -> List<Live> {
+    if node == Node::nothing() { others } else { List::Cons { Live { rule, node }, others } }
+}
+
+// The rules that can match at all, numbered from `rule`, in their order.
+fn add_all(nodes: Nodes, rules: List<ByteRegex>, classes: ByteClasses, rule: u32) -> (Nodes, List<Live>) {
     match rules {
         Nil => (nodes, List::Nil),
-        Cons(rule, rest) => {
-            let (nodes, node) = nodes.add(rule, classes);
-            let (nodes, others) = add_all(nodes, rest, classes);
-            (nodes, List::Cons { node, others })
+        Cons(first, rest) => {
+            let (nodes, node) = nodes.add(first, classes);
+            let (nodes, others) = add_all(nodes, rest, classes, rule + 1);
+            (nodes, keep(rule, node, others))
         }
     }
 }
 
-// The derivative of every node of a state.
-fn derive_all(nodes: Nodes, state: List<Node>, class: u64) -> (Nodes, List<Node>) {
+// The rules of a state that can still match after a byte of `class`.
+fn derive_all(nodes: Nodes, state: List<Live>, class: u64) -> (Nodes, List<Live>) {
     match state {
         Nil => (nodes, List::Nil),
-        Cons(node, rest) => {
-            let (nodes, derived) = nodes.derive(node, class);
+        Cons(first, rest) => {
+            let (nodes, derived) = nodes.derive(first.node, class);
             let (nodes, others) = derive_all(nodes, rest, class);
-            (nodes, List::Cons { derived, others })
+            (nodes, keep(first.rule, derived, others))
         }
     }
 }
 
-// The earliest rule whose node matches the empty string, from `rule` on.
-fn earliest(nodes: Nodes, state: List<Node>, rule: u32) -> Option<u32> {
+// The earliest rule whose node matches the empty string. The rules of a
+// state are in their order.
+fn earliest(nodes: Nodes, state: List<Live>) -> Option<u32> {
     match state {
         Nil => Option::None,
-        Cons(node, rest) => if nodes.accepts_empty(node) { Option::Some { rule } } else { earliest(nodes, rest, rule + 1) }
+        Cons(first, _) if nodes.accepts_empty(first.node) => Option::Some { first.rule },
+        Cons(_, rest) => earliest(nodes, rest)
     }
 }
 
@@ -89,9 +121,9 @@ impl StateTable {
         StateTable { nodes, states: Vec::new(), numbers: HashMap::new(), next: Vec::new() }
     }
 
-    // The number of the state with these nodes. A new state takes the next
-    // number and is entered under its nodes.
-    fn allocate(self: Self, state: List<Node>) -> (Self, u32) {
+    // The number of the state with these rules left. A new state takes the
+    // next number and is entered under them.
+    fn allocate(self: Self, state: List<Live>) -> (Self, u32) {
         match self.numbers.get(state) {
             Some(number) => (self, number),
             None => {
@@ -113,8 +145,8 @@ impl StateTable {
         }
     }
 
-    // The nodes that `state` leads to on `class`.
-    fn derive(self: Self, state: List<Node>, class: u64) -> (Self, List<Node>) {
+    // The rules left where `state` leads to on `class`.
+    fn derive(self: Self, state: List<Live>, class: u64) -> (Self, List<Live>) {
         // The nodes leave `self` first, so that a new node is added to
         // them in place.
         let nodes = self.nodes;
@@ -131,7 +163,7 @@ impl StateTable {
     }
 
     // One row: where `state` goes on every class.
-    fn expand(self: Self, state: List<Node>, classes: u64) -> Self {
+    fn expand(self: Self, state: List<Live>, classes: u64) -> Self {
         let (_, table) = while [class = 0, table = self] (class < classes) {
             let (table, target) = table.derive(state, class);
             let (table, number) = table.allocate(target);
@@ -143,7 +175,7 @@ impl StateTable {
     // The earliest rule that accepts in each state.
     fn winners(self: Self) -> Vec<Option<u32>> {
         let (_, winners) = while [state = 0, winners = Vec::new()] (state < self.states.len()) {
-            (state + 1, winners.push(earliest(self.nodes, self.states.get(state).unwrap_or(List::Nil), 0)))
+            (state + 1, winners.push(earliest(self.nodes, self.states.get(state).unwrap_or(List::Nil))))
         };
         winners
     }
@@ -154,7 +186,7 @@ impl StateTable {
 /// `limit` states.
 pub fn explore(rules: List<ByteRegex>, sets: ByteClasses, limit: u64) -> Result<Explored, TooManyStates> {
     let classes = sets.len();
-    let (nodes, first) = add_all(Nodes::new(), rules, sets);
+    let (nodes, first) = add_all(Nodes::new(), rules, sets, 0);
     let (start, _) = StateTable::new(nodes).allocate(first);
     let (_, table) = while [at = 0, table = start] (at < table.states.len() && table.states.len() <= limit) {
         let state = table.states.get(at).unwrap_or(List::Nil);
