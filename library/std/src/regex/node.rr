@@ -210,6 +210,18 @@ impl Nodes {
 
     /// `first`, then `second`.
     pub fn concat(self: Self, first: Node, second: Node) -> (Self, Node) {
+        match first.number {
+            // Nothing and the empty string have these numbers in every
+            // table, so they need no read.
+            0 => (self, Node::nothing()),
+            1 => (self, second),
+            // Any other node: its shape decides.
+            _ => self.concat_impl(first, second)
+        }
+    }
+
+    // `concat` by the shape of `first`.
+    fn concat_impl(self: Self, first: Node, second: Node) -> (Self, Node) {
         match self.entry(first).shape {
             Empty => (self, Node::nothing()),
             Epsilon => (self, second),
@@ -258,6 +270,8 @@ impl Nodes {
     fn gather_union(self: Self, children: List<Node>, so_far: Gathered) -> Gathered {
         match children {
             Nil => so_far,
+            // Nothing is dropped by its number, without a read.
+            Cons(child, rest) if child == Node::nothing() => self.gather_union(rest, so_far),
             Cons(child, rest) => {
                 let next = match self.entry(child).shape {
                     Empty => so_far,
@@ -373,6 +387,18 @@ impl Nodes {
     /// The derivative of `node` by a class: the regex of what may follow one
     /// byte of that class.
     pub fn derive(self: Self, node: Node, class: u64) -> (Self, Node) {
+        match node.number {
+            // Nothing and the empty string, by their numbers: no byte
+            // follows either.
+            0 => (self, Node::nothing()),
+            1 => (self, Node::nothing()),
+            // Any other node: its shape decides.
+            _ => self.derive_impl(node, class)
+        }
+    }
+
+    // `derive` by the shape of `node`.
+    fn derive_impl(self: Self, node: Node, class: u64) -> (Self, Node) {
         match self.entry(node).shape {
             Empty => (self, Node::nothing()),
             Epsilon => (self, Node::nothing()),
