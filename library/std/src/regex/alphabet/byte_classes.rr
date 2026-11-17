@@ -50,6 +50,18 @@ fn refine_classes(classes: List<Bits>, set: Bits) -> List<Bits> {
     }
 }
 
+// Whether `set` cuts a class of `classes` in two.
+fn cuts(classes: List<Bits>, set: Bits) -> bool {
+    match classes {
+        Nil => false,
+        Cons(class, rest) => {
+            let inner = class.intersect(set);
+            let whole = inner.is_empty() || inner == class;
+            if whole { cuts(rest, set) } else { true }
+        }
+    }
+}
+
 fn mark_inside(classes: List<Bits>, set: Bits, number: u64, marked: Bits) -> Bits {
     match classes {
         Nil => marked,
@@ -85,7 +97,14 @@ impl ByteClasses {
 
     /// Splits every class into its part inside `set` and its part outside.
     pub fn refine(self: Self, set: Bits) -> Self {
-        ByteClasses { classes: refine_classes(self.classes, set) }
+        // Few sets cut a class: each cut adds one, and there are at most
+        // 256. For the others nothing is rebuilt.
+        let classes = self.classes;
+        if cuts(classes, set) {
+            ByteClasses { classes: refine_classes(classes, set) }
+        } else {
+            self
+        }
     }
 
     /// The classes that make up `set`, by number. `self` must have been
