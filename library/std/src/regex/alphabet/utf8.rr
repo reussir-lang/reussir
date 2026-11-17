@@ -10,7 +10,6 @@
 //! ```
 
 import std::collections::pure::list::List;
-import std::option::Option;
 import std::collections::pure::wavlmap::Iter;
 import std::collections::pure::wavlmap::Step;
 import std::regex::alphabet::char_set::CharSet;
@@ -30,6 +29,21 @@ pub enum [value] Utf8Sequence {
     Four(Utf8Range, Utf8Range, Utf8Range, Utf8Range)
 }
 
+// Where a stretch is cut: after the last code point of its first part.
+enum [value] Cut {
+    After(u32),
+    Nowhere
+}
+
+impl Cut {
+    fn or(self: Self, other: Self) -> Self {
+        match self {
+            After(_) => self,
+            Nowhere => other
+        }
+    }
+}
+
 fn above(point: u32, most: u32) -> u64 {
     if point > most { 1 } else { 0 }
 }
@@ -39,20 +53,20 @@ fn width(point: u32) -> u64 {
     1 + above(point, 0x7F) + above(point, 0x7FF) + above(point, 0xFFFF)
 }
 
-// `most`, when the stretch runs across it: after `most` the encoding is one
-// byte longer.
-fn across(lo: u32, hi: u32, most: u32) -> Option<u32> {
-    if lo <= most && most < hi { Option::Some { most } } else { Option::None }
+// After `most`, when the stretch runs across it: after `most` the encoding
+// is one byte longer.
+fn across(lo: u32, hi: u32, most: u32) -> Cut {
+    if lo <= most && most < hi { Cut::After { most } } else { Cut::Nowhere }
 }
 
-// Where to cut a stretch of one width, as the last code point of its first
-// part, so that the bytes holding its low `bits` bits run over all of 80 to
-// BF whenever the bytes before them differ at the two ends.
-fn ragged(lo: u32, hi: u32, bits: u32) -> Option<u32> {
+// Where to cut a stretch of one width so that the bytes holding its low
+// `bits` bits run over all of 80 to BF whenever the bytes before them differ
+// at the two ends.
+fn ragged(lo: u32, hi: u32, bits: u32) -> Cut {
     let mask = (1 << bits) - 1;
-    if (lo >> bits) == (hi >> bits) { Option::None } else {
-        let after_lo = if (lo & mask) != 0 { Option::Some { lo | mask } } else { Option::None };
-        let before_hi = if (hi & mask) != mask { Option::Some { ((hi >> bits) << bits) - 1 } } else { Option::None };
+    if (lo >> bits) == (hi >> bits) { Cut::Nowhere } else {
+        let after_lo = if (lo & mask) != 0 { Cut::After { lo | mask } } else { Cut::Nowhere };
+        let before_hi = if (hi & mask) != mask { Cut::After { ((hi >> bits) << bits) - 1 } } else { Cut::Nowhere };
         after_lo.or(before_hi)
     }
 }
@@ -87,10 +101,10 @@ fn sequence(lo: u32, hi: u32) -> Utf8Sequence {
 fn stretch<A>(lo: u32, hi: u32, acc: A, step: (A, Utf8Sequence) -> A) -> A {
     let longer = across(lo, hi, 0x7F).or(across(lo, hi, 0x7FF)).or(across(lo, hi, 0xFFFF));
     // One byte is any range; later bytes must be whole.
-    let whole = if hi > 0x7F { ragged(lo, hi, 6).or(ragged(lo, hi, 12)).or(ragged(lo, hi, 18)) } else { Option::None };
+    let whole = if hi > 0x7F { ragged(lo, hi, 6).or(ragged(lo, hi, 12)).or(ragged(lo, hi, 18)) } else { Cut::Nowhere };
     match longer.or(whole) {
-        Some(last) => stretch(last + 1, hi, stretch(lo, last, acc, step), step),
-        None => step(acc, sequence(lo, hi))
+        After(last) => stretch(last + 1, hi, stretch(lo, last, acc, step), step),
+        Nowhere => step(acc, sequence(lo, hi))
     }
 }
 
