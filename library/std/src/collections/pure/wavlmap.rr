@@ -110,7 +110,7 @@
 //! returns the matching entry with the least key. Hash-based collections do
 //! not promise any of these traversal orders.
 //!
-//! ## Walking
+//! ## Walking and iterating
 //!
 //! `walk` opens a map at a position, as a `Walker`. A walker is on an entry
 //! or between two entries. `seek` moves it to a key through the tree between
@@ -118,6 +118,9 @@
 //! read the entry there and its neighbours, and `finish` gives the map. A
 //! walker over a map that is also held elsewhere copies every node it
 //! passes, so `fold_left` is the cheaper way to read a whole map.
+//!
+//! `iter` yields the entries one at a time in ascending key order, for
+//! reading two maps in step or stopping early.
 //!
 //! *agentic-note*: design-wavl-walker
 //!
@@ -171,6 +174,17 @@ pub enum [value] PopResult<K, V> {
     Empty(WavlMap<K, V>)
 }
 
+/// The entries of a map that are still to be read, least key first.
+pub struct [value] Iter<K, V> {
+    rest : Path<K, V>
+}
+
+/// The next entry of an `Iter` with the iterator after it, or the end.
+pub enum [value] Step<K, V> {
+    More(Entry<K, V>, Iter<K, V>),
+    Done
+}
+
 /// A map opened at a position: on an entry, or between two entries.
 pub struct [value] Walker<K, V> {
     size : u64,
@@ -190,7 +204,8 @@ fn rank<K, V>(t : Tree<K, V>) -> i64 {
 // back over this path to repair rank differences. `rebuild` then reconstructs
 // the ancestors that need no further repair. Each non-empty path item is the
 // same size as a node, so a uniquely owned item can provide the storage for a
-// rebuilt node. The type is public because it appears inside `Walker`.
+// rebuilt node. The type is public because it appears inside `Walker` and
+// `Iter`.
 pub enum Path<K, V> {
     ToL(i64, Path<K, V>, K, V, Tree<K, V>),
     ToR(i64, Tree<K, V>, K, V, Path<K, V>),
@@ -793,6 +808,15 @@ fn find_tree<K, V>(
     }
 }
 
+// The path items of an iterator: each holds an entry still to be read and
+// the subtree of the greater keys below it.
+fn left_spine<K, V>(t : Tree<K, V>, z : Path<K, V>) -> Path<K, V> {
+    match t {
+        Tree::Leaf => z,
+        Tree::Node(r, l, k, v, rt) => left_spine(l, Path::ToL { r, z, k, v, rt })
+    }
+}
+
 // The entry next above the subtree that a path leads to: the nearest item
 // entered on the left. `lower` is its mirror.
 fn upper<K, V>(z : Path<K, V>) -> Option<Entry<K, V>> {
@@ -1200,6 +1224,12 @@ impl<K : Ord, V> WavlMap<K, V> {
         fold_right_tree(self.root, initial, f)
     }
 
+    /// Returns the entries one at a time in ascending key order. O(log n);
+    /// reading every entry is O(n).
+    pub fn iter(self : Self) -> Iter<K, V> {
+        Iter { rest: left_spine(self.root, Path::Top) }
+    }
+
     /// Opens the map at its root entry; `seek`, `first`, or `last` then
     /// choose the position. O(1).
     pub fn walk(self : Self) -> Walker<K, V> {
@@ -1389,6 +1419,20 @@ impl<K : Ord, V : PartialEq> PartialEq for WavlMap<K, V> {
 }
 
 impl<K : Ord, V : Eq> Eq for WavlMap<K, V> {}
+
+impl<K, V> Iter<K, V> {
+    /// Returns the entry with the least key still to be read and the
+    /// iterator after it. O(1) on average over a whole map, O(log n) at most.
+    pub fn next(self : Self) -> Step<K, V> {
+        match self.rest {
+            Path::ToL(_, z, k, v, rt) => Step::More {
+                Entry { key: k, value: v },
+                Iter { rest: left_spine(rt, z) }
+            },
+            _ => Step::Done
+        }
+    }
+}
 
 impl<K : Ord, V> Walker<K, V> {
     /// Moves to `key`: onto its entry, or between the entries around it.
