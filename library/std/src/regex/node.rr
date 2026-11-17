@@ -37,6 +37,12 @@ impl PartialEq for Node {
 
 impl Eq for Node {}
 
+impl Hash for Node {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        state.write_u32(self.number)
+    }
+}
+
 impl Node {
     /// The node that matches nothing; it is in every table.
     pub fn nothing() -> Self {
@@ -88,19 +94,9 @@ fn key(shape: Shape) -> Key {
     }
 }
 
-fn same(first: List<Node>, second: List<Node>) -> bool {
-    match first {
-        Nil => second.is_nil(),
-        Cons(node, rest) => match second {
-            Nil => false,
-            Cons(other, others) => node == other && same(rest, others)
-        }
-    }
-}
-
 impl PartialEq for Key {
     fn eq(self: Self, other: Self) -> bool {
-        self.kind == other.kind && self.set == other.set && same(self.children, other.children)
+        self.kind == other.kind && self.set == other.set && self.children == other.children
     }
 }
 
@@ -108,10 +104,7 @@ impl Eq for Key {}
 
 impl Hash for Key {
     fn hash<H: Hasher>(self: Self, state: H) -> H {
-        self.children.fold_left(
-            state.write_u8(self.kind).write(self.set),
-            |state: H, child: Node| state.write_u32(child.number)
-        )
+        state.write_u8(self.kind).write(self.set).write(self.children)
     }
 }
 
