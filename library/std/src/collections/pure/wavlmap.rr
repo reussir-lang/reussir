@@ -110,6 +110,17 @@
 //! returns the matching entry with the least key. Hash-based collections do
 //! not promise any of these traversal orders.
 //!
+//! ## Walking
+//!
+//! `walk` opens a map at a position, as a `Walker`. A walker is on an entry
+//! or between two entries. `seek` moves it to a key through the tree between
+//! the two positions instead of from the root, `entry`, `before`, and `after`
+//! read the entry there and its neighbours, and `finish` gives the map. A
+//! walker over a map that is also held elsewhere copies every node it
+//! passes, so `fold_left` is the cheaper way to read a whole map.
+//!
+//! *agentic-note*: design-wavl-walker
+//!
 //! ## References
 //!
 //! - Haeupler, Sen, and Tarjan, "Rank-Balanced Trees":
@@ -160,6 +171,13 @@ pub enum [value] PopResult<K, V> {
     Empty(WavlMap<K, V>)
 }
 
+/// A map opened at a position: on an entry, or between two entries.
+pub struct [value] Walker<K, V> {
+    size : u64,
+    path : Path<K, V>,
+    focus : Tree<K, V>
+}
+
 fn rank<K, V>(t : Tree<K, V>) -> i64 {
     match t {
         Tree::Leaf => 0 - 1,
@@ -172,8 +190,8 @@ fn rank<K, V>(t : Tree<K, V>) -> i64 {
 // back over this path to repair rank differences. `rebuild` then reconstructs
 // the ancestors that need no further repair. Each non-empty path item is the
 // same size as a node, so a uniquely owned item can provide the storage for a
-// rebuilt node.
-enum Path<K, V> {
+// rebuilt node. The type is public because it appears inside `Walker`.
+pub enum Path<K, V> {
     ToL(i64, Path<K, V>, K, V, Tree<K, V>),
     ToR(i64, Tree<K, V>, K, V, Path<K, V>),
     Top
@@ -186,6 +204,13 @@ fn rebuild<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
         Path::Top => t
     }
 }
+
+// Repair the tree after the child in the next path item grows to rank `tr`.
+// Raise a parent while it has rank difference 0 beside a difference-1
+// sibling; otherwise use one or two rotations and stop. A rotation restores
+// the parent's old rank, so the remaining ancestors only need rebuilding.
+// A subtree and the path from it to the root.
+struct [value] Spot<K, V> { path : Path<K, V>, tree : Tree<K, V> }
 
 // Repair the tree after the child in the next path item grows to rank `tr`.
 // Raise a parent while it has rank difference 0 beside a difference-1
@@ -768,6 +793,158 @@ fn find_tree<K, V>(
     }
 }
 
+// The entry next above the subtree that a path leads to: the nearest item
+// entered on the left. `lower` is its mirror.
+fn upper<K, V>(z : Path<K, V>) -> Option<Entry<K, V>> {
+    match z {
+        Path::ToL(_, _, k, v, _) => Option::Some { Entry { key: k, value: v } },
+        Path::ToR(_, _, _, _, z1) => upper(z1),
+        Path::Top => Option::None
+    }
+}
+
+fn lower<K, V>(z : Path<K, V>) -> Option<Entry<K, V>> {
+    match z {
+        Path::ToR(_, _, k, v, _) => Option::Some { Entry { key: k, value: v } },
+        Path::ToL(_, z1, _, _, _) => lower(z1),
+        Path::Top => Option::None
+    }
+}
+
+fn has_upper<K, V>(z : Path<K, V>) -> bool {
+    match z {
+        Path::ToL(_, _, _, _, _) => true,
+        Path::ToR(_, _, _, _, z1) => has_upper(z1),
+        Path::Top => false
+    }
+}
+
+fn has_lower<K, V>(z : Path<K, V>) -> bool {
+    match z {
+        Path::ToR(_, _, _, _, _) => true,
+        Path::ToL(_, z1, _, _, _) => has_lower(z1),
+        Path::Top => false
+    }
+}
+
+// Whether `x` is at or above the entry next above the subtree, so that it
+// lies outside it. `below` is the mirror.
+fn above<K : Ord, V>(z : Path<K, V>, x : K) -> bool {
+    match z {
+        Path::ToL(_, _, k, _, _) => !(x < k),
+        Path::ToR(_, _, _, _, z1) => above(z1, x),
+        Path::Top => false
+    }
+}
+
+fn below<K : Ord, V>(z : Path<K, V>, x : K) -> bool {
+    match z {
+        Path::ToR(_, _, k, _, _) => !(k < x),
+        Path::ToL(_, z1, _, _, _) => below(z1, x),
+        Path::Top => false
+    }
+}
+
+// Climb to the node of the entry next above the subtree; `up_prev` climbs to
+// the one next below. Without such an entry the climb ends at the root.
+fn up_next<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
+    match z {
+        Path::ToL(r, z1, k, v, rt) => Spot { path: z1, tree: Tree::Node { r, t, k, v, rt } },
+        Path::ToR(r, l, k, v, z1) => up_next(z1, Tree::Node { r, l, k, v, t }),
+        Path::Top => Spot { path: Path::Top, tree: t }
+    }
+}
+
+fn up_prev<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
+    match z {
+        Path::ToR(r, l, k, v, z1) => Spot { path: z1, tree: Tree::Node { r, l, k, v, t } },
+        Path::ToL(r, z1, k, v, rt) => up_prev(z1, Tree::Node { r, t, k, v, rt }),
+        Path::Top => Spot { path: Path::Top, tree: t }
+    }
+}
+
+// Descend to the node of `x`, or to the empty subtree where it belongs.
+fn down<K : Ord, V>(z : Path<K, V>, t : Tree<K, V>, x : K) -> Spot<K, V> {
+    match t {
+        Tree::Leaf => Spot { path: z, tree: Tree::Leaf },
+        Tree::Node(r, l, k, v, rt) => match x.cmp(k) {
+            Ordering::Less => down(Path::ToL { r, z, k, v, rt }, l, x),
+            Ordering::Greater => down(Path::ToR { r, l, k, v, z }, rt, x),
+            Ordering::Equal => Spot { path: z, tree: Tree::Node { r, l, k, v, rt } }
+        }
+    }
+}
+
+// Move to `x` from anywhere: climb while `x` lies outside the subtree, then
+// descend.
+fn seek_at<K : Ord, V>(z : Path<K, V>, t : Tree<K, V>, x : K) -> Spot<K, V> {
+    if above(z, x) {
+        let s = up_next(z, t);
+        seek_at(s.path, s.tree, x)
+    } else {
+        if below(z, x) {
+            let s = up_prev(z, t);
+            seek_at(s.path, s.tree, x)
+        } else {
+            down(z, t, x)
+        }
+    }
+}
+
+fn leftmost<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
+    match t {
+        Tree::Leaf => Spot { path: z, tree: Tree::Leaf },
+        Tree::Node(r, l, k, v, rt) => match l {
+            Tree::Leaf => Spot { path: z, tree: Tree::Node { r, Tree::Leaf, k, v, rt } },
+            ll => leftmost(Path::ToL { r, z, k, v, rt }, ll)
+        }
+    }
+}
+
+fn rightmost<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
+    match t {
+        Tree::Leaf => Spot { path: z, tree: Tree::Leaf },
+        Tree::Node(r, l, k, v, rt) => match rt {
+            Tree::Leaf => Spot { path: z, tree: Tree::Node { r, l, k, v, Tree::Leaf } },
+            rr => rightmost(Path::ToR { r, l, k, v, z }, rr)
+        }
+    }
+}
+
+// Move to the entry next above the position. From the last entry the move
+// ends in the empty subtree after it. `prev_at` is the mirror.
+fn next_at<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
+    match t {
+        Tree::Leaf =>
+            if has_upper(z) { up_next(z, Tree::Leaf) } else { Spot { path: z, tree: Tree::Leaf } },
+        Tree::Node(r, l, k, v, rt) => match rt {
+            Tree::Leaf =>
+                if has_upper(z) {
+                    up_next(z, Tree::Node { r, l, k, v, Tree::Leaf })
+                } else {
+                    Spot { path: Path::ToR { r, l, k, v, z }, tree: Tree::Leaf }
+                },
+            rr => leftmost(Path::ToR { r, l, k, v, z }, rr)
+        }
+    }
+}
+
+fn prev_at<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
+    match t {
+        Tree::Leaf =>
+            if has_lower(z) { up_prev(z, Tree::Leaf) } else { Spot { path: z, tree: Tree::Leaf } },
+        Tree::Node(r, l, k, v, rt) => match l {
+            Tree::Leaf =>
+                if has_lower(z) {
+                    up_prev(z, Tree::Node { r, Tree::Leaf, k, v, rt })
+                } else {
+                    Spot { path: Path::ToL { r, z, k, v, rt }, tree: Tree::Leaf }
+                },
+            ll => rightmost(Path::ToL { r, z, k, v, rt }, ll)
+        }
+    }
+}
+
 fn from_list_impl<K : Ord, V>(
     values : List<Entry<K, V>>,
     acc : WavlMap<K, V>
@@ -1023,6 +1200,13 @@ impl<K : Ord, V> WavlMap<K, V> {
         fold_right_tree(self.root, initial, f)
     }
 
+    /// Opens the map at its root entry; `seek`, `first`, or `last` then
+    /// choose the position. O(1).
+    pub fn walk(self : Self) -> Walker<K, V> {
+        let size = self.size;
+        Walker { size: size, path: Path::Top, focus: self.root }
+    }
+
     /// Creates a map from entries, later duplicates replacing earlier ones. O(n log n).
     pub fn from_list(values : List<Entry<K, V>>) -> Self {
         from_list_impl(values, WavlMap::new())
@@ -1205,3 +1389,87 @@ impl<K : Ord, V : PartialEq> PartialEq for WavlMap<K, V> {
 }
 
 impl<K : Ord, V : Eq> Eq for WavlMap<K, V> {}
+
+impl<K : Ord, V> Walker<K, V> {
+    /// Moves to `key`: onto its entry, or between the entries around it.
+    /// The move goes through the tree from the current position, so a key
+    /// nearby is reached in fewer steps than from the root. O(log n).
+    pub fn seek(self : Self, key : K) -> Self {
+        let size = self.size;
+        let s = seek_at(self.path, self.focus, key);
+        Walker { size: size, path: s.path, focus: s.tree }
+    }
+
+    /// Moves onto the entry with the least key. O(log n).
+    pub fn first(self : Self) -> Self {
+        let size = self.size;
+        let s = leftmost(Path::Top, rebuild(self.path, self.focus));
+        Walker { size: size, path: s.path, focus: s.tree }
+    }
+
+    /// Moves onto the entry with the greatest key. O(log n).
+    pub fn last(self : Self) -> Self {
+        let size = self.size;
+        let s = rightmost(Path::Top, rebuild(self.path, self.focus));
+        Walker { size: size, path: s.path, focus: s.tree }
+    }
+
+    /// Moves onto the entry next above the position, or after the last
+    /// entry when there is none. O(1) on average over a whole map.
+    pub fn next(self : Self) -> Self {
+        let size = self.size;
+        let s = next_at(self.path, self.focus);
+        Walker { size: size, path: s.path, focus: s.tree }
+    }
+
+    /// Moves onto the entry next below the position, or before the first
+    /// entry when there is none. O(1) on average over a whole map.
+    pub fn prev(self : Self) -> Self {
+        let size = self.size;
+        let s = prev_at(self.path, self.focus);
+        Walker { size: size, path: s.path, focus: s.tree }
+    }
+
+    /// Returns the entry at the position, or `None` between two entries.
+    /// O(1).
+    pub fn entry(self : Self) -> Option<Entry<K, V>> {
+        match self.focus {
+            Tree::Node(_, _, k, v, _) => Option::Some { Entry { key: k, value: v } },
+            Tree::Leaf => Option::None
+        }
+    }
+
+    /// Returns the entry with the greatest key below the position. O(log n).
+    pub fn before(self : Self) -> Option<Entry<K, V>> {
+        match self.focus {
+            Tree::Node(_, l, _, _, _) => {
+                let inside = max_tree(l);
+                match inside {
+                    Option::Some(_) => inside,
+                    Option::None => lower(self.path)
+                }
+            },
+            Tree::Leaf => lower(self.path)
+        }
+    }
+
+    /// Returns the entry with the least key above the position. O(log n).
+    pub fn after(self : Self) -> Option<Entry<K, V>> {
+        match self.focus {
+            Tree::Node(_, _, _, _, rt) => {
+                let inside = min_tree(rt);
+                match inside {
+                    Option::Some(_) => inside,
+                    Option::None => upper(self.path)
+                }
+            },
+            Tree::Leaf => upper(self.path)
+        }
+    }
+
+    /// Closes the walker into its map. O(log n).
+    pub fn finish(self : Self) -> WavlMap<K, V> {
+        let size = self.size;
+        WavlMap { size: size, root: rebuild(self.path, self.focus) }
+    }
+}
