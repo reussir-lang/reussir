@@ -45,6 +45,9 @@ fn test_vec_basics() {
         && value_or(v, 0, 0 - 1) == 10
         && value_or(v, 2, 0 - 1) == 30
         && value_or(v, 3, 0 - 1) == 0 - 1
+        && v.get_or(1, 0 - 1) == 20
+        && v.get_or(3, 0 - 1) == 0 - 1
+        && empty.get_or(0, 7) == 7
         && v.last().unwrap_or(0 - 1) == 30
         // set replaced index 1, insert_at shifted it right, remove_at
         // dropped the head: [15, 21, 30].
@@ -122,7 +125,9 @@ fn test_record_elements() {
     let changed = old.set(0, Item { v: 11 });
     wb(item_or(old.get(0), 0 - 1) == 10
         && item_or(changed.get(0), 0 - 1) == 11
-        && item_or(changed.get(1), 0 - 1) == 20);
+        && item_or(changed.get(1), 0 - 1) == 20
+        && old.get_or(1, Item { v: 0 - 1 }).v == 20
+        && old.get_or(2, Item { v: 0 - 1 }).v == 0 - 1);
 }
 
 #[main]

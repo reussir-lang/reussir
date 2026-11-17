@@ -14,7 +14,6 @@
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
-import std::option::Option;
 import std::regex::alphabet::bits::Bits;
 
 // The low halves of the bytes of `set` with the high half `row`, a bit
@@ -47,9 +46,9 @@ fn rows_from(set: Bits, row: u64, seen: List<u64>) -> List<u64> {
 // `low` of `set`.
 fn with_row(pairs: Vec<u8>, first: u64, set: Bits, low: u64, bit: u8) -> Vec<u8> {
     let (_, marked) = while [half = (0 as u64), pairs = pairs] (half < 16) {
-        let lower = pairs.get(first + half).unwrap_or(0);
+        let lower = pairs.get_or(first + half, 0);
         let lows = if ((low >> half) & 1) == 1 { pairs.set(first + half, lower | bit) } else { pairs };
-        let upper = lows.get(first + 16 + half).unwrap_or(0);
+        let upper = lows.get_or(first + 16 + half, 0);
         (half + 1, if row_of(set, half) == low { lows.set(first + 16 + half, upper | bit) } else { lows })
     };
     marked

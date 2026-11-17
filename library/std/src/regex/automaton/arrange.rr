@@ -33,7 +33,7 @@ pub struct Arranged {
 // `sizes` and one more under its kind for every state from `state` on.
 fn sizes_from(kinds: Vec<u64>, state: u64, sizes: [u64; 7]) -> [u64; 7] {
     if state == kinds.len() { sizes } else {
-        let kind = kinds.get(state).unwrap_or(0) as i64;
+        let kind = kinds.get_or(state, 0) as i64;
         let size = array::get(sizes, kind);
         sizes_from(kinds, state + 1, array::set(sizes, kind, size + 1))
     }
@@ -53,7 +53,7 @@ fn starts_from(sizes: [u64; 7], kind: i64, place: u64, starts: [u64; 7]) -> [u64
 // `free` holds.
 fn places_from(kinds: Vec<u64>, state: u64, free: [u64; 7], places: [u64; ?]) -> [u64; ?] {
     if state == kinds.len() { places } else {
-        let kind = kinds.get(state).unwrap_or(0) as i64;
+        let kind = kinds.get_or(state, 0) as i64;
         let place = array::get(free, kind);
         // Every dead state takes the number 0, so it stays free.
         let free = if kind == 0 { free } else { array::set(free, kind, place + 1) };
@@ -66,7 +66,7 @@ fn places_from(kinds: Vec<u64>, state: u64, free: [u64; 7], places: [u64; ?]) ->
 fn kinds_by_place(kinds: Vec<u64>, places: [u64; ?], state: u64, by_place: [u32; ?]) -> [u32; ?] {
     if state == kinds.len() { by_place } else {
         let place = array::get(places, state as i64) as i64;
-        let kind = kinds.get(state).unwrap_or(0) as u32;
+        let kind = kinds.get_or(state, 0) as u32;
         kinds_by_place(kinds, places, state + 1, array::set(by_place, place, kind))
     }
 }
@@ -90,7 +90,7 @@ fn next_by_place(next: [u32; ?], places: [u64; ?], classes: u64, at: u64, table:
 fn winners_by_place(winners: Vec<Option<u32>>, places: [u64; ?], state: u64, rules: [u32; ?]) -> [u32; ?] {
     if state == winners.len() { rules } else {
         let place = array::get(places, state as i64) as i64;
-        let rules = match winners.get(state).unwrap_or(Option::None) {
+        let rules = match winners.get_or(state, Option::None) {
             Some(rule) => array::set(rules, place, rule),
             None => rules
         };

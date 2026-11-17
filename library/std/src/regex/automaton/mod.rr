@@ -194,7 +194,7 @@ impl Automaton {
             Ok(found) => {
                 let cells = found.next;
                 // The steps from here on read the transitions cell by cell.
-                let next = array::tabulate<[u32; ?]>(cells.len(), |at: i64| cells.get(at as u64).unwrap_or(0));
+                let next = array::tabulate<[u32; ?]>(cells.len(), |at: i64| cells.get_or(at as u64, 0));
                 let arranged = arrange::arrange(found, next, classify::kinds(found, next));
                 let shared = columns::share(arranged.next, arranged.states, arranged.classes);
                 Result::Ok { pack::pack(arranged, shared, lookahead::runs(arranged, sets), sets) }

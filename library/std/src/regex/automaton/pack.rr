@@ -2,7 +2,6 @@
 
 import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
-import std::option::Option;
 import std::regex::alphabet::byte_classes::ByteClasses;
 import std::regex::automaton::Automaton;
 import std::regex::automaton::arrange::Arranged;
@@ -28,8 +27,8 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
     let words = runs.words();
     let marks = runs.lookup();
     let pairs = runs.nibbles();
-    let first_classes = array::tabulate<[u64; ?]>(columns, |column: i64| firsts.get(column as u64).unwrap_or(0));
-    let class_cells = array::tabulate<[u8; 256]>(|byte: i64| of_class.get(sets.class_index(byte as u8)).unwrap_or(0) as u8);
+    let first_classes = array::tabulate<[u64; ?]>(columns, |column: i64| firsts.get_or(column as u64, 0));
+    let class_cells = array::tabulate<[u8; 256]>(|byte: i64| of_class.get_or(sets.class_index(byte as u8), 0) as u8);
     // A row is longer than its columns when their number is no power of
     // two; no byte reads the cells past them.
     let next_cells = array::tabulate<[u32; ?]>(count << shift, |at: i64| {
@@ -48,10 +47,10 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
         encoding::cell(to, shift as u32, array::get(kinds, to as i64))
     });
     let winner_cells = array::tabulate<[u32; ?]>(array::get(starts, 5), |place: i64| array::get(rules, place));
-    let word_cells = array::tabulate<[u64; ?]>(words.len(), |at: i64| words.get(at as u64).unwrap_or(0));
+    let word_cells = array::tabulate<[u64; ?]>(words.len(), |at: i64| words.get_or(at as u64, 0));
     let vector_cells = runs.vectors();
-    let mark_cells = array::tabulate<[u8; ?]>(marks.len(), |at: i64| marks.get(at as u64).unwrap_or(0));
-    let pair_cells = array::tabulate<[u8; ?]>(pairs.len(), |at: i64| pairs.get(at as u64).unwrap_or(0));
+    let mark_cells = array::tabulate<[u8; ?]>(marks.len(), |at: i64| marks.get_or(at as u64, 0));
+    let pair_cells = array::tabulate<[u8; ?]>(pairs.len(), |at: i64| pairs.get_or(at as u64, 0));
     Automaton {
         classes: class_cells,
         columns,
