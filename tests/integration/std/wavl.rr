@@ -1413,6 +1413,8 @@ fn suite() -> TestTree {
                         && balanced(doubled.depth(), doubled.len())
                         && balanced(shifted.depth(), shifted.len())
                         && shifted == entries_mapped
+                        && (m1 == m2) == entry_list_equal(m1.to_list(), m2.to_list())
+                        && (m1 == doubled) == entry_list_equal(m1.to_list(), doubled.to_list())
                         && balanced(filtered.depth(), filtered.len())
                         && balanced(fmap.depth(), fmap.len())
                         && keys_sorted(combined.to_list())
