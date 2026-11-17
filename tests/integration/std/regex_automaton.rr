@@ -747,10 +747,15 @@ fn test_fold() -> Outcome {
         let broken = Text::from_str("abc 42!de");
         let (count, reached) = automaton.fold(whole.view(), 0, 0, |count: u64, found: Match| count + 1);
         let (rules, stopped) = automaton.fold(broken.view(), 0, 0, |rules: u64, found: Match| rules * 10 + (found.rule as u64) + 1);
+        // A stream that has given its first match folds over the rest.
+        let (rest, _) = automaton.matches(whole.view(), 0).next();
+        let (left, ended) = rest.fold(0, |count: u64, found: Match| count + 1);
         should_be(count, 5)
             .and_then(|| should_be(reached, 9))
             .and_then(|| should_be(rules, 132))
             .and_then(|| should_be(stopped, 6))
+            .and_then(|| should_be(left, 4))
+            .and_then(|| should_be(ended, 9))
             .and_then(|| expect(same_fold(folded(automaton, whole, 0), one_by_one(automaton, whole, 0)), "the fold is one longest match after another"))
             .and_then(|| expect(same_fold(folded(automaton, broken, 4), one_by_one(automaton, broken, 4)), "from the middle too"))
             .and_then(|| expect(same_fold(folded(automaton, whole, 9), (0, 9)), "nothing at the end"))

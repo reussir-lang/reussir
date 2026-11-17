@@ -51,17 +51,7 @@ impl Automaton {
     /// matches, or at a match of no bytes; the place where it ended comes
     /// with the value.
     pub fn fold<A>(self: Self, input: TextView, from: u64, initial: A, step: (A, Match) -> A) -> (A, u64) {
-        let bytes = input.unsafe_data_ptr();
-        // Every round reads the length of the input, which keeps the input
-        // for as long as its bytes are read.
-        let (_, value, reached) = while [going = true, value = initial, at = from] (going) {
-            let (last, end) = scan(self, bytes, input.len(), at);
-            if last == 0 || end == at { (false, value, at) } else {
-                let rule = array::get(self.winners, encoding::place(last, self.shift) as i64);
-                (end < input.len(), step(value, Match { rule, start: at, end }), end)
-            }
-        };
-        (value, reached)
+        self.matches(input, from).fold(initial, step)
     }
 }
 
