@@ -1,4 +1,6 @@
 import core::intrinsic::array;
+import std::hash::Hash;
+import std::hash::Hasher;
 import std::option::Option;
 
 pub enum List<T> {
@@ -371,5 +373,37 @@ impl<T : Eq> List<T> {
             Cons(h, _) if h == value => true,
             Cons(_, t) => t.contains(value)
         }
+    }
+}
+
+impl<T : PartialEq> PartialEq for List<T> {
+    /// Lists are equal when they have the same length and equal elements
+    /// at every place.
+    fn eq(self : Self, other : Self) -> bool {
+        match self {
+            Nil => other.is_nil(),
+            Cons(head, tail) => match other {
+                Nil => false,
+                Cons(first, rest) => head == first && tail == rest
+            }
+        }
+    }
+}
+
+impl<T : Eq> Eq for List<T> {}
+
+// Writes the elements from the head, then their count. Without the count
+// two lists written one after the other would hash the same however the
+// elements are split between them.
+fn hash_from<T : Hash, H : Hasher>(list : List<T>, state : H, count : u64) -> H {
+    match list {
+        Nil => state.write_u64(count),
+        Cons(head, tail) => hash_from(tail, state.write(head), count + 1)
+    }
+}
+
+impl<T : Hash> Hash for List<T> {
+    fn hash<H : Hasher>(self : Self, state : H) -> H {
+        hash_from(self, state, 0)
     }
 }

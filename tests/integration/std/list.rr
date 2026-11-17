@@ -2,8 +2,9 @@
 // singly linked `List`.
 // Unit cases cover every public method on small fixed lists, plus sorting of
 // fixed, pseudorandom, and equal-key inputs and selection of every rank of
-// pseudorandom, ascending, and descending lists. Fuzz targets check the
-// queries and transforms against a `Vec` model, `sort` against an
+// pseudorandom, ascending, and descending lists, and equality and hashing
+// of lists up to 100000 elements. Fuzz targets check the queries and
+// transforms against a `Vec` model, equality and hashing of two lists, `sort` against an
 // insertion-sort model on both shared and uniquely owned lists, and sort
 // stability and selection with reference-counted boxed elements.
 
@@ -32,13 +33,17 @@
 // CHECK-NEXT: list/sort: unit
 // CHECK-NEXT: list/sort stability: unit
 // CHECK-NEXT: list/kth_min and kth_max: unit
+// CHECK-NEXT: list/eq: unit
+// CHECK-NEXT: list/hash: unit
 // CHECK-NEXT: list/queries & transforms against vector model (fuzz):
+// CHECK-NEXT: list/equality & hashing of two lists (fuzz):
 // CHECK-NEXT: list/sort against insertion model & persistence (fuzz):
 // CHECK-NEXT: list/stable sort of boxed elements (fuzz):
 // CHECK-NEXT: list/selection of boxed elements against sorted order (fuzz):
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
+import std::hash::Hasher;
 import std::option::Option;
 import test::domain::i64_domain;
 import test::domain::in_range_u64;
@@ -47,6 +52,7 @@ import test::domain::u8_domain;
 import test::expect::Outcome;
 import test::expect::expect;
 import test::expect::should_be;
+import test::expect::should_not_be;
 import test::fuzz::fuzz_init;
 import test::tree::TestTree;
 
@@ -299,6 +305,48 @@ fn test_kth() -> Outcome {
         ))
 }
 
+fn test_eq() -> Outcome {
+    let long = pseudorandom_list(100000, 7, List::Nil);
+    expect(sample_list() == list3(3, 1, 2), "equal elements")
+        .and_then(|| expect(empty_list() == empty_list(), "two empty lists"))
+        .and_then(|| expect(sample_list() != list3(3, 1, 4), "a different last element"))
+        .and_then(|| expect(sample_list() != list3(2, 1, 3), "the same elements in another order"))
+        .and_then(|| expect(sample_list() != sample_list().tail(), "the list without its head"))
+        .and_then(|| expect(sample_list() != list3(3, 1, 2).reverse().tail().reverse(), "the list without its last element"))
+        .and_then(|| expect(list3(3, 1, 2).reverse().tail().reverse() != sample_list(), "the list with one more element"))
+        .and_then(|| expect(sample_list() != empty_list(), "a list and the empty list"))
+        .and_then(|| expect(empty_list() != sample_list(), "the empty list and a list"))
+        .and_then(|| expect(long == pseudorandom_list(100000, 7, List::Nil), "long equal lists"))
+        .and_then(|| expect(long != List::Cons { 0, long }, "a long list and one more element"))
+}
+
+// The digest of two lists written one after the other.
+fn hash_pair(first : List<i32>, second : List<i32>) -> u64 {
+    std::hash::fast_hasher().write(first).write(second).finish()
+}
+
+fn test_hash() -> Outcome {
+    let one = List::Cons { 1, List::Nil };
+    let long = pseudorandom_list(100000, 7, List::Nil);
+    should_be(std::hash::fast_hash(sample_list()), std::hash::fast_hash(list3(3, 1, 2)))
+        .and_then(|| should_be(std::hash::strong_hash(sample_list()), std::hash::strong_hash(list3(3, 1, 2))))
+        // The writes: 3, 1, 2, and the count.
+        .and_then(|| should_be(
+            std::hash::fast_hash(sample_list()),
+            std::hash::fast_hasher().write_i32(3).write_i32(1).write_i32(2).write_u64(3).finish()
+        ))
+        .and_then(|| should_be(std::hash::fast_hash(empty_list()), std::hash::fast_hasher().write_u64(0).finish()))
+        .and_then(|| should_not_be(std::hash::fast_hash(sample_list()), std::hash::fast_hash(list3(2, 1, 3))))
+        .and_then(|| should_not_be(
+            hash_pair(one, List::Cons { 2, List::Cons { 3, List::Nil } }),
+            hash_pair(List::Cons { 1, List::Cons { 2, List::Nil } }, List::Cons { 3, List::Nil })
+        ))
+        .and_then(|| should_be(
+            std::hash::fast_hash(long),
+            std::hash::fast_hash(pseudorandom_list(100000, 7, List::Nil))
+        ))
+}
+
 fn list_from_vec(xs : Vec<i64>) -> List<i64> {
     let (_, out) = while [i = xs.len(), out = List::Nil] (i > 0) {
         (i - 1, List::Cons { xs.get(i - 1).unwrap_or(0), out })
@@ -370,6 +418,21 @@ fn model_insert(l : List<i64>, x : i64) -> List<i64> {
                 List::Cons { h, model_insert(t, x) }
             }
     }
+}
+
+fn fuzz_eq_hash(input : (Vec<i64>, Vec<i64>)) -> Outcome {
+    let (xs, ys) = input;
+    let first = list_from_vec(xs);
+    let second = list_from_vec(ys);
+    let equal = list_eq(first, second);
+    should_be(first == second, equal)
+        .and_then(|| should_be(second == first, equal))
+        .and_then(|| expect(first == list_from_vec(xs), "a list and one built again"))
+        .and_then(|| should_be(std::hash::fast_hash(first), std::hash::fast_hash(list_from_vec(xs))))
+        .and_then(|| expect(
+            !equal || std::hash::strong_hash(first) == std::hash::strong_hash(second),
+            "equal lists hash alike"
+        ))
 }
 
 fn fuzz_sort(xs : Vec<i64>) -> Outcome {
@@ -449,6 +512,8 @@ fn suite() -> TestTree {
         .with_case("sort", test_sort)
         .with_case("sort stability", test_sort_stability)
         .with_case("kth_min and kth_max", test_kth)
+        .with_case("eq", test_eq)
+        .with_case("hash", test_hash)
         .with_fuzz(
             "queries & transforms against vector model (fuzz)",
             tuple2(
@@ -456,6 +521,14 @@ fn suite() -> TestTree {
                 i64_domain().in_range(-16, 16)
             ),
             fuzz_queries
+        )
+        .with_fuzz(
+            "equality & hashing of two lists (fuzz)",
+            tuple2(
+                i64_domain().in_range(0, 1).vec().max_len(6),
+                i64_domain().in_range(0, 1).vec().max_len(6)
+            ),
+            fuzz_eq_hash
         )
         .with_fuzz(
             "sort against insertion model & persistence (fuzz)",
