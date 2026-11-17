@@ -3,7 +3,7 @@
 // Unit cases cover basic operations, ascending/descending iteration,
 // persistence, ordered neighbour/window queries, set/map algebra,
 // higher-order transforms, pseudorandom churn, logarithmic rank balance, and
-// the map's walker.
+// the map's walker and iterator.
 // Fuzz targets exercise arbitrary operation streams, neighbour/range queries,
 // algebra, and transforms against sorted-list reference models, and a walker
 // against the map operations.
@@ -27,6 +27,7 @@
 // CHECK-NEXT: wavl/map transforms: unit
 // CHECK-NEXT: wavl/balance: unit
 // CHECK-NEXT: wavl/map walker: unit
+// CHECK-NEXT: wavl/map iterator: unit
 // CHECK-NEXT: wavl/set insert/remove/pop/take model & rank balance (fuzz):
 // CHECK-NEXT: wavl/set algebra, neighbours, range & transforms (fuzz):
 // CHECK-NEXT: wavl/map operations, model & rank balance (fuzz):
@@ -37,8 +38,10 @@ import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
 import std::collections::pure::wavlmap::Entry;
 import std::collections::pure::wavlmap::InsertResult;
+import std::collections::pure::wavlmap::Iter;
 import std::collections::pure::wavlmap::PopResult as MapPop;
 import std::collections::pure::wavlmap::RemoveResult;
+import std::collections::pure::wavlmap::Step;
 import std::collections::pure::wavlmap::Walker;
 import std::collections::pure::wavlmap::WavlMap;
 import std::collections::pure::wavlset::PopResult as SetPop;
@@ -793,6 +796,13 @@ fn walk_backward(walker : Walker<i64, i64>, acc : List<Entry<i64, i64>>) -> List
     }
 }
 
+fn iter_entries(iter : Iter<i64, i64>, acc : List<Entry<i64, i64>>) -> List<Entry<i64, i64>> {
+    match iter.next() {
+        Step::More(e, rest) => iter_entries(rest, List::Cons { e, acc }),
+        Step::Done => acc
+    }
+}
+
 // Each operation holds a code below 6 and a key: `op = key * 6 + code`. The
 // walker is moved, and what it reads is compared with `map`; `at` is the key
 // of the walker's position.
@@ -809,6 +819,7 @@ fn apply_walker_ops(
             && closed.len() == map.len()
             && balanced(closed.depth(), closed.len())
             && entry_list_equal(closed.to_list(), map.to_list())
+            && entry_list_equal(iter_entries(closed.iter(), List::Nil), map.to_list_desc())
     } else {
         let op = ops.get(idx).unwrap_or(0);
         let key = op / 6;
@@ -1220,6 +1231,27 @@ fn suite() -> TestTree {
                     && empty.walk().next().before().is_none()
                     && empty.walk().first().finish().is_empty(),
                 "map walker failed"
+            )
+        })
+        .with_case("map iterator", || {
+            let m = odd_map(8, WavlMap::new());
+            let empty : WavlMap<i64, i64> = WavlMap::new();
+            let first_is_one = match m.iter().next() {
+                Step::More(e, _) => e.key == 1 && e.value == 10,
+                Step::Done => false
+            };
+            let empty_is_done = match empty.iter().next() {
+                Step::More(_, _) => false,
+                Step::Done => true
+            };
+            let large = map_up(1, 2001, WavlMap::new());
+            expect(
+                first_is_one
+                    && empty_is_done
+                    && entry_list_equal(iter_entries(m.iter(), List::Nil), m.to_list_desc())
+                    && entry_list_equal(iter_entries(large.iter(), List::Nil), large.to_list_desc())
+                    && large.len() == 2000,
+                "map iterator failed"
             )
         })
         .with_fuzz(
