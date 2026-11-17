@@ -1376,6 +1376,14 @@ pub fn vector_cttz_elts<'c>(
         .expect("valid reussir.vector.cttz_elts")
 }
 
+/// `reussir.vector.swizzle_lanes : <result_type>`.
+pub fn vector_swizzle_lanes<'c>(result_type: Type<'c>, location: Location<'c>) -> Operation<'c> {
+    OperationBuilder::new("reussir.vector.swizzle_lanes", location)
+        .add_results(&[result_type])
+        .build()
+        .expect("valid reussir.vector.swizzle_lanes")
+}
+
 fn set_static_position(operation: &Operation<'_>, positions: Attribute<'_>) {
     set_inherent_attribute(operation, "static_position", positions);
 }

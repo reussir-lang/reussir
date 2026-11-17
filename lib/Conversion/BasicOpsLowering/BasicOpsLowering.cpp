@@ -4458,6 +4458,20 @@ struct BasicOpsLoweringPass
         mlir::applyPartialConversion(moduleOp, target, std::move(patterns)));
   }
 
+  // What the target shuffles by a computed index is known to the driver,
+  // not to the module.
+  void foldSwizzleLanes(mlir::ModuleOp moduleOp) {
+    llvm::SmallVector<ReussirVectorSwizzleLanesOp> queries;
+    moduleOp->walk(
+        [&](ReussirVectorSwizzleLanesOp op) { queries.push_back(op); });
+    mlir::IRRewriter rewriter(moduleOp.getContext());
+    for (ReussirVectorSwizzleLanesOp op : queries) {
+      rewriter.setInsertionPoint(op);
+      rewriter.replaceOpWithNewOp<mlir::arith::ConstantOp>(
+          op, rewriter.getIntegerAttr(op.getResult().getType(), swizzleLanes));
+    }
+  }
+
   void runOnOperation() override {
     mlir::ModuleOp moduleOp = getOperation();
     mlir::LLVMTypeConverter converter(moduleOp.getContext(),
@@ -4465,6 +4479,7 @@ struct BasicOpsLoweringPass
     ensureRuntimeFunctions(moduleOp, converter);
     if (closureWpd)
       stampClosureWpdTypeIds(moduleOp);
+    foldSwizzleLanes(moduleOp);
     if (!convertComputedLanePositions(moduleOp, converter))
       return signalPassFailure();
     // Fused debug-info attributes are converted to LLVM DI by the separate

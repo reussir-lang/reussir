@@ -174,6 +174,7 @@ pub(crate) fn backend_module<'c>(
         pack_record_members: !cli.no_pack_record_members,
         closure_wpd,
         arm_sve: machine.has_arm_sve(),
+        swizzle_lanes: machine.swizzle_lanes(),
         fallback_vscale: (!machine.has_scalable_vectors()).then_some(
             cli.fallback_vscale
                 .unwrap_or(reussir_backend::pipeline::DEFAULT_FALLBACK_VSCALE),

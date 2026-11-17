@@ -398,6 +398,23 @@ pub fn transpose<V, W>(v: W, order: ConstSeq<i64>) -> V;
 #[lang("core::simd::shuffle")]
 pub fn shuffle<V, W>(a: W, b: W, picks: ConstSeq<i64>) -> V;
 
+/// Lane `k` of the result is lane `index[k]` of `table`, for an `index`
+/// computed at run time: a vector of integers with as many lanes as `table`.
+/// Both are fixed and one-dimensional. An index that is not below the number
+/// of lanes yields a poison lane.
+///
+/// Where the target has a shuffle instruction for `V` this is that
+/// instruction, and one lane at a time elsewhere.
+#[lang("core::simd::swizzle")]
+pub fn swizzle<V, I>(table: V, index: I) -> V;
+
+/// The number of lanes of the widest vector of bytes that `swizzle` shuffles
+/// with one instruction on this machine, and zero where it has no such
+/// instruction. A caller with another way to do the same work asks this to
+/// choose between the two.
+#[lang("core::simd::swizzle_lanes")]
+pub fn swizzle_lanes() -> u64;
+
 /// The lanes of `a` and `b` alternating along the last extent.
 #[lang("core::simd::interleave")]
 pub fn interleave<V, W>(a: W, b: W) -> V;

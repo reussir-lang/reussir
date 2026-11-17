@@ -78,7 +78,8 @@ MlirPass reussirCreateCompilePolymorphicFFIPass(bool optimized);
 // requested; schedule after the rc optimization passes.
 MlirPass reussirCreateInstrumentNonlinearFFIPass(void);
 MlirPass reussirCreateInvariantGroupAnalysisPass(void);
-MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd);
+MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd,
+                                           unsigned swizzleLanes);
 // Packages outlined IFRT kernels as bytecode and rewrites their calls for PJRT
 // JIT compilation. Requires OpenXLA; run before basic lowering and symbol DCE.
 MlirPass reussirCreateIFRTJustInTimeTransformPass(void);

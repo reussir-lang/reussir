@@ -1,0 +1,68 @@
+// RUN: %rrc %s --emit mlir --no-source-locations -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %s --emit hir --no-source-locations -o %t.hir
+// RUN: %FileCheck %s --check-prefix=HIR < %t.hir
+// RUN: %rrc %t.hir --emit mir --no-source-locations -o %t.mir
+// RUN: %FileCheck %s --check-prefix=MIR < %t.mir
+// RUN: %rrc %t.mir --emit mlir --no-source-locations -o %t.rt.mlir
+// RUN: diff %t.mlir %t.rt.mlir
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --target-features=+ssse3 --emit llvm-ir -O aggressive -o %t.ssse3.ll
+// RUN: %FileCheck %s --check-prefix=SSSE3 < %t.ssse3.ll
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --target-features=+ssse3 --emit asm -O aggressive -o %t.ssse3.s
+// RUN: %FileCheck %s --check-prefix=PSHUFB < %t.ssse3.s
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --target-cpu x86-64-v3 --emit llvm-ir -O aggressive -o %t.v3.ll
+// RUN: %FileCheck %s --check-prefix=SSSE3 < %t.v3.ll
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --target-features=+avx512vbmi,+avx512vl --emit llvm-ir -O aggressive -o %t.vbmi.ll
+// RUN: %FileCheck %s --check-prefix=VBMI < %t.vbmi.ll
+// RUN: %rrc %s --target-triple x86_64-unknown-linux-gnu --target-features=-ssse3 --emit llvm-ir -O aggressive -o %t.sse2.ll
+// RUN: %FileCheck %s --check-prefix=SSE2 < %t.sse2.ll
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --emit llvm-ir -O aggressive -o %t.neon.ll
+// RUN: %FileCheck %s --check-prefix=NEON < %t.neon.ll
+// RUN: %rrc %s --target-triple aarch64-unknown-linux-gnu --emit asm -O aggressive -o %t.neon.s
+// RUN: %FileCheck %s --check-prefix=TBL < %t.neon.s
+// RUN: %not %rrc %S/Inputs/simd_swizzle_errors.rr --emit hir -o - 2>&1 | %FileCheck %S/Inputs/simd_swizzle_errors.rr --check-prefix=ERR
+
+import core::simd;
+
+// One lane at a time: the index of the lane, then the lane of the table it
+// names.
+// HIR-DAG: intrinsic#simd#swizzle#0(v0 : Simd<[u8; 16]>, v1 : Simd<[u8; 16]>) : Simd<[u8; 16]>
+// MIR-DAG: intrinsic#simd#swizzle#0(v0 : Simd<[u8; 16]>, v1 : Simd<[u8; 16]>) : Simd<[u8; 16]>
+// CHECK-LABEL: func.func @{{.*}}pick
+// CHECK: %[[AT:.*]] = vector.extract %arg1[0] : i8 from vector<16xi8>
+// CHECK: %[[INDEX:.*]] = arith.index_castui %[[AT]] : i8 to index
+// CHECK: %[[LANE:.*]] = vector.extract %arg0[%[[INDEX]]] : i8 from vector<16xi8>
+// CHECK: vector.insert %[[LANE]], %arg0 [0] : i8 into vector<16xi8>
+// CHECK: vector.extract %arg1[15] : i8 from vector<16xi8>
+// One instruction where the target has it.
+// PSHUFB-LABEL: pick:
+// PSHUFB: pshufb
+// PSHUFB-NEXT: ret
+// TBL-LABEL: pick:
+// TBL: tbl
+pub fn pick(table: Simd<[u8; 16]>, index: Simd<[u8; 16]>) -> Simd<[u8; 16]> {
+    simd::swizzle(table, index)
+}
+
+// The index has integers of any width; the table has lanes of any type.
+// CHECK-LABEL: func.func @{{.*}}wide
+// CHECK: vector.extract %arg1[3] : i32 from vector<4xi32>
+// CHECK: vector.insert %{{.*}}, %{{.*}} [3] : f64 into vector<4xf64>
+pub fn wide(table: Simd<[f64; 4]>, index: Simd<[u32; 4]>) -> Simd<[f64; 4]> {
+    simd::swizzle(table, index)
+}
+
+// The module does not name the target; the lowering is given the number,
+// which a feature or the name of a CPU decides.
+// HIR-DAG: intrinsic#simd#swizzle_lanes#0() : u64
+// CHECK-LABEL: func.func @{{.*}}widest
+// CHECK: reussir.vector.swizzle_lanes : i64
+// SSSE3-LABEL: define {{.*}}i64 @{{.*}}widest
+// SSSE3: ret i64 16
+// VBMI-LABEL: define {{.*}}i64 @{{.*}}widest
+// VBMI: ret i64 64
+// SSE2-LABEL: define {{.*}}i64 @{{.*}}widest
+// SSE2: ret i64 0
+// NEON-LABEL: define {{.*}}i64 @{{.*}}widest
+// NEON: ret i64 16
+pub fn widest() -> u64 { simd::swizzle_lanes() }

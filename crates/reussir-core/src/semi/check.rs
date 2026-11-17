@@ -4492,13 +4492,14 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let arity = match func {
             SimdFn::Splat => Some(1),
-            SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale => Some(0),
+            SimdFn::Step | SimdFn::Lanes | SimdFn::Vscale | SimdFn::SwizzleLanes => Some(0),
             SimdFn::Select
             | SimdFn::Load
             | SimdFn::Store
             | SimdFn::LoadExpand
             | SimdFn::StoreCompress => Some(3),
             SimdFn::Gather | SimdFn::Scatter => Some(4),
+            SimdFn::Swizzle => Some(2),
             SimdFn::Any | SimdFn::All | SimdFn::Count | SimdFn::FirstSet => Some(1),
             _ => None,
         };
@@ -4514,7 +4515,7 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
             return self.poison(span);
         }
         match func {
-            SimdFn::Vscale => mk(self, func, Vec::new(), u64_ty),
+            SimdFn::Vscale | SimdFn::SwizzleLanes => mk(self, func, Vec::new(), u64_ty),
             SimdFn::Splat => {
                 let Some((ty, elem, ..)) = self.simd_type_arg(fc, &shown, span) else {
                     return self.poison(span);
@@ -4723,6 +4724,27 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
                 }
                 let off = self.check_expr(&fc.args[2], chosen);
                 mk(self, func, vec![mask, on, off], chosen)
+            }
+            SimdFn::Swizzle => {
+                let Some((table, _, dims, scalable)) = self.infer_simd_operand(&fc.args[0], &shown)
+                else {
+                    return self.poison(span);
+                };
+                if dims.len() != 1 || scalable {
+                    self.error(
+                        span,
+                        format!(
+                            "{shown} takes a fixed one-dimensional vector, found `{}`",
+                            self.ty_display(table.ty)
+                        ),
+                    );
+                    return self.poison(span);
+                }
+                let picked = table.ty;
+                let Some(index) = self.infer_simd_index(&fc.args[1], dims, scalable, &shown) else {
+                    return self.poison(span);
+                };
+                mk(self, func, vec![table, index], picked)
             }
             SimdFn::Extract | SimdFn::Insert => {
                 let fixed = if func == SimdFn::Insert { 2 } else { 1 };

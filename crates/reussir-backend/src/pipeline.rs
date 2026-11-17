@@ -220,6 +220,10 @@ pub struct LoweringOptions {
     /// vectors, where it is lowered as a fixed vector. `None` for a target
     /// that has them.
     pub fallback_vscale: Option<NonZeroU32>,
+    /// The lanes of the widest vector of bytes that the target shuffles by
+    /// a computed index with one instruction; zero when it has none. It is
+    /// the value of `core::simd::swizzle_lanes`.
+    pub swizzle_lanes: u32,
     /// Lay out compound record members in packed physical order (descending
     /// storage alignment) rather than declaration order. On by default — the
     /// layout contract external consumers compile against; `rrc` exposes the
@@ -266,6 +270,7 @@ impl Default for LoweringOptions {
             enable_invariant_analysis: false,
             arm_sve: false,
             fallback_vscale: Some(DEFAULT_FALLBACK_VSCALE),
+            swizzle_lanes: 0,
             // On by default: packed layout is the shipped default and the
             // layout contract; only an explicit driver flag turns it off.
             pack_record_members: true,
@@ -599,7 +604,7 @@ pub fn run_lowering_pipeline(
         if let Some(scale) = options.fallback_vscale => {
             module: sys::reussirCreateFixVectorScalePass(scale.get());
         }
-        module: sys::reussirCreateBasicOpsLoweringPass(options.closure_wpd);
+        module: sys::reussirCreateBasicOpsLoweringPass(options.closure_wpd, options.swizzle_lanes);
         if options.arm_sve => {
             func: sys::reussirCreateArmSVELegalizeVectorStoragePass();
         }

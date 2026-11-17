@@ -4616,6 +4616,7 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 let vscale = self.append(block, builders::vector_vscale(self.context, loc));
                 arith::index_castui(vscale, result, loc)
             }
+            SimdFn::SwizzleLanes => builders::vector_swizzle_lanes(result, loc),
             SimdFn::FromElements => builders::vector_from_elements(&values, result, loc),
             SimdFn::Extract => {
                 builders::vector_extract(self.context, values[0], &positions(1)?, result, loc)
@@ -4624,6 +4625,51 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 builders::vector_insert(self.context, values[1], values[0], &positions(2)?, loc)
             }
             SimdFn::Select => arith::select(values[0], values[1], values[2], loc),
+            SimdFn::Swizzle => {
+                // One lane at a time. Instruction selection makes one
+                // shuffle of this where the target has one for the type.
+                let (table_lane, index_lane, lanes) = match (args[0].ty.kind(), args[1].ty.kind()) {
+                    (
+                        TyKind::Simd {
+                            elem: table, dims, ..
+                        },
+                        TyKind::Simd { elem: index, .. },
+                    ) => (
+                        self.tys.mlir_ty(*table)?,
+                        self.tys.mlir_ty(*index)?,
+                        dims.first().copied().unwrap_or(0),
+                    ),
+                    _ => return Err(LoweringError("swizzle takes two vectors".into())),
+                };
+                let index_ty = Type::index(self.context);
+                let mut picked = values[0];
+                let mut last = None;
+                for lane in 0..lanes {
+                    let here = [VectorPosition::Static(lane as i64)];
+                    let at = self.append(
+                        block,
+                        builders::vector_extract(self.context, values[1], &here, index_lane, loc),
+                    );
+                    let at = self.append(block, arith::index_castui(at, index_ty, loc));
+                    let value = self.append(
+                        block,
+                        builders::vector_extract(
+                            self.context,
+                            values[0],
+                            &[VectorPosition::Dynamic(at)],
+                            table_lane,
+                            loc,
+                        ),
+                    );
+                    let placed = builders::vector_insert(self.context, value, picked, &here, loc);
+                    if lane + 1 == lanes {
+                        last = Some(placed);
+                    } else {
+                        picked = self.append(block, placed);
+                    }
+                }
+                last.ok_or_else(|| LoweringError("swizzle of a vector without lanes".into()))?
+            }
             SimdFn::Load => {
                 let (_, align, _) = self.simd_memory(e.ty)?;
                 builders::ptr_masked_load(values[0], values[1], values[2], align, loc)

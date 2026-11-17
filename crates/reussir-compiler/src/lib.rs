@@ -296,6 +296,38 @@ impl TargetMachine {
             .unwrap_or(false)
     }
 
+    /// Whether the subtarget has the feature `name`: by the feature string
+    /// or by what the CPU implies, which `has_feature` does not see.
+    fn subtarget_has(&self, name: &str) -> bool {
+        let Ok(name) = CString::new(name) else {
+            return false;
+        };
+        unsafe {
+            reussir_backend_sys::reussirTargetMachineHasFeature(self.machine.cast(), name.as_ptr())
+        }
+    }
+
+    /// The lanes of the widest vector of bytes that the target shuffles by a
+    /// computed index with one instruction, or zero: `vpermb` with AVX-512
+    /// VBMI, `pshufb` with SSSE3, `tbl` with NEON, `i8x16.swizzle` with
+    /// WebAssembly SIMD.
+    pub fn swizzle_lanes(&self) -> u32 {
+        let triple = self.triple();
+        if triple.starts_with("x86_64") || triple.starts_with("i686") {
+            return match (
+                self.subtarget_has("avx512vbmi"),
+                self.subtarget_has("ssse3"),
+            ) {
+                (true, _) => 64,
+                (false, true) => 16,
+                (false, false) => 0,
+            };
+        }
+        let neon = triple.starts_with("aarch64") && self.subtarget_has("neon");
+        let wasm = triple.starts_with("wasm") && self.subtarget_has("simd128");
+        if neon || wasm { 16 } else { 0 }
+    }
+
     /// Whether the target has scalable vectors: AArch64 with SVE, or RISC-V
     /// with the vector extension.
     pub fn has_scalable_vectors(&self) -> bool {
