@@ -1,0 +1,38 @@
+//! The matches of a text, pulled one after another.
+
+import core::intrinsic::array;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::Matches;
+import std::regex::automaton::Reading;
+import std::regex::automaton::encoding;
+import std::regex::automaton::scan;
+import std::text::TextView;
+
+impl Matches {
+    /// The longest match that begins where the stream stands, and the
+    /// stream after it. After `Nothing` the stream stays where it is: no
+    /// rule matches there, the match has no bytes, or the text has ended.
+    pub fn next(self: Self) -> (Matches, Found) {
+        let reading = self.reading;
+        let (last, end) = scan::scan(reading.automaton, reading.bytes, reading.input.len(), self.at);
+        if last == 0 || end == self.at { (Matches { reading, at: self.at }, Found::Nothing) } else {
+            let rule = array::get(reading.automaton.winners, encoding::place(last, reading.automaton.shift) as i64);
+            (Matches { reading, at: end }, Found::Matched { Match { rule, start: self.at, end } })
+        }
+    }
+
+    /// The index of the byte where the next match would begin.
+    pub fn at(self: Self) -> u64 {
+        self.at
+    }
+}
+
+impl Automaton {
+    /// The matches of the rules in `input`, one after another, from the byte
+    /// `from` on.
+    pub fn matches(self: Self, input: TextView, from: u64) -> Matches {
+        Matches { reading: Reading { automaton: self, bytes: input.unsafe_data_ptr(), input }, at: from }
+    }
+}
