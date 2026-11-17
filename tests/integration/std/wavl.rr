@@ -803,7 +803,7 @@ fn iter_entries(iter : Iter<i64, i64>, acc : List<Entry<i64, i64>>) -> List<Entr
     }
 }
 
-// Each operation holds a code below 6 and a key: `op = key * 6 + code`. The
+// Each operation holds a code below 4 and a key: `op = key * 4 + code`. The
 // walker is moved, and what it reads is compared with `map`; `at` is the key
 // of the walker's position.
 fn apply_walker_ops(
@@ -822,14 +822,14 @@ fn apply_walker_ops(
             && entry_list_equal(iter_entries(closed.iter(), List::Nil), map.to_list_desc())
     } else {
         let op = ops.get(idx).unwrap_or(0);
-        let key = op / 6;
-        match op % 6 {
+        let key = op / 4;
+        match op % 4 {
             0 => {
                 let moved = walker.seek(key);
                 walker_reads(moved, map, key)
                     && apply_walker_ops(ops, idx + 1, moved, map, key)
             },
-            3 => {
+            1 => {
                 let moved = walker.next();
                 match map.successor_entry(at) {
                     Option::Some(e) => walker_reads(moved, map, e.key)
@@ -841,7 +841,7 @@ fn apply_walker_ops(
                         && apply_walker_ops(ops, idx + 1, moved.seek(at), map, at)
                 }
             },
-            4 => {
+            2 => {
                 let moved = walker.prev();
                 match map.predecessor_entry(at) {
                     Option::Some(e) => walker_reads(moved, map, e.key)
@@ -1435,7 +1435,7 @@ fn suite() -> TestTree {
             tuple3(
                 i64_domain().in_range(0, 39).vec().max_len(24),
                 i64_domain().in_range(-50, 200).vec().max_len(24),
-                i64_domain().in_range(0, 239).vec().max_len(48)
+                i64_domain().in_range(0, 159).vec().max_len(48)
             ),
             |input : (Vec<i64>, Vec<i64>, Vec<i64>)| {
                 let (keys, vals, ops) = input;
