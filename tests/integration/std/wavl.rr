@@ -782,6 +782,14 @@ fn walker_reads(
         && same_entry(walker.after(), map.successor_entry(key))
 }
 
+fn walker_up(next : i64, end : i64, acc : Walker<i64, i64>) -> Walker<i64, i64> {
+    if next == end {
+        acc
+    } else {
+        walker_up(next + 1, end, acc.put(next, next * 2))
+    }
+}
+
 fn walk_forward(walker : Walker<i64, i64>, acc : List<Entry<i64, i64>>) -> List<Entry<i64, i64>> {
     match walker.entry() {
         Option::Some(e) => walk_forward(walker.next(), List::Cons { e, acc }),
@@ -804,8 +812,8 @@ fn iter_entries(iter : Iter<i64, i64>, acc : List<Entry<i64, i64>>) -> List<Entr
 }
 
 // Each operation holds a code below 6 and a key: `op = key * 6 + code`. The
-// walker is moved, and what it reads is compared with `map`; `at` is the key
-// of the walker's position.
+// same change is made through the walker and on `map`; `at` is the key of
+// the walker's position.
 fn apply_walker_ops(
     ops : Vec<i64>,
     idx : u64,
@@ -828,6 +836,18 @@ fn apply_walker_ops(
                 let moved = walker.seek(key);
                 walker_reads(moved, map, key)
                     && apply_walker_ops(ops, idx + 1, moved, map, key)
+            },
+            1 => {
+                let moved = walker.put(key, op);
+                let changed = map.insert(key, op);
+                walker_reads(moved, changed, key)
+                    && apply_walker_ops(ops, idx + 1, moved, changed, key)
+            },
+            2 => {
+                let moved = walker.seek(key).remove();
+                let changed = map.remove(key);
+                walker_reads(moved, changed, key)
+                    && apply_walker_ops(ops, idx + 1, moved, changed, key)
             },
             3 => {
                 let moved = walker.next();
@@ -1201,6 +1221,8 @@ fn suite() -> TestTree {
             let first = m.walk().first();
             let last = m.walk().last();
             let empty : WavlMap<i64, i64> = WavlMap::new();
+            let edited = m.walk().seek(7).remove().put(8, 80).put(3, 33).put(100, 1).seek(0).finish();
+            let built = walker_up(1, 2001, empty.walk()).finish();
             expect(
                 entry_is(on.entry(), 7, 70)
                     && entry_is(on.before(), 5, 50)
@@ -1224,12 +1246,16 @@ fn suite() -> TestTree {
                     && entry_list_equal(walk_forward(first, List::Nil), m.to_list_desc())
                     && entry_list_equal(walk_backward(last, List::Nil), m.to_list())
                     && on.finish() == m
-                    && between.finish() == m
+                    && between.remove().finish() == m
+                    && edited == m.remove(7).insert(8, 80).insert(3, 33).insert(100, 1)
+                    && balanced(edited.depth(), edited.len())
                     // The map itself is unchanged by walkers opened on it.
                     && m.len() == 8 && entry_is(m.get_entry(7), 7, 70)
                     && empty.walk().entry().is_none()
                     && empty.walk().next().before().is_none()
-                    && empty.walk().first().finish().is_empty(),
+                    && empty.walk().first().remove().finish().is_empty()
+                    && built == map_up(1, 2001, WavlMap::new())
+                    && built.depth() == 11,
                 "map walker failed"
             )
         })

@@ -115,9 +115,11 @@
 //! `walk` opens a map at a position, as a `Walker`. A walker is on an entry
 //! or between two entries. `seek` moves it to a key through the tree between
 //! the two positions instead of from the root, `entry`, `before`, and `after`
-//! read the entry there and its neighbours, and `finish` gives the map. A
-//! walker over a map that is also held elsewhere copies every node it
-//! passes, so `fold_left` is the cheaper way to read a whole map.
+//! read the entry there and its neighbours, `put` and `remove` change it,
+//! and `finish` gives the map. It suits a sweep that changes several entries
+//! in key order. A walker over a map that is also held elsewhere copies
+//! every node it passes, so `fold_left` is the cheaper way to read a whole
+//! map.
 //!
 //! `iter` yields the entries one at a time in ascending key order, for
 //! reading two maps in step or stopping early.
@@ -1509,6 +1511,37 @@ impl<K : Ord, V> Walker<K, V> {
                 }
             },
             Tree::Leaf => upper(self.path)
+        }
+    }
+
+    /// Moves to `key` and adds or replaces its entry, as `seek` followed by
+    /// an insertion. The walker is then on that entry. O(log n).
+    pub fn put(self : Self, key : K, value : V) -> Self {
+        let size = self.size;
+        let s = seek_at(self.path, self.focus, key);
+        match s.tree {
+            Tree::Node(r, l, k, _, rt) =>
+                Walker { size: size, path: s.path, focus: Tree::Node { r, l, k, value, rt } },
+            Tree::Leaf => {
+                let f = fixup_ins(s.path, Tree::Node { 0, Tree::Leaf, key, value, Tree::Leaf }, 0);
+                let at = down(f.path, f.tree, key);
+                Walker { size: size + 1, path: at.path, focus: at.tree }
+            }
+        }
+    }
+
+    /// Removes the entry at the position, when the walker is on one. The
+    /// walker is then between the entries that were around it. O(log n).
+    pub fn remove(self : Self) -> Self {
+        let size = self.size;
+        let path = self.path;
+        match self.focus {
+            Tree::Leaf => Walker { size: size, path: path, focus: Tree::Leaf },
+            Tree::Node(r, l, k, _, rt) => {
+                let f = remove_at(r, l, rt, path);
+                let at = down(f.path, f.tree, k);
+                Walker { size: size - 1, path: at.path, focus: at.tree }
+            }
         }
     }
 
