@@ -6,7 +6,8 @@
 import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
 import std::collections::pure::hashmap::HashMap;
-import std::collections::pure::list::List;
+import std::hash::Hash;
+import std::hash::Hasher;
 import std::option::Option;
 
 /// The columns of a table.
@@ -17,19 +18,54 @@ pub struct Columns {
     pub firsts: Vec<u64>
 }
 
-// The cells of the column of `class`, one for each state.
-fn column(table: [u32; ?], class: u64, states: u64, classes: u64) -> List<u32> {
-    let (_, cells) = while [state = states, cells = List::Nil] (state > 0) {
-        (state - 1, List::Cons { array::get(table, ((state - 1) * classes + class) as i64), cells })
-    };
-    cells
+/// The column of a class in a table: the cell of every state on that
+/// class. It is hashed and compared in the table, and two columns that are
+/// compared are columns of one table.
+pub struct [value] Column {
+    table: [u32; ?],
+    // The cell of the first state on the class, the cells of a row, and the
+    // cells of the table.
+    first: u64,
+    classes: u64,
+    cells: u64
 }
+
+// Writes the cells of a column from the cell `at` on.
+fn hash_impl<H: Hasher>(table: [u32; ?], at: u64, classes: u64, cells: u64, state: H) -> H {
+    if at >= cells { state } else {
+        let cell = array::get(table, at as i64);
+        hash_impl(table, at + classes, classes, cells, state.write_u32(cell))
+    }
+}
+
+// Whether two columns have equal cells from the cells `first` and `second`
+// on, which are cells of one state.
+fn eq_impl(table: [u32; ?], first: u64, second: u64, classes: u64, cells: u64) -> bool {
+    if first >= cells { true } else {
+        let same = array::get(table, first as i64) == array::get(table, second as i64);
+        same && eq_impl(table, first + classes, second + classes, classes, cells)
+    }
+}
+
+impl Hash for Column {
+    fn hash<H: Hasher>(self: Self, state: H) -> H {
+        hash_impl(self.table, self.first, self.classes, self.cells, state)
+    }
+}
+
+impl PartialEq for Column {
+    fn eq(self: Self, other: Self) -> bool {
+        eq_impl(self.table, self.first, other.first, self.classes, self.cells)
+    }
+}
+
+impl Eq for Column {}
 
 /// The columns of `table`, which has a row of `classes` cells for each of
 /// `states` states.
 pub fn share(table: [u32; ?], states: u64, classes: u64) -> Columns {
     let (_, of_class, firsts, _) = while [class = 0, of_class = Vec::new(), firsts = Vec::new(), found = HashMap::new()] (class < classes) {
-        let line = column(table, class, states, classes);
+        let line = Column { table, first: class, classes, cells: states * classes };
         let fresh = firsts.len() as u32;
         match found.get(line) {
             Some(known) => (class + 1, of_class.push(known), firsts, found),
