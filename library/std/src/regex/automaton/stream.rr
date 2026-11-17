@@ -15,17 +15,35 @@ impl Matches {
     /// stream after it. After `Nothing` the stream stays where it is: no
     /// rule matches there, the match has no bytes, or the text has ended.
     pub fn next(self: Self) -> (Matches, Found) {
+        // The place is read first, so that taking `reading` is the last use
+        // of `self` and moves it.
+        let at = self.at;
         let reading = self.reading;
-        let (last, end) = scan::scan(reading.automaton, reading.bytes, reading.input.len(), self.at);
-        if last == 0 || end == self.at { (Matches { reading, at: self.at }, Found::Nothing) } else {
-            let rule = array::get(reading.automaton.winners, encoding::place(last, reading.automaton.shift) as i64);
-            (Matches { reading, at: end }, Found::Matched { Match { rule, start: self.at, end } })
+        match reading.next_match(at) {
+            Matched(found) => (Matches { reading, at: found.end }, Found::Matched { found }),
+            Nothing => (Matches { reading, at }, Found::Nothing)
         }
     }
 
     /// The index of the byte where the next match would begin.
     pub fn at(self: Self) -> u64 {
         self.at
+    }
+}
+
+impl Reading {
+    // The longest match from the byte `at`, when it has bytes. The stream
+    // keeps `self` across the call, so the automaton and its tables are
+    // read here without counting references.
+    fn next_match(self: Self, at: u64) -> Found {
+        let (last, end) = scan::scan(self.automaton, self.bytes, self.input.len(), at);
+        if last == 0 || end == at {
+            Found::Nothing
+        } else {
+            let place = encoding::place(last, self.automaton.shift);
+            let rule = array::get(self.automaton.winners, place as i64);
+            Found::Matched { Match { rule, start: at, end } }
+        }
     }
 }
 
