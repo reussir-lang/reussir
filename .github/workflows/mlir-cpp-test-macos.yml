@@ -91,7 +91,7 @@ jobs:
       - name: Configure CMake
         run: |
           nix develop --command bash -c '
-            env RUSTC_WRAPPER=sccache \
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" \
             cmake --preset nix-dev -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DREUSSIR_ENABLE_PEDANTIC=ON \
@@ -103,7 +103,7 @@ jobs:
       - name: Build
         run: |
           nix develop --command bash -c '
-            env RUSTC_WRAPPER=sccache \
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" \
             cmake --build build --parallel
           '
 

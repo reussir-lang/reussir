@@ -107,7 +107,7 @@ jobs:
         run: scripts/ci/nix-cache-push.sh windows-cross
 
       - name: Cross-build for x86_64-pc-windows-msvc
-        run: nix develop .#windows-cross --command env RUSTC_WRAPPER=sccache cargo xwin build --target x86_64-pc-windows-msvc
+        run: nix develop .#windows-cross --command env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" cargo xwin build --target x86_64-pc-windows-msvc
 
       # The standalone runtime bundle test spawns Cargo from the test process.
       # It needs a Windows-native toolchain under Wine, just like the lit job.
@@ -116,7 +116,7 @@ jobs:
         run: nix develop .#windows-cross --command reussir-bake-msvc-rustc
 
       - name: Run test suites under Wine
-        run: nix develop .#windows-cross --command env RUSTC_WRAPPER=sccache cargo xwin test --target x86_64-pc-windows-msvc
+        run: nix develop .#windows-cross --command env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" cargo xwin test --target x86_64-pc-windows-msvc
 
       - name: Save cargo cache
         if: steps.cache-cargo.outputs.cache-hit != 'true'
@@ -269,7 +269,7 @@ jobs:
         run: |
           nix develop .#windows-cross --command bash -c '
             CONDA="$HOME/.cache/reussir-msvc-conda/Library"
-            env -u NIX_STORE RUSTC_WRAPPER=sccache cmake -B build-xwin -G Ninja \
+            env -u NIX_STORE RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" cmake -B build-xwin -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/linux-to-windows-msvc.cmake \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DREUSSIR_ENABLE_TESTS=ON \
@@ -284,7 +284,7 @@ jobs:
       - name: Build toolchain
         run: |
           nix develop .#windows-cross --command bash -c '
-            env RUSTC_WRAPPER=sccache cmake --build build-xwin --parallel --target all
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" cmake --build build-xwin --parallel --target all
           '
 
       # The runtime tree the polyffi/rene suites resolve against must be
@@ -302,7 +302,7 @@ jobs:
       - name: Run lit suite under Wine
         run: |
           nix develop .#windows-cross --command bash -c '
-            env RUSTC_WRAPPER=sccache cmake --build build-xwin --target check
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" cmake --build build-xwin --target check
           '
 
       - name: Save cargo cache

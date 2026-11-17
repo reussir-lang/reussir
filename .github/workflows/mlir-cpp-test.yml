@@ -115,7 +115,7 @@ jobs:
       - name: Configure CMake
         run: |
           nix develop --command bash -c '
-            env RUSTC_WRAPPER=sccache \
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" \
             cmake --preset nix-dev -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DREUSSIR_ENABLE_PEDANTIC=ON \
@@ -150,7 +150,7 @@ jobs:
         # UNSUPPORTED in the main integration-test run.
         run: |
           nix develop --command bash -c '
-            env RUSTC_WRAPPER=sccache \
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" \
             cmake --build build --parallel --target all reussir-rt-sanitizers
           '
 
@@ -183,7 +183,7 @@ jobs:
             REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
             REUSSIR_STABLEHLO_LIB_DIR="$PWD/build/lib" \
             REUSSIR_TEST_BUNDLED_PJRT=1 \
-            cargo --config "build.rustc-wrapper=\"sccache\"" \
+            cargo --config "build.rustc-wrapper=\"$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh\"" \
               test --locked -p rene --lib bundled_runtime_builds_locked_offline_with_an_empty_cargo_home -- --ignored
           '
 
@@ -202,7 +202,7 @@ jobs:
       - name: Run PJRT runtime tests
         run: |
           nix develop --command bash -c '
-            env RUSTC_WRAPPER=sccache RUSTFLAGS=-Awarnings \
+            env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" RUSTFLAGS=-Awarnings \
             CARGO_TARGET_DIR="$PWD/build/target-rt-pjrt" \
             REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src" \
             cargo test --locked --release -p reussir-rt --features pjrt -- --include-ignored
@@ -234,7 +234,7 @@ jobs:
 
       - name: Test standalone cache FFI
         run: |
-          nix develop --command env RUSTC_WRAPPER=sccache \
+          nix develop --command env RUSTC_WRAPPER="$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh" \
             CARGO_TARGET_DIR="$PWD/build/target" RUSTFLAGS=-Awarnings \
             cargo test --locked --release -p reussir-polyffi-cache
 
@@ -246,7 +246,7 @@ jobs:
         run: |
           nix develop --command bash -c '
             export REUSSIR_PJRT_PATH="$PWD/build/_deps/xla-src"
-            cached=(--config "build.rustc-wrapper=\"sccache\"")
+            cached=(--config "build.rustc-wrapper=\"$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh\"")
             cargo "${cached[@]}" clippy -p rene --lib
             cargo "${cached[@]}" clippy -p rene --all-targets -- -D warnings
             cargo "${cached[@]}" test -p rene
@@ -255,7 +255,7 @@ jobs:
       # The real thing, ignored by default because it compiles the runtime:
       # unpack the bundled sources and bake with the host toolchain offline.
       - name: Run rene host-toolchain bake test
-        run: nix develop --command cargo --config 'build.rustc-wrapper="sccache"' test -p rene --test cli -- --ignored
+        run: nix develop --command cargo --config "build.rustc-wrapper=\"$GITHUB_WORKSPACE/scripts/ci/sccache-rustc.sh\"" test -p rene --test cli -- --ignored
 
       - name: Build and Test reussir-backend
         run: nix develop --command cmake --build build --target reussir-backend-test
