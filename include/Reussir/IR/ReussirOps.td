@@ -3195,4 +3195,24 @@ def ReussirVectorCttzEltsOp : ReussirVectorOp<"cttz_elts", [Pure]> {
       Res<AnySignlessInteger, "lanes before the first set lane">:$result);
   let assemblyFormat = "$mask `:` type($mask) `->` type($result) attr-dict";
 }
+
+def ReussirVectorSwizzleLanesOp : ReussirVectorOp<"swizzle_lanes", [Pure]> {
+  let summary = "The widest vector of bytes the target shuffles by an index";
+  let description = [{
+    `reussir.vector.swizzle_lanes` is the number of lanes of the widest vector
+    of bytes that the target shuffles by a computed index with one
+    instruction, and zero on a target without such an instruction. It is a
+    constant of the target, which the module does not name, so
+    `reussir-lowering-basic-ops` replaces the operation with the number it is
+    given as `swizzle-lanes`.
+
+    Example:
+
+    ```mlir
+    %lanes = reussir.vector.swizzle_lanes : i64
+    ```
+  }];
+  let results = (outs Res<AnySignlessInteger, "number of lanes">:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
 #endif // REUSSIR_IR_REUSSIROPS_TD

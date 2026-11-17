@@ -1,0 +1,16 @@
+import core::simd;
+
+// ERR-DAG: `core::simd::swizzle` expects 2 argument(s), got 1
+fn bare(t: Simd<[u8; 16]>) -> Simd<[u8; 16]> { simd::swizzle(t) }
+// ERR-DAG: `core::simd::swizzle` takes a vector of integers of the same shape as its index, found `Simd<[u8; 8]>`
+fn short(t: Simd<[u8; 16]>, i: Simd<[u8; 8]>) -> Simd<[u8; 16]> { simd::swizzle(t, i) }
+// ERR-DAG: `core::simd::swizzle` takes a vector of integers of the same shape as its index, found `Simd<[f32; 4]>`
+fn real(t: Simd<[u8; 4]>, i: Simd<[f32; 4]>) -> Simd<[u8; 4]> { simd::swizzle(t, i) }
+// ERR-DAG: `core::simd::swizzle` takes a fixed one-dimensional vector, found `Simd<[u8; 2, 8]>`
+fn flat(t: Simd<[u8; 2, 8]>, i: Simd<[u8; 2, 8]>) -> Simd<[u8; 2, 8]> { simd::swizzle(t, i) }
+// ERR-DAG: `core::simd::swizzle` takes a fixed one-dimensional vector, found `Simd<[u8; [16]]>`
+fn scaled(t: Simd<[u8; [16]]>, i: Simd<[u8; [16]]>) -> Simd<[u8; [16]]> { simd::swizzle(t, i) }
+// ERR-DAG: `core::simd::swizzle_lanes` expects 0 argument(s), got 1
+fn counted() -> u64 { simd::swizzle_lanes(16) }
+// ERR-DAG: `core::simd::swizzle_lanes` takes no type arguments
+fn typed() -> u64 { simd::swizzle_lanes<Simd<[u8; 16]>>() }

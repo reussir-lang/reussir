@@ -635,6 +635,12 @@ pub enum SimdFn {
     /// `shuffle(a, b, i)`: lane `k` is lane `i[k]` of `a` followed by `b`;
     /// `i` is a constant sequence and the vectors are fixed.
     Shuffle,
+    /// `swizzle(t, i)`: lane `k` is lane `i[k]` of `t`; `i` is a vector of
+    /// integers computed at run time, and both vectors are fixed.
+    Swizzle,
+    /// `swizzle_lanes() -> u64`: the lanes of the widest vector of bytes
+    /// that `swizzle` shuffles with one instruction on this machine.
+    SwizzleLanes,
     /// `interleave(a, b)`: the lanes of the last extent alternate.
     Interleave,
     /// `deinterleave_even(v)`, `deinterleave_odd(v)`: every other lane of
@@ -773,6 +779,8 @@ impl SimdFn {
         SimdFn::Broadcast,
         SimdFn::Transpose,
         SimdFn::Shuffle,
+        SimdFn::Swizzle,
+        SimdFn::SwizzleLanes,
         SimdFn::Interleave,
         SimdFn::DeinterleaveEven,
         SimdFn::DeinterleaveOdd,
@@ -875,6 +883,8 @@ impl SimdFn {
             SimdFn::Broadcast => "broadcast",
             SimdFn::Transpose => "transpose",
             SimdFn::Shuffle => "shuffle",
+            SimdFn::Swizzle => "swizzle",
+            SimdFn::SwizzleLanes => "swizzle_lanes",
             SimdFn::Interleave => "interleave",
             SimdFn::DeinterleaveEven => "deinterleave_even",
             SimdFn::DeinterleaveOdd => "deinterleave_odd",

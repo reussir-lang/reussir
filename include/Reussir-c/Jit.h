@@ -41,6 +41,11 @@ typedef enum ReussirJitOptLevel {
 // constructing target machines; LLVM command-line options are not modified.
 void reussirInitializeCodeGenPasses(void);
 
+// Whether the subtarget of `machine` has the feature `feature`, such as
+// `ssse3`: by the feature string or by what the CPU of the machine implies.
+bool reussirTargetMachineHasFeature(LLVMTargetMachineRef machine,
+                                    const char *feature);
+
 // Runs the Reussir LLVM optimization pipeline on `module` in place: the
 // RuntimeFunctionAttributor pass, the module pipeline at the requested
 // level, then the AllocationSimplification pass. A no-op for the `None` and

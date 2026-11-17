@@ -22,6 +22,7 @@
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/PassRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -73,6 +74,13 @@ void reussirInitializeCodeGenPasses() {
           config->disablePass(cmov->getTypeInfo());
         }
       });
+}
+
+bool reussirTargetMachineHasFeature(LLVMTargetMachineRef machine,
+                                    const char *feature) {
+  const llvm::MCSubtargetInfo &subtarget =
+      reinterpret_cast<llvm::TargetMachine *>(machine)->getMCSubtargetInfo();
+  return subtarget.checkFeatures("+" + std::string(feature));
 }
 
 void reussirRunBackendLLVMPipeline(LLVMModuleRef module, ReussirJitOptLevel opt,

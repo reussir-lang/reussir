@@ -38,6 +38,9 @@ def ReussirBasicOpsLoweringPass
     `vector.extract` and `vector.insert` at a computed position, which the
     upstream `convert-vector-to-llvm` would convert at 64 bits.
 
+    `reussir.vector.swizzle_lanes` becomes the constant given as
+    `swizzle-lanes`, which the driver takes from the target.
+
     With `closure-wpd` enabled, the pass stamps each outlined closure vtable
     with its whole-program-devirtualization type id (one per closure RETURN
     type — apply/uniqify/clone never change a vtable, so the return type is
@@ -57,6 +60,9 @@ def ReussirBasicOpsLoweringPass
       [Option<
            "closureWpd", "closure-wpd", "bool", /*default=*/"false",
            "emit whole-program devirtualization artifacts for closure vtables">,
+       Option<"swizzleLanes", "swizzle-lanes", "unsigned", /*default=*/"0",
+              "The lanes of the widest vector of bytes that the target "
+              "shuffles by a computed index with one instruction">,
   ];
   let dependentDialects = ["::mlir::arith::ArithDialect",
                            "::mlir::memref::MemRefDialect",

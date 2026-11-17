@@ -233,7 +233,7 @@ unsafe extern "C" {
     pub fn reussirCreateCompilePolymorphicFFIPass(optimized: bool) -> MlirPass;
     pub fn reussirCreateInstrumentNonlinearFFIPass() -> MlirPass;
     pub fn reussirCreateInvariantGroupAnalysisPass() -> MlirPass;
-    pub fn reussirCreateBasicOpsLoweringPass(closure_wpd: bool) -> MlirPass;
+    pub fn reussirCreateBasicOpsLoweringPass(closure_wpd: bool, swizzle_lanes: u32) -> MlirPass;
     pub fn reussirCreateIFRTJustInTimeTransformPass() -> MlirPass;
     pub fn reussirCreatePreparePjrtPass(optimize_kernels: bool) -> MlirPass;
     pub fn reussirCreateDebugInfoConversionPass() -> MlirPass;
@@ -367,6 +367,13 @@ unsafe extern "C" {
 
     /// Registers native code-generation defaults before target construction.
     pub fn reussirInitializeCodeGenPasses();
+
+    /// Whether the subtarget of `machine` has the feature `feature`, by the
+    /// feature string or by what the CPU of the machine implies.
+    pub fn reussirTargetMachineHasFeature(
+        machine: LLVMTargetMachineRef,
+        feature: *const c_char,
+    ) -> bool;
 
     /// Runs the Reussir LLVM optimization pipeline on `module` in place at the
     /// requested level (a no-op for `None`/`Tpde`). `opt` mirrors the backend's
