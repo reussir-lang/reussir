@@ -1,45 +1,147 @@
 //! A set of characters.
 
 import std::collections::pure::list::List;
-import std::regex::alphabet::steps::Span;
-import std::regex::alphabet::steps::Steps;
+import std::collections::pure::wavlmap::Entry;
+import std::collections::pure::wavlmap::WavlMap;
+import std::option::Option;
 
-/// A set of characters: for every code point whether it is a member, held
-/// as the code points at which that changes.
+/// A stretch of code points: `start` up to `end`, `end` not included.
+pub struct [value] Span {
+    pub start: u32,
+    pub end: u32
+}
+
+/// A set of characters, held as the stretches of code points that are its
+/// members: the entry `(start, end)` is the stretch from `start` up to
+/// `end`, `end` not included. Every stretch has a member, and no two overlap
+/// or touch.
 pub struct CharSet {
-    members: Steps
+    stretches: WavlMap<u32, u32>
 }
 
 // One past the last code point.
 fn limit() -> u32 { 1114112 }
 
-// `members` with `value` over every span of `spans` whose value is `wanted`.
-fn fill_spans(members: Steps, spans: List<Span>, wanted: bool, value: bool) -> Steps {
-    match spans {
-        Nil => members,
-        Cons(span, rest) => {
-            let members = if span.value == wanted { members.fill(span.start, span.end, value) } else { members };
-            fill_spans(members, rest, wanted, value)
+fn lesser(first: u32, second: u32) -> u32 {
+    if first < second { first } else { second }
+}
+
+fn greater(first: u32, second: u32) -> u32 {
+    if first < second { second } else { first }
+}
+
+fn remove_keys(stretches: WavlMap<u32, u32>, entries: List<Entry<u32, u32>>) -> WavlMap<u32, u32> {
+    match entries {
+        Nil => stretches,
+        Cons(entry, rest) => remove_keys(stretches.remove(entry.key), rest)
+    }
+}
+
+// `stretches` and the stretch from `start` up to `end` when it has a member;
+// it must not overlap or touch another.
+fn with_stretch(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
+    if start < end { stretches.insert(start, end) } else { stretches }
+}
+
+// `stretches` and the code points from `start` up to `end`, `start` below
+// `end`. O(log n) and the stretches joined.
+fn add(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
+    // A stretch that reaches `start` from before is joined.
+    let low = match stretches.floor_entry(start) {
+        Some(before) if before.value >= start => before.key,
+        // No stretch begins at or before `start`, or it ends short of it.
+        _ => start
+    };
+    // So is every stretch that begins up to `end`; the last may go further.
+    let high = match stretches.floor_entry(end) {
+        Some(last) if last.value > end => last.value,
+        // No stretch begins at or before `end`, or it ends by `end`.
+        _ => end
+    };
+    remove_keys(stretches, stretches.range_to_list(low + 1, end + 1)).insert(low, high)
+}
+
+// `stretches` without the code points from `start` up to `end`. O(log n)
+// and the stretches removed.
+fn cut(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
+    let outside = remove_keys(stretches, stretches.range_to_list(start, end));
+    // The last stretch that begins before `end` keeps its part from `end`.
+    let outside = match stretches.predecessor_entry(end) {
+        Some(last) if last.value > end => outside.insert(end, last.value),
+        // No stretch begins before `end`, or it ends by `end`.
+        _ => outside
+    };
+    // A stretch that begins before `start` keeps its part before `start`.
+    match stretches.predecessor_entry(start) {
+        Some(before) if before.value > start => outside.insert(before.key, start),
+        // No stretch begins before `start`, or it ends by `start`.
+        _ => outside
+    }
+}
+
+fn add_all(stretches: WavlMap<u32, u32>, entries: List<Entry<u32, u32>>) -> WavlMap<u32, u32> {
+    match entries {
+        Nil => stretches,
+        Cons(entry, rest) => add_all(add(stretches, entry.key, entry.value), rest)
+    }
+}
+
+fn cut_all(stretches: WavlMap<u32, u32>, entries: List<Entry<u32, u32>>) -> WavlMap<u32, u32> {
+    match entries {
+        Nil => stretches,
+        Cons(entry, rest) => cut_all(cut(stretches, entry.key, entry.value), rest)
+    }
+}
+
+// `found` and the stretches of `entries`, each ended at `end` at the latest.
+fn kept_up_to(found: WavlMap<u32, u32>, entries: List<Entry<u32, u32>>, end: u32) -> WavlMap<u32, u32> {
+    match entries {
+        Nil => found,
+        Cons(entry, rest) => kept_up_to(found.insert(entry.key, lesser(entry.value, end)), rest, end)
+    }
+}
+
+// `found` and the members of `stretches` that lie in a stretch of `entries`.
+fn common(found: WavlMap<u32, u32>, stretches: WavlMap<u32, u32>, entries: List<Entry<u32, u32>>) -> WavlMap<u32, u32> {
+    match entries {
+        Nil => found,
+        Cons(entry, rest) => {
+            let found = match stretches.predecessor_entry(entry.key) {
+                Some(before) if before.value > entry.key =>
+                    found.insert(entry.key, lesser(before.value, entry.value)),
+                // No stretch begins before the entry, or it ends by its start.
+                _ => found
+            };
+            let inside = stretches.range_to_list(entry.key, entry.value);
+            common(kept_up_to(found, inside, entry.value), stretches, rest)
         }
+    }
+}
+
+fn spans_of(entries: List<Entry<u32, u32>>) -> List<Span> {
+    match entries {
+        Nil => List::Nil,
+        Cons(entry, rest) => List::Cons { Span { start: entry.key, end: entry.value }, spans_of(rest) }
     }
 }
 
 impl CharSet {
     pub fn empty() -> Self {
-        CharSet { members: Steps::constant(false) }
+        CharSet { stretches: WavlMap::new() }
     }
 
     /// Every character: the code points up to U+10FFFF without the
     /// surrogates U+D800 to U+DFFF.
     pub fn full() -> Self {
-        CharSet { members: Steps::constant(false).fill(0, 55296, true).fill(57344, limit(), true) }
+        CharSet::code_points(0, limit())
     }
 
     /// The characters whose code points run from `start` up to `end`, `end`
     /// not included.
     pub fn code_points(start: u32, end: u32) -> Self {
-        let span = CharSet { members: Steps::constant(false).fill(start, end, true) };
-        span.intersect(CharSet::full())
+        // The part below the surrogates, and the part above them.
+        let below = with_stretch(WavlMap::new(), start, lesser(end, 55296));
+        CharSet { stretches: with_stretch(below, greater(start, 57344), lesser(end, limit())) }
     }
 
     /// The characters from `lo` to `hi`, both included.
@@ -53,45 +155,48 @@ impl CharSet {
 
     /// O(log n).
     pub fn contains(self: Self, character: char) -> bool {
-        self.members.at(character as u32)
+        match self.stretches.floor_entry(character as u32) {
+            Some(stretch) => (character as u32) < stretch.value,
+            None => false
+        }
     }
 
     pub fn is_empty(self: Self) -> bool {
-        self.members.len() == 1 && !self.members.at(0)
+        self.stretches.is_empty()
     }
 
     /// The code point of the smallest member, or one past the last code
     /// point when there is none.
     pub fn least(self: Self) -> u64 {
-        if self.members.at(0) { 0 } else {
-            self.members.next_key(0).unwrap_or(limit()) as u64
+        match self.stretches.min() {
+            Some(first) => first.key as u64,
+            None => limit() as u64
         }
     }
 
-    /// The stretches of members in order, each from `start` up to `end`.
+    /// The stretches of members in order.
     pub fn spans(self: Self) -> List<Span> {
-        self.members.spans(limit()).filter(|span| span.value)
+        spans_of(self.stretches.to_list())
     }
 
-    // The set operations walk the set with fewer changes and fill the other,
-    // so a small set against a large one costs the small one times a
-    // logarithm.
+    // Union and intersection walk the set with fewer stretches, so a small
+    // set against a large one costs the small one times a logarithm.
 
     pub fn union(self: Self, other: Self) -> Self {
-        if self.members.len() < other.members.len() { other.union(self) } else {
-            CharSet { members: fill_spans(self.members, other.members.spans(limit()), true, true) }
+        if self.stretches.len() < other.stretches.len() { other.union(self) } else {
+            CharSet { stretches: add_all(self.stretches, other.stretches.to_list()) }
         }
     }
 
     pub fn intersect(self: Self, other: Self) -> Self {
-        if self.members.len() < other.members.len() { other.intersect(self) } else {
-            CharSet { members: fill_spans(self.members, other.members.spans(limit()), false, false) }
+        if self.stretches.len() < other.stretches.len() { other.intersect(self) } else {
+            CharSet { stretches: common(WavlMap::new(), self.stretches, other.stretches.to_list()) }
         }
     }
 
     /// The members of `self` that are not in `other`.
     pub fn subtract(self: Self, other: Self) -> Self {
-        CharSet { members: fill_spans(self.members, other.members.spans(limit()), true, false) }
+        CharSet { stretches: cut_all(self.stretches, other.stretches.to_list()) }
     }
 
     /// The characters that are not in `self`.
@@ -102,7 +207,7 @@ impl CharSet {
 
 impl PartialEq for CharSet {
     fn eq(self: Self, other: Self) -> bool {
-        self.members == other.members
+        self.stretches == other.stretches
     }
 }
 
