@@ -5,7 +5,6 @@
 //! at most four vectors is compared sixteen bytes at a time; `encoding`
 //! lists the forms.
 
-import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
 import std::option::Option;
 import std::regex::alphabet::bits::Bits;
@@ -19,17 +18,18 @@ pub struct [value] Four {
     d: u8
 }
 
-// Sixteen times `byte` after `vectors`.
-fn vector_of(vectors: Vec<u8>, byte: u8) -> Vec<u8> {
-    let (_, grown) = while [lane = (0 as u64), vectors = vectors] (lane < 16) {
-        (lane + 1, vectors.push(byte))
-    };
-    grown
+/// The four bytes in one word, the first in its lowest byte.
+pub fn packed(bytes: Four) -> u32 {
+    let low = (bytes.a as u32) | ((bytes.b as u32) << 8);
+    let high = ((bytes.c as u32) << 16) | ((bytes.d as u32) << 24);
+    low | high
 }
 
-/// The four vectors of a run after `vectors`.
-pub fn four(vectors: Vec<u8>, bytes: Four) -> Vec<u8> {
-    vector_of(vector_of(vector_of(vector_of(vectors, bytes.a), bytes.b), bytes.c), bytes.d)
+/// The byte at `lane`, 0 to 63, of the four vectors of sixteen bytes that
+/// repeat the bytes of `word`.
+pub fn lane(word: u32, lane: u64) -> u8 {
+    let byte = (lane / 16) as u32;
+    ((word >> (byte * 8)) & 255) as u8
 }
 
 /// Four bytes for a run that compares with no vectors.
