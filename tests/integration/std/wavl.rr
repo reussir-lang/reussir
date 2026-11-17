@@ -2,9 +2,11 @@
 // set (`WavlSet`) and map (`WavlMap`).
 // Unit cases cover basic operations, ascending/descending iteration,
 // persistence, ordered neighbour/window queries, set/map algebra,
-// higher-order transforms, pseudorandom churn, and logarithmic rank balance.
+// higher-order transforms, pseudorandom churn, logarithmic rank balance, and
+// the map's walker.
 // Fuzz targets exercise arbitrary operation streams, neighbour/range queries,
-// algebra, and transforms against sorted-list reference models.
+// algebra, and transforms against sorted-list reference models, and a walker
+// against the map operations.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin wavl %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}wavl
@@ -24,10 +26,12 @@
 // CHECK-NEXT: wavl/map algebra: unit
 // CHECK-NEXT: wavl/map transforms: unit
 // CHECK-NEXT: wavl/balance: unit
+// CHECK-NEXT: wavl/map walker: unit
 // CHECK-NEXT: wavl/set insert/remove/pop/take model & rank balance (fuzz):
 // CHECK-NEXT: wavl/set algebra, neighbours, range & transforms (fuzz):
 // CHECK-NEXT: wavl/map operations, model & rank balance (fuzz):
 // CHECK-NEXT: wavl/map algebra, neighbours, range & transforms (fuzz):
+// CHECK-NEXT: wavl/map walker against map operations (fuzz):
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
@@ -35,6 +39,7 @@ import std::collections::pure::wavlmap::Entry;
 import std::collections::pure::wavlmap::InsertResult;
 import std::collections::pure::wavlmap::PopResult as MapPop;
 import std::collections::pure::wavlmap::RemoveResult;
+import std::collections::pure::wavlmap::Walker;
 import std::collections::pure::wavlmap::WavlMap;
 import std::collections::pure::wavlset::PopResult as SetPop;
 import std::collections::pure::wavlset::TakeResult;
@@ -756,6 +761,96 @@ fn build_map_from_vecs(
     }
 }
 
+fn same_entry(a : Option<Entry<i64, i64>>, b : Option<Entry<i64, i64>>) -> bool {
+    match a {
+        Option::Some(e) => entry_is(b, e.key, e.value),
+        Option::None => b.is_none()
+    }
+}
+
+// Whether a walker at `key` reads what the map holds at and around `key`.
+fn walker_reads(
+    walker : Walker<i64, i64>,
+    map : WavlMap<i64, i64>,
+    key : i64
+) -> bool {
+    same_entry(walker.entry(), map.get_entry(key))
+        && same_entry(walker.before(), map.predecessor_entry(key))
+        && same_entry(walker.after(), map.successor_entry(key))
+}
+
+fn walk_forward(walker : Walker<i64, i64>, acc : List<Entry<i64, i64>>) -> List<Entry<i64, i64>> {
+    match walker.entry() {
+        Option::Some(e) => walk_forward(walker.next(), List::Cons { e, acc }),
+        Option::None => acc
+    }
+}
+
+fn walk_backward(walker : Walker<i64, i64>, acc : List<Entry<i64, i64>>) -> List<Entry<i64, i64>> {
+    match walker.entry() {
+        Option::Some(e) => walk_backward(walker.prev(), List::Cons { e, acc }),
+        Option::None => acc
+    }
+}
+
+// Each operation holds a code below 4 and a key: `op = key * 4 + code`. The
+// walker is moved, and what it reads is compared with `map`; `at` is the key
+// of the walker's position.
+fn apply_walker_ops(
+    ops : Vec<i64>,
+    idx : u64,
+    walker : Walker<i64, i64>,
+    map : WavlMap<i64, i64>,
+    at : i64
+) -> bool {
+    if idx >= ops.len() {
+        let closed = walker.finish();
+        closed == map
+            && closed.len() == map.len()
+            && balanced(closed.depth(), closed.len())
+            && entry_list_equal(closed.to_list(), map.to_list())
+    } else {
+        let op = ops.get(idx).unwrap_or(0);
+        let key = op / 4;
+        match op % 4 {
+            0 => {
+                let moved = walker.seek(key);
+                walker_reads(moved, map, key)
+                    && apply_walker_ops(ops, idx + 1, moved, map, key)
+            },
+            1 => {
+                let moved = walker.next();
+                match map.successor_entry(at) {
+                    Option::Some(e) => walker_reads(moved, map, e.key)
+                        && apply_walker_ops(ops, idx + 1, moved, map, e.key),
+                    // Past the last entry; go back to a key.
+                    Option::None => moved.entry().is_none()
+                        && moved.after().is_none()
+                        && same_entry(moved.before(), map.max())
+                        && apply_walker_ops(ops, idx + 1, moved.seek(at), map, at)
+                }
+            },
+            2 => {
+                let moved = walker.prev();
+                match map.predecessor_entry(at) {
+                    Option::Some(e) => walker_reads(moved, map, e.key)
+                        && apply_walker_ops(ops, idx + 1, moved, map, e.key),
+                    // Before the first entry; go back to a key.
+                    Option::None => moved.entry().is_none()
+                        && moved.before().is_none()
+                        && same_entry(moved.after(), map.min())
+                        && apply_walker_ops(ops, idx + 1, moved.seek(at), map, at)
+                }
+            },
+            _ => {
+                let moved = walker.finish().walk().seek(key);
+                walker_reads(moved, map, key)
+                    && apply_walker_ops(ops, idx + 1, moved, map, key)
+            }
+        }
+    }
+}
+
 fn suite() -> TestTree {
     TestTree::group("wavl")
         .with_case("set basics", || {
@@ -1088,6 +1183,45 @@ fn suite() -> TestTree {
                 "balance failed"
             )
         })
+        .with_case("map walker", || {
+            let m = odd_map(8, WavlMap::new());
+            let on = m.walk().seek(7);
+            let between = m.walk().seek(8);
+            let first = m.walk().first();
+            let last = m.walk().last();
+            let empty : WavlMap<i64, i64> = WavlMap::new();
+            expect(
+                entry_is(on.entry(), 7, 70)
+                    && entry_is(on.before(), 5, 50)
+                    && entry_is(on.after(), 9, 90)
+                    && between.entry().is_none()
+                    && entry_is(between.before(), 7, 70)
+                    && entry_is(between.after(), 9, 90)
+                    && entry_is(on.next().entry(), 9, 90)
+                    && entry_is(on.prev().entry(), 5, 50)
+                    && entry_is(between.next().entry(), 9, 90)
+                    && entry_is(between.prev().entry(), 7, 70)
+                    && entry_is(first.entry(), 1, 10)
+                    && first.before().is_none()
+                    && first.prev().entry().is_none()
+                    && entry_is(first.prev().after(), 1, 10)
+                    && entry_is(last.entry(), 15, 150)
+                    && last.after().is_none()
+                    && last.next().entry().is_none()
+                    && entry_is(last.next().before(), 15, 150)
+                    && entry_is(last.next().prev().entry(), 15, 150)
+                    && entry_list_equal(walk_forward(first, List::Nil), m.to_list_desc())
+                    && entry_list_equal(walk_backward(last, List::Nil), m.to_list())
+                    && on.finish() == m
+                    && between.finish() == m
+                    // The map itself is unchanged by walkers opened on it.
+                    && m.len() == 8 && entry_is(m.get_entry(7), 7, 70)
+                    && empty.walk().entry().is_none()
+                    && empty.walk().next().before().is_none()
+                    && empty.walk().first().finish().is_empty(),
+                "map walker failed"
+            )
+        })
         .with_fuzz(
             "set insert/remove/pop/take model & rank balance (fuzz)",
             i64_domain().in_range(-200, 200).vec().max_len(48),
@@ -1261,6 +1395,22 @@ fn suite() -> TestTree {
                         && fmap.len() == m1.count_if(|k, ignored| k % 2 == 0)
                         && fl_ok && ce_ok && pred_ok && succ_ok && find_ok,
                     "WavlMap algebra/range/neighbour/transform invariant failed"
+                )
+            }
+        )
+        .with_fuzz(
+            "map walker against map operations (fuzz)",
+            tuple3(
+                i64_domain().in_range(0, 39).vec().max_len(24),
+                i64_domain().in_range(-50, 200).vec().max_len(24),
+                i64_domain().in_range(0, 159).vec().max_len(48)
+            ),
+            |input : (Vec<i64>, Vec<i64>, Vec<i64>)| {
+                let (keys, vals, ops) = input;
+                let map = build_map_from_vecs(keys, vals, 0, WavlMap::new());
+                expect(
+                    apply_walker_ops(ops, 0, map.walk().seek(0), map, 0),
+                    "Walker diverged from the WavlMap operations or violated rank balance"
                 )
             }
         )
