@@ -224,18 +224,19 @@ fn rebuild<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
 // Raise a parent while it has rank difference 0 beside a difference-1
 // sibling; otherwise use one or two rotations and stop. A rotation restores
 // the parent's old rank, so the remaining ancestors only need rebuilding.
-// A subtree and the path from it to the root.
+// A subtree and the path from it to the root. A repair returns the place
+// where it stopped; the ancestors on the path need no repair.
 struct [value] Spot<K, V> { path : Path<K, V>, tree : Tree<K, V> }
 
-// Repair the tree after the child in the next path item grows to rank `tr`.
-// Raise a parent while it has rank difference 0 beside a difference-1
-// sibling; otherwise use one or two rotations and stop. A rotation restores
-// the parent's old rank, so the remaining ancestors only need rebuilding.
-fn fixup_ins<K, V>(z : Path<K, V>, t : Tree<K, V>, tr : i64) -> Tree<K, V> {
+fn close<K, V>(s : Spot<K, V>) -> Tree<K, V> {
+    rebuild(s.path, s.tree)
+}
+
+fn fixup_ins<K, V>(z : Path<K, V>, t : Tree<K, V>, tr : i64) -> Spot<K, V> {
     match z {
         Path::ToL(r, z1, k, v, rt) =>
             if r - tr >= 1 {
-                rebuild(z1, Tree::Node { r, t, k, v, rt })
+                Spot { path: z1, tree: Tree::Node { r, t, k, v, rt } }
             } else {
                 if r - rank(rt) == 1 {
                     fixup_ins(z1, Tree::Node { r + 1, t, k, v, rt }, r + 1)
@@ -243,23 +244,23 @@ fn fixup_ins<K, V>(z : Path<K, V>, t : Tree<K, V>, tr : i64) -> Tree<K, V> {
                     match t {
                         Tree::Node(lrank, ll, lk, lv, lrt) =>
                             if lrank - rank(lrt) == 2 {
-                                rebuild(z1, Tree::Node {
+                                Spot { path: z1, tree: Tree::Node {
                                     lrank,
                                     ll,
                                     lk,
                                     lv,
                                     Tree::Node { r - 1, lrt, k, v, rt }
-                                })
+                                } }
                             } else {
                                 match lrt {
                                     Tree::Node(_, lrl, lrk, lrv, lrr) =>
-                                        rebuild(z1, Tree::Node {
+                                        Spot { path: z1, tree: Tree::Node {
                                             r,
                                             Tree::Node { r - 1, ll, lk, lv, lrl },
                                             lrk,
                                             lrv,
                                             Tree::Node { r - 1, lrr, k, v, rt }
-                                        }),
+                                        } },
                                     Tree::Leaf => core::intrinsic::panic::panic()
                                 }
                             },
@@ -269,7 +270,7 @@ fn fixup_ins<K, V>(z : Path<K, V>, t : Tree<K, V>, tr : i64) -> Tree<K, V> {
             },
         Path::ToR(r, l, k, v, z1) =>
             if r - tr >= 1 {
-                rebuild(z1, Tree::Node { r, l, k, v, t })
+                Spot { path: z1, tree: Tree::Node { r, l, k, v, t } }
             } else {
                 if r - rank(l) == 1 {
                     fixup_ins(z1, Tree::Node { r + 1, l, k, v, t }, r + 1)
@@ -277,23 +278,23 @@ fn fixup_ins<K, V>(z : Path<K, V>, t : Tree<K, V>, tr : i64) -> Tree<K, V> {
                     match t {
                         Tree::Node(rrank, rl, rk, rv, rr) =>
                             if rrank - rank(rl) == 2 {
-                                rebuild(z1, Tree::Node {
+                                Spot { path: z1, tree: Tree::Node {
                                     rrank,
                                     Tree::Node { r - 1, l, k, v, rl },
                                     rk,
                                     rv,
                                     rr
-                                })
+                                } }
                             } else {
                                 match rl {
                                     Tree::Node(_, rll, rlk, rlv, rlr) =>
-                                        rebuild(z1, Tree::Node {
+                                        Spot { path: z1, tree: Tree::Node {
                                             r,
                                             Tree::Node { r - 1, l, k, v, rll },
                                             rlk,
                                             rlv,
                                             Tree::Node { r - 1, rlr, rk, rv, rr }
-                                        }),
+                                        } },
                                     Tree::Leaf => core::intrinsic::panic::panic()
                                 }
                             },
@@ -301,7 +302,7 @@ fn fixup_ins<K, V>(z : Path<K, V>, t : Tree<K, V>, tr : i64) -> Tree<K, V> {
                     }
                 }
             },
-        Path::Top => t
+        Path::Top => Spot { path: Path::Top, tree: t }
     }
 }
 
@@ -318,7 +319,7 @@ fn ins_at<K : Ord, V>(
 ) -> Changed<K, V> {
     match t {
         Tree::Leaf => Changed {
-            tree: fixup_ins(z, Tree::Node { 0, Tree::Leaf, x, xv, Tree::Leaf }, 0),
+            tree: close(fixup_ins(z, Tree::Node { 0, Tree::Leaf, x, xv, Tree::Leaf }, 0)),
             changed: true
         },
         Tree::Node(r, l, k, v, rt) => match x.cmp(k) {
@@ -340,7 +341,7 @@ fn ins<K : Ord, V>(t : Tree<K, V>, x : K, xv : V) -> Changed<K, V> {
 // or two ranks while a difference of 3 continues toward the root; otherwise
 // rotate and stop. A rotation restores the parent's rank, so the remaining
 // ancestors only need rebuilding.
-fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
+fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Spot<K, V> {
     match z {
         Path::ToL(r, z1, k, v, rt) => {
             let tl = rank(t);
@@ -348,7 +349,7 @@ fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
                 if r == 1 && tl == 0 - 1 && rank(rt) == 0 - 1 {
                     fixup_del(z1, Tree::Node { 0, t, k, v, rt })
                 } else {
-                    rebuild(z1, Tree::Node { r, t, k, v, rt })
+                    Spot { path: z1, tree: Tree::Node { r, t, k, v, rt } }
                 }
             } else {
                 match rt {
@@ -379,23 +380,23 @@ fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
                                     } else {
                                         r - 1
                                     };
-                                    rebuild(z1, Tree::Node {
+                                    Spot { path: z1, tree: Tree::Node {
                                         r,
                                         Tree::Node { xrank, t, k, v, yl },
                                         yk,
                                         yv,
                                         yr
-                                    })
+                                    } }
                                 } else {
                                     match yl {
                                         Tree::Node(_, zl, zk, zv, zr) =>
-                                            rebuild(z1, Tree::Node {
+                                            Spot { path: z1, tree: Tree::Node {
                                                 r,
                                                 Tree::Node { r - 2, t, k, v, zl },
                                                 zk,
                                                 zv,
                                                 Tree::Node { r - 2, zr, yk, yv, yr }
-                                            }),
+                                            } },
                                         Tree::Leaf => core::intrinsic::panic::panic()
                                     }
                                 }
@@ -411,7 +412,7 @@ fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
                 if r == 1 && tr == 0 - 1 && rank(l) == 0 - 1 {
                     fixup_del(z1, Tree::Node { 0, l, k, v, t })
                 } else {
-                    rebuild(z1, Tree::Node { r, l, k, v, t })
+                    Spot { path: z1, tree: Tree::Node { r, l, k, v, t } }
                 }
             } else {
                 match l {
@@ -442,23 +443,23 @@ fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
                                     } else {
                                         r - 1
                                     };
-                                    rebuild(z1, Tree::Node {
+                                    Spot { path: z1, tree: Tree::Node {
                                         r,
                                         yl,
                                         yk,
                                         yv,
                                         Tree::Node { xrank, yr, k, v, t }
-                                    })
+                                    } }
                                 } else {
                                     match yr {
                                         Tree::Node(_, zl, zk, zv, zr) =>
-                                            rebuild(z1, Tree::Node {
+                                            Spot { path: z1, tree: Tree::Node {
                                                 r,
                                                 Tree::Node { r - 2, yl, yk, yv, zl },
                                                 zk,
                                                 zv,
                                                 Tree::Node { r - 2, zr, k, v, t }
-                                            }),
+                                            } },
                                         Tree::Leaf => core::intrinsic::panic::panic()
                                     }
                                 }
@@ -468,7 +469,7 @@ fn fixup_del<K, V>(z : Path<K, V>, t : Tree<K, V>) -> Tree<K, V> {
                 }
             }
         },
-        Path::Top => t
+        Path::Top => Spot { path: Path::Top, tree: t }
     }
 }
 
@@ -482,10 +483,10 @@ fn splice_succ<K, V>(
     z : Path<K, V>,
     t : Tree<K, V>,
     rz : Path<K, V>
-) -> Tree<K, V> {
+) -> Spot<K, V> {
     match t {
         Tree::Node(_, Tree::Leaf, mk, mv, mrt) =>
-            fixup_del(Path::ToR { r0, l0, mk, mv, z }, fixup_del(rz, mrt)),
+            fixup_del(Path::ToR { r0, l0, mk, mv, z }, close(fixup_del(rz, mrt))),
         Tree::Node(rm, ml, mk, mv, mrt) =>
             splice_succ(r0, l0, z, ml, Path::ToL { rm, rz, mk, mv, mrt }),
         Tree::Leaf => core::intrinsic::panic::panic()
@@ -497,7 +498,7 @@ fn remove_at<K, V>(
     l : Tree<K, V>,
     rt : Tree<K, V>,
     z : Path<K, V>
-) -> Tree<K, V> {
+) -> Spot<K, V> {
     match l {
         Tree::Leaf => fixup_del(z, rt),
         ll => match rt {
@@ -514,7 +515,7 @@ fn del_at<K : Ord, V>(t : Tree<K, V>, x : K, z : Path<K, V>) -> Changed<K, V> {
             Ordering::Less => del_at(l, x, Path::ToL { r, z, k, v, rt }),
             Ordering::Greater => del_at(rt, x, Path::ToR { r, l, k, v, z }),
             Ordering::Equal =>
-                Changed { tree: remove_at(r, l, rt, z), changed: true }
+                Changed { tree: close(remove_at(r, l, rt, z)), changed: true }
         }
     }
 }
@@ -528,7 +529,7 @@ struct [value] DelMin<K, V> { key : K, value : V, tree : Tree<K, V> }
 fn del_min_at<K, V>(t : Tree<K, V>, z : Path<K, V>) -> DelMin<K, V> {
     match t {
         Tree::Node(_, Tree::Leaf, k, v, rt) =>
-            DelMin { key: k, value: v, tree: fixup_del(z, rt) },
+            DelMin { key: k, value: v, tree: close(fixup_del(z, rt)) },
         Tree::Node(r, l, k, v, rt) =>
             del_min_at(l, Path::ToL { r, z, k, v, rt }),
         Tree::Leaf => core::intrinsic::panic::panic()
@@ -544,7 +545,7 @@ fn del_min<K, V>(t : Tree<K, V>) -> DelMin<K, V> {
 fn del_max_at<K, V>(t : Tree<K, V>, z : Path<K, V>) -> DelMin<K, V> {
     match t {
         Tree::Node(_, l, k, v, Tree::Leaf) =>
-            DelMin { key: k, value: v, tree: fixup_del(z, l) },
+            DelMin { key: k, value: v, tree: close(fixup_del(z, l)) },
         Tree::Node(r, l, k, v, rt) =>
             del_max_at(rt, Path::ToR { r, l, k, v, z }),
         Tree::Leaf => core::intrinsic::panic::panic()
