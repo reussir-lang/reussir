@@ -36,7 +36,12 @@ impl Automaton {
     /// have is read as the dead state.
     pub fn next(self: Self, state: State, byte: u8) -> State {
         let at = (encoding::row(state.number) as u64) + (array::get(self.classes, byte as i64) as u64);
-        State { number: if at < array::dim(self.next, 0) { array::get(self.next, at as i64) } else { 0 } }
+        let number = if at < array::dim(self.next, 0) {
+            array::get(self.next, at as i64)
+        } else {
+            0
+        };
+        State { number }
     }
 
     /// The earliest rule that accepts in `state`.
@@ -58,12 +63,20 @@ impl Automaton {
                 8 => Run::Table { encoding::first(word) / 256, encoding::bits(word) as u8 },
                 9 => {
                     let matched = stretches(self.shuffled(encoding::first(word), encoding::bits(word)));
-                    if encoding::stays_inside(word) { Run::Inside { matched } } else { Run::Outside { matched } }
+                    if encoding::stays_inside(word) {
+                        Run::Inside { matched }
+                    } else {
+                        Run::Outside { matched }
+                    }
                 },
                 // 0 to 7: vectors.
                 _ => {
                     let matched = stretches(self.matched(encoding::form(word), place * 64));
-                    if encoding::stays_inside(word) { Run::Inside { matched } } else { Run::Outside { matched } }
+                    if encoding::stays_inside(word) {
+                        Run::Inside { matched }
+                    } else {
+                        Run::Outside { matched }
+                    }
                 }
             }
         } else { Run::Nothing }
@@ -93,7 +106,12 @@ impl Automaton {
         let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
             let low = array::get(self.nibbles, (first + (byte & 15)) as i64) as u64;
             let high = array::get(self.nibbles, (first + 16 + (byte >> 4)) as i64) as u64;
-            (byte + 1, if (low & high & mask) != 0 { bytes.insert(byte) } else { bytes })
+            let bytes = if (low & high & mask) != 0 {
+                bytes.insert(byte)
+            } else {
+                bytes
+            };
+            (byte + 1, bytes)
         };
         bytes
     }

@@ -40,7 +40,11 @@ fn staying(inside: bool) -> Simd<[u8; 16]> {
 fn advance(hit: Simd<[bool; 16]>, stays: Simd<[u8; 16]>, at: u64) -> (u64, bool) {
     let matched = simd::select(hit, simd::splat<Simd<[u8; 16]>>(255), simd::splat<Simd<[u8; 16]>>(0));
     let leaving: Simd<[bool; 16]> = simd::ne(matched, stays);
-    if simd::any(leaving) { (at + simd::first_set(leaving), false) } else { (at + 16, true) }
+    if simd::any(leaving) {
+        (at + simd::first_set(leaving), false)
+    } else {
+        (at + 16, true)
+    }
 }
 
 // The bytes of `chunk` in the stretch that begins with `first` and has
@@ -182,7 +186,11 @@ fn marks(lookup: [u8; ?], first: u64, bytes: ConstPtr<Generic>, at: u64) -> u8 {
 // byte.
 pub fn marked(lookup: [u8; ?], first: u64, bit: u8, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
     let (near, _) = while [at = at, going = true] (going && at + 8 <= length) {
-        if (marks(lookup, first, bytes, at) & bit) == 0 { (at + 8, true) } else { (at, false) }
+        if (marks(lookup, first, bytes, at) & bit) == 0 {
+            (at + 8, true)
+        } else {
+            (at, false)
+        }
     };
     while [at = near] (at < length && (mark_at(lookup, first, bytes, at) & bit) == 0) {
         at + 1
