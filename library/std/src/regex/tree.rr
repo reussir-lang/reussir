@@ -208,60 +208,76 @@ fn either(one: ByteRegex, others: ByteRegex) -> ByteRegex {
     }
 }
 
-// The ranges of a sequence, first byte first.
-fn ranges(sequence: Utf8Sequence) -> List<Utf8Range> {
+// The range of `sequence` at `place`, which is below its length.
+fn range_at(sequence: Utf8Sequence, place: u64) -> Utf8Range {
     match sequence {
-        One(a) => List::Cons { a, List::Nil },
-        Two(a, b) => List::Cons { a, List::Cons { b, List::Nil } },
-        Three(a, b, c) => List::Cons { a, List::Cons { b, List::Cons { c, List::Nil } } },
-        Four(a, b, c, d) => List::Cons { a, List::Cons { b, List::Cons { c, List::Cons { d, List::Nil } } } }
-    }
-}
-
-// The sequences at the front of `sequences` that begin with `head`, without
-// it, and the sequences after them.
-fn beginning(
-    sequences: List<List<Utf8Range>>,
-    head: Utf8Range
-) -> (List<List<Utf8Range>>, List<List<Utf8Range>>) {
-    match sequences {
-        Nil => (List::Nil, List::Nil),
-        Cons(first, rest) => match first {
-            Cons(range, tail) if range == head => {
-                let (same, others) = beginning(rest, head);
-                (List::Cons { tail, same }, others)
-            },
-            // A sequence that begins with another range, or has ended.
-            _ => (List::Nil, sequences)
+        One(a) => a,
+        Two(a, b) => match place {
+            0 => a,
+            // Place 1.
+            _ => b
+        },
+        Three(a, b, c) => match place {
+            0 => a,
+            1 => b,
+            // Place 2.
+            _ => c
+        },
+        Four(a, b, c, d) => match place {
+            0 => a,
+            1 => b,
+            2 => c,
+            // Place 3.
+            _ => d
         }
     }
 }
 
-// The strings of `sequences`, which come in the order of the bytes.
-// Sequences with one first range share it: `CE B1` and `CE B3` become
-// `CE (B1 | B3)`, so no byte is tried twice.
-fn strings(sequences: List<List<Utf8Range>>) -> ByteRegex {
+// How many of the first `most` sequences, from the front on, have `range`
+// at `place`.
+fn sharing(sequences: List<Utf8Sequence>, range: Utf8Range, place: u64, most: u64) -> u64 {
     match sequences {
-        Nil => ByteRegex::Empty,
-        Cons(first, rest) => match first {
-            Nil => either(ByteRegex::Epsilon, strings(rest)),
-            Cons(head, tail) => {
-                let (same, others) = beginning(rest, head);
-                let set = ByteRegex::Set { Bits::range(head.start as u64, head.end as u64) };
-                either(follow(set, strings(List::Cons { tail, same })), strings(others))
-            }
-        }
+        Cons(first, rest) if most > 0 && first.len() > place && range_at(first, place) == range =>
+            1 + sharing(rest, range, place, most - 1),
+        // No sequence is left, or the next has ended or has another range.
+        _ => 0
+    }
+}
+
+// The strings of the first `count` sequences from their range at `place`
+// on, and the sequences after them. The sequences come in the order of the
+// bytes and these agree before `place`. Sequences with one range at `place`
+// share it: `CE B1` and `CE B3` become `CE (B1 | B3)`, so no byte is tried
+// twice.
+fn strings(sequences: List<Utf8Sequence>, count: u64, place: u64) -> (ByteRegex, List<Utf8Sequence>) {
+    match sequences {
+        Cons(first, rest) if count > 0 && first.len() == place => {
+            let (others, after) = strings(rest, count - 1, place);
+            (either(ByteRegex::Epsilon, others), after)
+        },
+        Cons(first, _) if count > 0 => {
+            let head = range_at(first, place);
+            let same = sharing(sequences, head, place, count);
+            let (tails, rest) = strings(sequences, same, place + 1);
+            let (others, after) = strings(rest, count - same, place);
+            let set = ByteRegex::Set { Bits::range(head.start as u64, head.end as u64) };
+            (either(follow(set, tails), others), after)
+        },
+        // None of the `count` is left.
+        _ => (ByteRegex::Empty, sequences)
     }
 }
 
 // The UTF-8 encodings of the members of `set`.
 fn encodings(set: CharSet) -> ByteRegex {
-    let sequences = fold_sequences(
+    let found = fold_sequences(
         set,
         List::Nil,
-        |found: List<List<Utf8Range>>, sequence: Utf8Sequence| List::Cons { ranges(sequence), found }
+        |found: List<Utf8Sequence>, sequence: Utf8Sequence| List::Cons { sequence, found }
     );
-    strings(sequences.reverse())
+    let sequences = found.reverse();
+    let (regex, _) = strings(sequences, sequences.len(), 0);
+    regex
 }
 
 // The regex over bytes, and whether every set in it was a set of characters.
