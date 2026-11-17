@@ -29,21 +29,23 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
     let vectors = runs.vectors();
     let marks = runs.lookup();
     let pairs = runs.nibbles();
+    let first_classes = array::tabulate<[u64; ?]>(columns, |column: i64| firsts.get(column as u64).unwrap_or(0));
     let class_cells = array::tabulate<[u8; 256]>(|byte: i64| of_class.get(sets.class_index(byte as u8)).unwrap_or(0) as u8);
     // A row is longer than its columns when their number is no power of
     // two; no byte reads the cells past them.
     let next_cells = array::tabulate<[u32; ?]>(count << shift, |at: i64| {
-        let to = match firsts.get((at as u64) & ((1 << shift) - 1)) {
-            Some(class) => array::get(table, (((at as u64) >> shift) * classes + class) as i64),
-            None => 0
-        };
+        let row = (at as u64) >> shift;
+        let column = (at as u64) & ((1 << shift) - 1);
+        let to = if column < columns {
+            let class = array::get(first_classes, column as i64);
+            array::get(table, (row * classes + class) as i64)
+        } else { 0 };
         encoding::cell(to, shift as u32, array::get(kinds, to as i64))
     });
     let first_cells = array::tabulate<[u32; 256]>(|byte: i64| {
-        let to = match firsts.get(of_class.get(sets.class_index(byte as u8)).unwrap_or(0) as u64) {
-            Some(class) => array::get(table, (start * classes + class) as i64),
-            None => 0
-        };
+        let column = array::get(class_cells, byte) as i64;
+        let class = array::get(first_classes, column);
+        let to = array::get(table, (start * classes + class) as i64);
         encoding::cell(to, shift as u32, array::get(kinds, to as i64))
     });
     let winner_cells = array::tabulate<[u32; ?]>(array::get(starts, 5), |place: i64| array::get(rules, place));
