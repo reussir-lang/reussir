@@ -45,6 +45,14 @@ fn with_stretch(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u
     if start < end { stretches.insert(start, end) } else { stretches }
 }
 
+// `stretches` and the characters whose code points run from `start` up to
+// `end`: the part below the surrogates, and the part above them. Neither may
+// overlap or touch a stretch.
+fn with_characters(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
+    let below = with_stretch(stretches, start, lesser(end, 55296));
+    with_stretch(below, greater(start, 57344), lesser(end, limit()))
+}
+
 // `stretches` and the code points from `start` up to `end`, `start` below
 // `end`. O(log n) and the stretches joined.
 fn add(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
@@ -110,6 +118,17 @@ fn common(found: WavlMap<u32, u32>, stretches: WavlMap<u32, u32>, entries: Iter<
     }
 }
 
+// The gaps between the stretches read so far, and the end of the last.
+struct [value] Gaps {
+    found: WavlMap<u32, u32>,
+    from: u32
+}
+
+// `gaps` and the gap before the stretch from `start` up to `end`.
+fn gap(gaps: Gaps, start: u32, end: u32) -> Gaps {
+    Gaps { found: with_characters(gaps.found, gaps.from, start), from: end }
+}
+
 // Whether two iterators of the same length yield the same stretches.
 fn same(first: Iter<u32, u32>, second: Iter<u32, u32>) -> bool {
     match first.next() {
@@ -136,9 +155,7 @@ impl CharSet {
     /// The characters whose code points run from `start` up to `end`, `end`
     /// not included.
     pub fn code_points(start: u32, end: u32) -> Self {
-        // The part below the surrogates, and the part above them.
-        let below = with_stretch(WavlMap::new(), start, lesser(end, 55296));
-        CharSet { stretches: with_stretch(below, greater(start, 57344), lesser(end, limit())) }
+        CharSet { stretches: with_characters(WavlMap::new(), start, end) }
     }
 
     /// The characters from `lo` to `hi`, both included.
@@ -204,7 +221,9 @@ impl CharSet {
 
     /// The characters that are not in `self`.
     pub fn complement(self: Self) -> Self {
-        CharSet::full().subtract(self)
+        let none = Gaps { found: WavlMap::new(), from: 0 };
+        let gaps = self.stretches.fold_left(none, |gaps, start, end| gap(gaps, start, end));
+        CharSet { stretches: with_characters(gaps.found, gaps.from, limit()) }
     }
 }
 
