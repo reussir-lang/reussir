@@ -3,7 +3,8 @@
 // classes that a group of sets cannot tell apart.
 // Unit cases cover `Bits` across its words, `CharSet` beyond ASCII and under
 // complement, and the classes of a small lexer.
-// Fuzz targets compare both sets with a model that tests every range, and
+// Fuzz targets compare both sets with a model that tests every range, check
+// that the stretches of a set of characters are in order and apart, and
 // check that classes are disjoint, cover every byte, and make up each set
 // they were refined with.
 
@@ -26,6 +27,7 @@ import std::option::Option;
 import std::regex::alphabet::bits::Bits;
 import std::regex::alphabet::byte_classes::ByteClasses;
 import std::regex::alphabet::char_set::CharSet;
+import std::regex::alphabet::char_set::Span;
 import test::domain::char_domain;
 import test::domain::tuple2;
 import test::domain::tuple3;
@@ -67,6 +69,15 @@ fn test_bits() -> Outcome {
         ))
 }
 
+// Whether the stretches start at `from` or later, are in order, each have a
+// member, and no two overlap or touch.
+fn apart(spans: List<Span>, from: u32) -> bool {
+    match spans {
+        Nil => true,
+        Cons(span, rest) => from <= span.start && span.start < span.end && apart(rest, span.end + 1)
+    }
+}
+
 fn test_char_set() -> Outcome {
     let lower = CharSet::range('a', 'z');
     let greek = CharSet::range('α', 'ω');
@@ -87,6 +98,18 @@ fn test_char_set() -> Outcome {
             "adjacent ranges join"
         ))
         .and_then(|| expect(!rest.contains('m') && rest.contains('猫') && rest.complement() == lower, "complement"))
+        .and_then(|| should_be(both.spans().len(), 2))
+        .and_then(|| expect(apart(both.spans(), 97) && apart(rest.spans(), 0), "stretches in order and apart"))
+        // A range over the end of one stretch, a gap and the start of the next.
+        .and_then(|| expect(
+            CharSet::range('a', 'f').union(CharSet::range('p', 'z')).union(CharSet::range('d', 'r')) == lower,
+            "a range that joins two stretches"
+        ))
+        .and_then(|| should_be(lower.subtract(CharSet::single('m')).spans().len(), 2))
+        .and_then(|| expect(
+            lower.subtract(CharSet::single('m')) == CharSet::range('a', 'l').union(CharSet::range('n', 'z')),
+            "a stretch cut in two"
+        ))
         .and_then(|| expect(CharSet::full().complement().is_empty(), "the complement of every character"))
         // The characters after U+D7FF start at U+E000: no set holds a surrogate.
         .and_then(|| should_be(CharSet::full().subtract(CharSet::range('\u{0}', '\u{d7ff}')).least(), 57344))
@@ -223,6 +246,11 @@ fn fuzz_char_set_model(input: (List<(char, char)>, List<(char, char)>, List<char
         .and_then(|| expect(a.complement().complement() == a, "complement twice"))
         .and_then(|| expect(a.intersect(a.complement()).is_empty(), "a set and its complement are disjoint"))
         .and_then(|| expect(a.union(a.complement()) == CharSet::full(), "a set and its complement are every character"))
+        .and_then(|| expect(
+            apart(a.spans(), 0) && apart(a.union(b).spans(), 0) && apart(a.intersect(b).spans(), 0)
+                && apart(a.subtract(b).spans(), 0) && apart(a.complement().spans(), 0),
+            "stretches out of order, without a member, or touching"
+        ))
 }
 
 // ---------------------------- Fuzz 4: Byte classes ----------------------------

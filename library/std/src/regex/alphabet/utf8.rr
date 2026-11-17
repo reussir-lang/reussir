@@ -12,7 +12,7 @@
 import std::collections::pure::list::List;
 import std::option::Option;
 import std::regex::alphabet::char_set::CharSet;
-import std::regex::alphabet::steps::Span;
+import std::regex::alphabet::char_set::Span;
 
 /// The bytes from `start` to `end`, both included.
 pub struct [value] Utf8Range {

@@ -19,7 +19,7 @@
 import std::collections::pure::list::List;
 import std::option::Option;
 import std::regex::alphabet::char_set::CharSet;
-import std::regex::alphabet::steps::Span;
+import std::regex::alphabet::char_set::Span;
 import std::regex::alphabet::utf8::Utf8Range;
 import std::regex::alphabet::utf8::Utf8Sequence;
 import std::regex::alphabet::utf8::fold_sequences;
