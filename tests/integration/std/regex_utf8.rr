@@ -121,6 +121,10 @@ fn test_every() -> Outcome {
         List::Cons { four(r(0xF1, 0xF3), tail, tail, tail),
         List::Cons { four(r(0xF4, 0xF4), r(0x80, 0x8F), tail, tail), List::Nil } } } } } } } } };
     expect(same(sequences(CharSet::full()), wanted), "the sequences of every character")
+        .and_then(|| expect(
+            same(std::regex::alphabet::utf8::sequences(CharSet::full()), wanted),
+            "the list of the sequences of every character"
+        ))
 }
 
 // --------------------- Fuzz: sequences and members ---------------------

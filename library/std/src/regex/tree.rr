@@ -17,7 +17,7 @@ import std::regex::alphabet::bits::Bits;
 import std::regex::alphabet::char_set::CharSet;
 import std::regex::alphabet::utf8::Utf8Range;
 import std::regex::alphabet::utf8::Utf8Sequence;
-import std::regex::alphabet::utf8::fold_sequences;
+import std::regex::alphabet::utf8::sequences;
 import std::text::Text;
 
 /// A regex whose leaves are sets of bytes and sets of characters.
@@ -270,12 +270,7 @@ fn strings(sequences: List<Utf8Sequence>, count: u64, place: u64) -> (ByteRegex,
 
 // The UTF-8 encodings of the members of `set`.
 fn encodings(set: CharSet) -> ByteRegex {
-    let found = fold_sequences(
-        set,
-        List::Nil,
-        |found: List<Utf8Sequence>, sequence: Utf8Sequence| List::Cons { sequence, found }
-    );
-    let sequences = found.reverse();
+    let sequences = sequences(set);
     let (regex, _) = strings(sequences, sequences.len(), 0);
     regex
 }
