@@ -1,0 +1,173 @@
+//! The automaton of a list of rules.
+//!
+//! A state is one node for each rule. From the state of the rules as
+//! written, the derivative by every class of bytes gives the states that
+//! follow, and theirs in turn, until no new state appears:
+//!
+//! ```text
+//! rules    [a-z]+    [0-9]+
+//!
+//! state    nodes                 accepts    letter    digit    other
+//! 1        [a-z]+ , [0-9]+                  2         3        dead
+//! 2        [a-z]* , nothing      rule 0     2         dead     dead
+//! 3        nothing , [0-9]*      rule 1     dead      3        dead
+//! ```
+//!
+//! A state from which no rule can come to accept is dead. All dead states
+//! are one state.
+//!
+//! The finished automaton is a few flat arrays.
+//! Classes of bytes that lead every state to the same state share a column.
+//! A row is as long as the number of columns rounded up to a power of two,
+//! and the number of a state is where its row begins, so a step is two
+//! reads and an addition:
+//!
+//! ```text
+//! classes[byte]             -> column        256 bytes
+//! next[state + column]      -> cell
+//! ```
+//!
+//! `Automaton::build` is these steps, one module each:
+//!
+//! - `explore`: the search for the states and their transitions.
+//! - `classify`: the kind of every state: dead, accepting, with a run.
+//! - `arrange`: the states numbered kind after kind.
+//! - `columns`: the classes of bytes that share a column.
+//! - `lookahead`: the runs, the bytes on which a state stays in itself,
+//!   and the way each is skipped: `vectors`, `shuffle` tables, or the
+//!   lookup table.
+//! - `pack`: the flat arrays.
+//!
+//! The other modules:
+//!
+//! - `encoding`: how a cell of the table and the word of a run are packed.
+//! - `scan`: matching.
+//! - `inspect`: an automaton one step at a time.
+//! - `native`: the loops that read the bytes of the input through a
+//!   pointer, sixteen or eight at a time.
+
+import std::collections::pure::list::List;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::automaton::arrange;
+import std::regex::automaton::classify;
+import std::regex::automaton::columns;
+import std::regex::automaton::explore;
+import std::regex::automaton::lookahead;
+import std::regex::automaton::pack;
+import std::regex::node::refine;
+import std::regex::tree::ByteRegex;
+import std::result::Result;
+
+mod arrange;
+mod classify;
+mod columns;
+mod encoding;
+mod explore;
+mod inspect;
+mod lookahead;
+mod native;
+mod pack;
+mod scan;
+mod shuffle;
+mod vectors;
+
+/// A state of an automaton.
+pub struct [value] State {
+    number: u32
+}
+
+impl PartialEq for State {
+    fn eq(self: Self, other: Self) -> bool {
+        self.number == other.number
+    }
+}
+
+impl Eq for State {}
+
+/// The rules need more states than the limit given to `build`.
+pub struct [value] TooManyStates {
+    pub limit: u64
+}
+
+/// The longest match of the rules from a place in the input.
+pub struct [value] Match {
+    /// The earliest rule that matches this far.
+    pub rule: u32,
+    /// The index of the first byte of the match.
+    pub start: u64,
+    /// The index of the byte after the match.
+    pub end: u64
+}
+
+/// What a match from a place finds.
+pub enum [value] Found {
+    Matched(Match),
+    /// No rule matches from there.
+    Nothing
+}
+
+/// A stretch of bytes, both ends included.
+pub struct [value] ByteRange {
+    pub start: u8,
+    pub end: u8
+}
+
+/// The bytes on which a state stays in itself.
+pub enum Run {
+    /// The state stays on no byte.
+    Nothing,
+    /// The state stays exactly on the bytes of these stretches, which are
+    /// in order. A match tests sixteen bytes at a time for them.
+    Inside(List<ByteRange>),
+    /// The state stays exactly on the bytes outside these stretches, which
+    /// are in order. A match tests sixteen bytes at a time for them.
+    Outside(List<ByteRange>),
+    /// The bytes that leave the state are marked in the lookup table with
+    /// this number, under this bit.
+    Table(u64, u8)
+}
+
+/// The automaton of a list of rules.
+pub struct Automaton {
+    // The column of every byte.
+    classes: [u8; 256],
+    // The number of distinct columns; a row has `1 << shift` cells, eight
+    // at least, which leaves three bits of a cell to the kind of its state.
+    columns: u64,
+    shift: u32,
+    // The cell after a state on a byte, at `state + column`.
+    next: [u32; ?],
+    // The cell after the start state on every byte.
+    first: [u32; 256],
+    // The earliest rule that accepts in each state that accepts.
+    winners: [u32; ?],
+    // The first state with a run.
+    runs: u32,
+    // One word for each state with a run; `encoding` has its parts.
+    run_words: [u64; ?],
+    // Four vectors of sixteen bytes for each state with a run.
+    vectors: [u8; ?],
+    // The lookup tables one after another, 256 bytes each.
+    lookup: [u8; ?],
+    // Pairs of shuffle tables one after another, sixteen bytes for the low
+    // half of a byte and sixteen for its high half. A byte is matched under
+    // a bit when both of its halves have the bit.
+    nibbles: [u8; ?],
+    start: u32
+}
+
+impl Automaton {
+    /// The automaton of `rules`. The search gives up when it has found more
+    /// than `limit` states.
+    pub fn build(rules: List<ByteRegex>, limit: u64) -> Result<Automaton, TooManyStates> {
+        let sets = rules.fold_left(ByteClasses::whole(), |classes: ByteClasses, rule: ByteRegex| refine(classes, rule));
+        match explore::explore(rules, sets, limit) {
+            Ok(found) => {
+                let arranged = arrange::arrange(found, classify::kinds(found));
+                let shared = columns::share(arranged.next, arranged.states, arranged.classes);
+                Result::Ok { pack::pack(arranged, shared, lookahead::runs(arranged, sets), sets) }
+            },
+            Err(error) => Result::Err { error }
+        }
+    }
+}

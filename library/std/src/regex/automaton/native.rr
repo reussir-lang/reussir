@@ -1,0 +1,190 @@
+//! The loops of a match that read the bytes of the input through a pointer.
+//!
+//! A run of an automaton is skipped here, sixteen bytes at a time against
+//! vectors or shuffle tables, or eight at a time through the lookup table.
+//! The automaton decides which and holds the tables; this module only
+//! reads.
+
+import core::intrinsic::array;
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import core::simd;
+
+pub fn byte_at(bytes: ConstPtr<Generic>, at: u64) -> u8 {
+    ptr::load(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds))
+}
+
+fn chunk_at(bytes: ConstPtr<Generic>, at: u64) -> Simd<[u8; 16]> {
+    ptr::load_extended<Simd<[u8; 16]>>(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), false, false, false, false, 1)
+}
+
+// Whether a set that is neither a few stretches nor all but a few is tested
+// with shuffle tables where it fits them, before the lookup table: where
+// the target shuffles sixteen bytes with one instruction. Without that
+// instruction the shuffle is slower than the lookup table.
+pub fn shuffles() -> bool {
+    simd::swizzle_lanes() >= 16
+}
+
+// A byte of ones in every lane when a state stays on the bytes that its
+// vectors match, and of zeros when it stays on the others.
+fn staying(inside: bool) -> Simd<[u8; 16]> {
+    simd::splat<Simd<[u8; 16]>>(if inside { 255 } else { 0 })
+}
+
+// Where the reading stands after the sixteen bytes at `at`, of which `hit`
+// are matched, and whether it goes on. With `hit` as a byte of ones or of
+// zeros in every lane, a byte leaves the state where that differs from
+// `stays`.
+fn advance(hit: Simd<[bool; 16]>, stays: Simd<[u8; 16]>, at: u64) -> (u64, bool) {
+    let matched = simd::select(hit, simd::splat<Simd<[u8; 16]>>(255), simd::splat<Simd<[u8; 16]>>(0));
+    let leaving: Simd<[bool; 16]> = simd::ne(matched, stays);
+    if simd::any(leaving) { (at + simd::first_set(leaving), false) } else { (at + 16, true) }
+}
+
+// The bytes of `chunk` in the stretch that begins with `first` and has
+// `span` more bytes.
+fn among(chunk: Simd<[u8; 16]>, first: Simd<[u8; 16]>, span: Simd<[u8; 16]>) -> Simd<[bool; 16]> {
+    simd::le(simd::sub(chunk, first), span)
+}
+
+// The loops below, one for each form, read on sixteen bytes at a time
+// while every byte is matched (`inside`) or none is, and leave fewer than
+// sixteen bytes at the end unread.
+
+pub fn equal(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let a = chunk_at(vectors, 0);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        advance(simd::eq(chunk_at(bytes, at), a), stays, at)
+    };
+    reached
+}
+
+pub fn equal_two(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let a = chunk_at(vectors, 0);
+    let b = chunk_at(vectors, 16);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        advance(simd::or(simd::eq(chunk, a), simd::eq(chunk, b)), stays, at)
+    };
+    reached
+}
+
+pub fn equal_three(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let a = chunk_at(vectors, 0);
+    let b = chunk_at(vectors, 16);
+    let c = chunk_at(vectors, 32);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        advance(simd::or(simd::or(simd::eq(chunk, a), simd::eq(chunk, b)), simd::eq(chunk, c)), stays, at)
+    };
+    reached
+}
+
+pub fn equal_four(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let a = chunk_at(vectors, 0);
+    let b = chunk_at(vectors, 16);
+    let c = chunk_at(vectors, 32);
+    let d = chunk_at(vectors, 48);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        advance(simd::or(simd::or(simd::eq(chunk, a), simd::eq(chunk, b)), simd::or(simd::eq(chunk, c), simd::eq(chunk, d))), stays, at)
+    };
+    reached
+}
+
+pub fn stretched(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let first = chunk_at(vectors, 0);
+    let span = chunk_at(vectors, 16);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        advance(among(chunk_at(bytes, at), first, span), stays, at)
+    };
+    reached
+}
+
+pub fn stretched_or_equal(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let first = chunk_at(vectors, 0);
+    let span = chunk_at(vectors, 16);
+    let c = chunk_at(vectors, 32);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        advance(simd::or(among(chunk, first, span), simd::eq(chunk, c)), stays, at)
+    };
+    reached
+}
+
+pub fn stretched_or_equal_two(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let first = chunk_at(vectors, 0);
+    let span = chunk_at(vectors, 16);
+    let c = chunk_at(vectors, 32);
+    let d = chunk_at(vectors, 48);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        advance(simd::or(among(chunk, first, span), simd::or(simd::eq(chunk, c), simd::eq(chunk, d))), stays, at)
+    };
+    reached
+}
+
+pub fn stretched_twice(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let first = chunk_at(vectors, 0);
+    let span = chunk_at(vectors, 16);
+    let other = chunk_at(vectors, 32);
+    let more = chunk_at(vectors, 48);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        advance(simd::or(among(chunk, first, span), among(chunk, other, more)), stays, at)
+    };
+    reached
+}
+
+// Form 9: a byte is matched when the two tables at `tables` share one of
+// the bits of `mask` at its low and at its high half.
+pub fn shuffled(tables: ConstPtr<Generic>, mask: u8, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let stays = staying(inside);
+    let low = chunk_at(tables, 0);
+    let high = chunk_at(tables, 16);
+    let half = simd::splat<Simd<[u8; 16]>>(15);
+    let four = simd::splat<Simd<[u8; 16]>>(4);
+    let wanted = simd::splat<Simd<[u8; 16]>>(mask);
+    let none = simd::splat<Simd<[u8; 16]>>(0);
+    let (reached, _) = while [at = at, going = true] (going && at + 16 <= length) {
+        let chunk = chunk_at(bytes, at);
+        let found = simd::and(simd::and(simd::swizzle(low, simd::and(chunk, half)), simd::swizzle(high, simd::shr(chunk, four))), wanted);
+        advance(simd::ne(found, none), stays, at)
+    };
+    reached
+}
+
+// The mark of the byte at `at` in the table that begins at `first`.
+fn mark_at(lookup: [u8; ?], first: u64, bytes: ConstPtr<Generic>, at: u64) -> u8 {
+    array::get(lookup, (first + (byte_at(bytes, at) as u64)) as i64)
+}
+
+// The marks of the bytes at `at` and at the seven places after it.
+fn marks(lookup: [u8; ?], first: u64, bytes: ConstPtr<Generic>, at: u64) -> u8 {
+    mark_at(lookup, first, bytes, at) | mark_at(lookup, first, bytes, at + 1)
+        | mark_at(lookup, first, bytes, at + 2) | mark_at(lookup, first, bytes, at + 3)
+        | mark_at(lookup, first, bytes, at + 4) | mark_at(lookup, first, bytes, at + 5)
+        | mark_at(lookup, first, bytes, at + 6) | mark_at(lookup, first, bytes, at + 7)
+}
+
+// Reads on while no byte is marked with `bit` in the table that begins at
+// `first`, eight bytes at a time while none of the eight is, then byte by
+// byte.
+pub fn marked(lookup: [u8; ?], first: u64, bit: u8, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let (near, _) = while [at = at, going = true] (going && at + 8 <= length) {
+        if (marks(lookup, first, bytes, at) & bit) == 0 { (at + 8, true) } else { (at, false) }
+    };
+    while [at = near] (at < length && (mark_at(lookup, first, bytes, at) & bit) == 0) {
+        at + 1
+    }
+}

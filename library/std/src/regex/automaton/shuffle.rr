@@ -1,0 +1,70 @@
+//! The rectangles of a set of bytes, and the shuffle tables that test them.
+//!
+//! A set is cut into rectangles: some high halves of a byte, times some low
+//! halves. A rectangle is one bit in a pair of tables of sixteen bytes, one
+//! indexed by the low half and one by the high half, and a byte is in the
+//! rectangle when both have the bit:
+//!
+//! ```text
+//! low[byte & 15] & high[byte >> 4] & bits != 0      the byte is in the set
+//! ```
+//!
+//! A pair holds eight rectangles, of one set or of several, and a set or
+//! the bytes outside it must be at most eight; `[A-Za-z0-9_]` is four.
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+
+// The low halves of the bytes of `set` with the high half `row`, a bit
+// each.
+fn row_of(set: Bits, row: u64) -> u64 {
+    let (_, low) = while [half = (0 as u64), low = (0 as u64)] (half < 16) {
+        (half + 1, if set.contains(row * 16 + half) { low | ((1 as u64) << half) } else { low })
+    };
+    low
+}
+
+fn has(rows: List<u64>, row: u64) -> bool {
+    match rows {
+        Nil => false,
+        Cons(first, rest) => first == row || has(rest, row)
+    }
+}
+
+// The different rows of `set` that are not empty, from the high half `row`
+// on. A set is the union of one rectangle for each: the high halves with
+// that row, times the low halves of the row.
+fn rows_from(set: Bits, row: u64, seen: List<u64>) -> List<u64> {
+    if row == 16 { seen } else {
+        let low = row_of(set, row);
+        rows_from(set, row + 1, if low == 0 || has(seen, low) { seen } else { List::Cons { low, seen } })
+    }
+}
+
+// The pair of tables at `first` with `bit` set for the rectangle of the row
+// `low` of `set`.
+fn with_row(pairs: Vec<u8>, first: u64, set: Bits, low: u64, bit: u8) -> Vec<u8> {
+    let (_, marked) = while [half = (0 as u64), pairs = pairs] (half < 16) {
+        let lower = pairs.get(first + half).unwrap_or(0);
+        let lows = if ((low >> half) & 1) == 1 { pairs.set(first + half, lower | bit) } else { pairs };
+        let upper = lows.get(first + 16 + half).unwrap_or(0);
+        (half + 1, if row_of(set, half) == low { lows.set(first + 16 + half, upper | bit) } else { lows })
+    };
+    marked
+}
+
+/// The pair of tables at `first` with a bit, from `place` on, for the
+/// rectangle of each of `rows` of `set`.
+pub fn with_rows(pairs: Vec<u8>, first: u64, set: Bits, rows: List<u64>, place: u64) -> Vec<u8> {
+    match rows {
+        Nil => pairs,
+        Cons(low, rest) => with_rows(with_row(pairs, first, set, low, ((1 as u64) << place) as u8), first, set, rest, place + 1)
+    }
+}
+
+/// The different rows of `set` that are not empty: one rectangle each.
+pub fn rows(set: Bits) -> List<u64> {
+    rows_from(set, 0, List::Nil)
+}

@@ -1,0 +1,94 @@
+//! The stretches of a set of bytes, and the vectors that compare with them.
+//!
+//! A single byte is one vector of sixteen copies of it. A longer stretch is
+//! two: its first byte, and its length less one. A set whose stretches cost
+//! at most four vectors is compared sixteen bytes at a time; `encoding`
+//! lists the forms.
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::ByteRange;
+
+/// The four bytes that the vectors of a run repeat.
+pub struct [value] Four {
+    a: u8,
+    b: u8,
+    c: u8,
+    d: u8
+}
+
+// Sixteen times `byte` after `vectors`.
+fn vector_of(vectors: Vec<u8>, byte: u8) -> Vec<u8> {
+    let (_, grown) = while [lane = (0 as u64), vectors = vectors] (lane < 16) {
+        (lane + 1, vectors.push(byte))
+    };
+    grown
+}
+
+/// The four vectors of a run after `vectors`.
+pub fn four(vectors: Vec<u8>, bytes: Four) -> Vec<u8> {
+    vector_of(vector_of(vector_of(vector_of(vectors, bytes.a), bytes.b), bytes.c), bytes.d)
+}
+
+/// Four bytes for a run that compares with no vectors.
+pub fn blank() -> Four {
+    Four { a: 0, b: 0, c: 0, d: 0 }
+}
+
+/// The stretches of `set`, in order.
+pub fn stretches(set: Bits) -> List<ByteRange> {
+    if set.is_empty() { List::Nil } else {
+        let start = set.least();
+        // The first byte above `start` that is no member, or 256.
+        let gap = set.complement().subtract(Bits::range(0, start)).least();
+        let stretch = ByteRange { start: start as u8, end: (gap - 1) as u8 };
+        List::Cons { stretch, stretches(set.subtract(Bits::range(start, gap - 1))) }
+    }
+}
+
+/// The stretches of `set` when they cost at most four: one for a single
+/// byte, two for a longer stretch.
+pub fn few(set: Bits) -> Option<List<ByteRange>> {
+    let found = stretches(set);
+    let cost = found.fold_left(0, |cost: u64, stretch: ByteRange| if stretch.start == stretch.end { cost + 1 } else { cost + 2 });
+    if cost <= 4 { Option::Some { found } } else { Option::None }
+}
+
+// The stretches of one byte (`wide` false) or of more.
+fn chosen(stretches: List<ByteRange>, wide: bool) -> List<ByteRange> {
+    match stretches {
+        Nil => List::Nil,
+        Cons(stretch, rest) => if (stretch.start != stretch.end) == wide { List::Cons { stretch, chosen(rest, wide) } } else { chosen(rest, wide) }
+    }
+}
+
+// The stretch at `place`, or `otherwise` when the list is shorter.
+fn stretch_at(stretches: List<ByteRange>, place: u64, otherwise: ByteRange) -> ByteRange {
+    match stretches {
+        Nil => otherwise,
+        Cons(stretch, rest) => if place == 0 { stretch } else { stretch_at(rest, place - 1, otherwise) }
+    }
+}
+
+/// The form and the four bytes of the vectors that match the bytes of
+/// `stretches`, which are not empty and cost at most four. A place past the
+/// bytes of the form repeats the first byte.
+pub fn vectors_of(stretches: List<ByteRange>) -> (u64, Four) {
+    let wide = chosen(stretches, true);
+    let single = chosen(stretches, false);
+    match wide {
+        Nil => {
+            let first = stretch_at(single, 0, ByteRange { start: 0, end: 0 });
+            (single.len() - 1, Four { a: first.start, b: stretch_at(single, 1, first).start, c: stretch_at(single, 2, first).start, d: stretch_at(single, 3, first).start })
+        },
+        Cons(first, more) => match more {
+            Nil => {
+                let same = ByteRange { start: first.start, end: first.start };
+                (4 + single.len(), Four { a: first.start, b: first.end - first.start, c: stretch_at(single, 0, same).start, d: stretch_at(single, 1, same).start })
+            },
+            Cons(second, _) => (7, Four { a: first.start, b: first.end - first.start, c: second.start, d: second.end - second.start })
+        }
+    }
+}

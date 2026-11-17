@@ -1,0 +1,232 @@
+//! The runs of an automaton: the bytes on which a state stays in itself.
+//!
+//! A match skips the bytes of a run without a step for each. As in
+//! Paguroidea, the set is tried first, then its complement, each when its
+//! stretches cost at most four: one for a single byte and two for a longer
+//! stretch, which is the number of vectors that sixteen bytes at a time are
+//! compared with. Those vectors are kept ready, four to a state with a run.
+//! A set that fits neither way goes into the lookup table, which packs
+//! eight sets into 256 bytes, one bit for each set, and marks the bytes
+//! that leave the state:
+//!
+//! ```text
+//! lookup[table * 256 + byte] & bit != 0      the byte leaves the state
+//! ```
+//!
+//! Equal sets share one bit, whichever states they come from.
+//!
+//! Where the target shuffles sixteen bytes with one instruction, a set is
+//! first tried as shuffle tables, which test sixteen bytes at a time where
+//! the lookup table tests one.
+//!
+//! - `vectors`: the stretches of a set, and the vectors that compare with
+//!   them.
+//! - `shuffle`: the rectangles of a set, and the tables that test them.
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::hashmap::HashMap;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::automaton::arrange::Arranged;
+import std::regex::automaton::encoding;
+import std::regex::automaton::native;
+import std::regex::automaton::shuffle;
+import std::regex::automaton::vectors;
+import std::regex::automaton::vectors::Four;
+
+/// The words, vectors and tables of the runs of an automaton, one run
+/// added after another. The lookup tables and the shuffle tables are shared
+/// by all runs, as the `GLOBAL_LUT` of Paguroidea's `LoopOptimizer` is.
+pub struct LoopOptimizer {
+    // The word of every run added, and its four vectors.
+    words: Vec<u64>,
+    vectors: Vec<u8>,
+    // The lookup tables one after another, and the number of every set of
+    // leaving bytes that has a bit in them.
+    lookup: Vec<u8>,
+    assigned: HashMap<Bits, u64>,
+    // The pairs of shuffle tables one after another, the number of bits
+    // that the last pair has free, and the word of every set that has bits
+    // in them.
+    nibbles: Vec<u8>,
+    free: u64,
+    shuffled: HashMap<Bits, u64>
+}
+
+// The bytes on which `state` stays in itself.
+fn stays(table: [u32; ?], sets: ByteClasses, state: u64, classes: u64) -> Bits {
+    let (_, bytes) = while [class = 0, bytes = Bits::empty()] (class < classes) {
+        let here = array::get(table, (state * classes + class) as i64) as u64 == state;
+        (class + 1, if here { bytes.union(sets.class(class).unwrap_or(Bits::empty())) } else { bytes })
+    };
+    bytes
+}
+
+impl LoopOptimizer {
+    pub fn new() -> Self {
+        LoopOptimizer {
+            words: Vec::new(),
+            vectors: Vec::new(),
+            lookup: Vec::new(),
+            assigned: HashMap::new(),
+            nibbles: Vec::new(),
+            free: 0,
+            shuffled: HashMap::new()
+        }
+    }
+
+    // The number of the set `leaving` in the lookup table. A set seen
+    // before keeps its number; a new one takes the next bit, eight to a
+    // table of 256 bytes.
+    fn assign_table(self: Self, leaving: Bits) -> (Self, u64) {
+        match self.assigned.get(leaving) {
+            Some(number) => (self, number),
+            None => {
+                let number = self.assigned.len();
+                let first = encoding::table_at(number);
+                let bit = encoding::table_bit(number);
+                // The first set of a table brings the table.
+                let (_, grown) = while [at = self.lookup.len(), marks = self.lookup] (at < first + 256) {
+                    (at + 1, marks.push(0))
+                };
+                let (_, marked) = while [byte = (0 as u64), marks = grown] (byte < 256) {
+                    let old = marks.get(first + byte).unwrap_or(0);
+                    (byte + 1, if leaving.contains(byte) { marks.set(first + byte, old | bit) } else { marks })
+                };
+                let grown = LoopOptimizer {
+                    words: self.words,
+                    vectors: self.vectors,
+                    lookup: marked,
+                    assigned: self.assigned.insert(leaving, number),
+                    nibbles: self.nibbles,
+                    free: self.free,
+                    shuffled: self.shuffled
+                };
+                (grown, number)
+            }
+        }
+    }
+
+    // The word of a run that tests `set`, which has these rows, with
+    // shuffle tables. A set seen before keeps its word; a new one takes a
+    // bit for each row, in the last pair of tables when that has enough of
+    // its eight free.
+    fn assign_shuffle(self: Self, set: Bits, rows: List<u64>) -> (Self, u64) {
+        match self.shuffled.get(set) {
+            Some(word) => (self, word),
+            None => {
+                let count = rows.len();
+                let fresh = self.free < count;
+                let used = if fresh { 0 } else { 8 - self.free };
+                let (_, grown) = while [added = (0 as u64), pairs = self.nibbles] (fresh && added < 32) {
+                    (added + 1, pairs.push(0))
+                };
+                let first = grown.len() - 32;
+                let word = encoding::shuffle_word(first, (((1 as u64) << count) - 1) << used);
+                let grown = LoopOptimizer {
+                    words: self.words,
+                    vectors: self.vectors,
+                    lookup: self.lookup,
+                    assigned: self.assigned,
+                    nibbles: shuffle::with_rows(grown, first, set, rows, used),
+                    free: 8 - used - count,
+                    shuffled: self.shuffled.insert(set, word)
+                };
+                (grown, word)
+            }
+        }
+    }
+
+    // One more run: its word and its four vectors.
+    fn push(self: Self, word: u64, bytes: Four) -> Self {
+        LoopOptimizer {
+            words: self.words.push(word),
+            vectors: vectors::four(self.vectors, bytes),
+            lookup: self.lookup,
+            assigned: self.assigned,
+            nibbles: self.nibbles,
+            free: self.free,
+            shuffled: self.shuffled
+        }
+    }
+
+    // The run of a state that stays on `set`, of which neither the bytes
+    // nor the other bytes are a few stretches: shuffle tables for the set
+    // or for the other bytes when either is at most eight rectangles, else
+    // a bit of the lookup table.
+    fn add_wide(self: Self, set: Bits) -> Self {
+        let inside = shuffle::rows(set);
+        let outside = shuffle::rows(set.complement());
+        let blank = vectors::blank();
+        let fits = native::shuffles() && inside.len() <= 8;
+        let way: u64 = (if fits { 1 } else { 0 }) + (if !fits && native::shuffles() && outside.len() <= 8 { 2 } else { 0 });
+        match way {
+            1 => {
+                let (optimizer, word) = self.assign_shuffle(set, inside);
+                optimizer.push(encoding::inside(word), blank)
+            },
+            2 => {
+                let (optimizer, word) = self.assign_shuffle(set.complement(), outside);
+                optimizer.push(word, blank)
+            },
+            // 0: the lookup table.
+            _ => {
+                let (optimizer, number) = self.assign_table(set.complement());
+                optimizer.push(encoding::table_word(number), blank)
+            }
+        }
+    }
+
+    /// Adds the run of a state that stays on `set`, which is not empty: the
+    /// set itself when it is cheap, else its complement when that is, else
+    /// shuffle tables or a bit of the lookup table.
+    pub fn add(self: Self, set: Bits) -> Self {
+        match vectors::few(set) {
+            Some(inside) => {
+                let (form, bytes) = vectors::vectors_of(inside);
+                self.push(encoding::inside(encoding::vector_word(form)), bytes)
+            },
+            None => match vectors::few(set.complement()) {
+                Some(outside) => {
+                    let (form, bytes) = vectors::vectors_of(outside);
+                    self.push(encoding::vector_word(form), bytes)
+                },
+                None => self.add_wide(set)
+            }
+        }
+    }
+
+    /// The word of every run, in the order they were added.
+    pub fn words(self: Self) -> Vec<u64> {
+        self.words
+    }
+
+    /// Four vectors of sixteen bytes for every run.
+    pub fn vectors(self: Self) -> Vec<u8> {
+        self.vectors
+    }
+
+    /// The lookup tables one after another, 256 bytes each.
+    pub fn lookup(self: Self) -> Vec<u8> {
+        self.lookup
+    }
+
+    /// The pairs of shuffle tables one after another.
+    pub fn nibbles(self: Self) -> Vec<u8> {
+        self.nibbles
+    }
+}
+
+/// The runs of the states of `arranged` that have one, in the order of
+/// their numbers.
+pub fn runs(arranged: Arranged, sets: ByteClasses) -> LoopOptimizer {
+    let first = array::get(arranged.starts, 3);
+    let plain = array::get(arranged.starts, 6);
+    let (_, optimizer) = while [state = first, optimizer = LoopOptimizer::new()] (state < plain) {
+        (state + 1, optimizer.add(stays(arranged.next, sets, state, arranged.classes)))
+    };
+    optimizer
+}

@@ -1,0 +1,40 @@
+//! The classes of bytes that share a column.
+//!
+//! Two classes that lead every state to the same state have equal columns
+//! in the table, and the automaton keeps one of them.
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::hashmap::HashMap;
+import std::collections::pure::list::List;
+import std::option::Option;
+
+/// The columns of a table.
+pub struct Columns {
+    /// The column of every class.
+    pub of_class: Vec<u32>,
+    /// The first class of every column.
+    pub firsts: Vec<u64>
+}
+
+// The cells of the column of `class`, one for each state.
+fn column(table: [u32; ?], class: u64, states: u64, classes: u64) -> List<u32> {
+    let (_, cells) = while [state = states, cells = List::Nil] (state > 0) {
+        (state - 1, List::Cons { array::get(table, ((state - 1) * classes + class) as i64), cells })
+    };
+    cells
+}
+
+/// The columns of `table`, which has a row of `classes` cells for each of
+/// `states` states.
+pub fn share(table: [u32; ?], states: u64, classes: u64) -> Columns {
+    let (_, of_class, firsts, _) = while [class = 0, of_class = Vec::new(), firsts = Vec::new(), found = HashMap::new()] (class < classes) {
+        let line = column(table, class, states, classes);
+        let fresh = firsts.len() as u32;
+        match found.get(line) {
+            Some(known) => (class + 1, of_class.push(known), firsts, found),
+            None => (class + 1, of_class.push(fresh), firsts.push(class), found.insert(line, fresh))
+        }
+    };
+    Columns { of_class, firsts }
+}

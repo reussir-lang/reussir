@@ -1,0 +1,119 @@
+//! The states numbered kind after kind.
+//!
+//! All dead states become the state 0. The others are numbered kind after
+//! kind, and within a kind in the order they were found, so the kind of a
+//! state can be told from its number and the states with a run are one
+//! stretch of numbers.
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::option::Option;
+import std::regex::automaton::explore::Explored;
+
+/// The states of an automaton under their final numbers.
+pub struct Arranged {
+    /// The number of classes of bytes.
+    pub classes: u64,
+    /// The number of states, the dead state included.
+    pub states: u64,
+    /// The first state of each of the seven kinds. The states of a kind are
+    /// numbered from there up to the first state of the next kind, and those
+    /// of the last kind up to `states`.
+    pub starts: [u64; 7],
+    /// The kind of each state.
+    pub kinds: [u32; ?],
+    /// The state after each state on each class, row after row.
+    pub next: [u32; ?],
+    /// The earliest rule that accepts in each state that accepts.
+    pub winners: [u32; ?],
+    /// The state before any byte.
+    pub start: u64
+}
+
+// `sizes` and one more under its kind for every state from `state` on.
+fn sizes_from(kinds: Vec<u64>, state: u64, sizes: [u64; 7]) -> [u64; 7] {
+    if state == kinds.len() { sizes } else {
+        let kind = kinds.get(state).unwrap_or(0) as i64;
+        let size = array::get(sizes, kind);
+        sizes_from(kinds, state + 1, array::set(sizes, kind, size + 1))
+    }
+}
+
+// `starts` with the first state of every kind from `kind` on, where `place`
+// is the first state of `kind`.
+fn starts_from(sizes: [u64; 7], kind: i64, place: u64, starts: [u64; 7]) -> [u64; 7] {
+    if kind == 7 { starts } else {
+        let after = place + array::get(sizes, kind);
+        starts_from(sizes, kind + 1, after, array::set(starts, kind, place))
+    }
+}
+
+// `places` and the final number of every state found from `state` on: 0 for
+// a dead state, and for the others the next free number of their kind, which
+// `free` holds.
+fn places_from(kinds: Vec<u64>, state: u64, free: [u64; 7], places: Vec<u64>) -> Vec<u64> {
+    if state == kinds.len() { places } else {
+        let kind = kinds.get(state).unwrap_or(0) as i64;
+        let place = array::get(free, kind);
+        // Every dead state takes the number 0, so it stays free.
+        let free = if kind == 0 { free } else { array::set(free, kind, place + 1) };
+        places_from(kinds, state + 1, free, places.push(place))
+    }
+}
+
+// `by_place` with the kind of every state from `state` on, at its final
+// number.
+fn kinds_by_place(kinds: Vec<u64>, places: Vec<u64>, state: u64, by_place: [u32; ?]) -> [u32; ?] {
+    if state == kinds.len() { by_place } else {
+        let place = places.get(state).unwrap_or(0) as i64;
+        let kind = kinds.get(state).unwrap_or(0) as u32;
+        kinds_by_place(kinds, places, state + 1, array::set(by_place, place, kind))
+    }
+}
+
+// `table` with the transitions of `next` from its cell `at` on, under the
+// final numbers. The row of the dead state stays zero: it leads only to
+// itself.
+fn next_by_place(next: Vec<u32>, places: Vec<u64>, classes: u64, at: u64, table: [u32; ?]) -> [u32; ?] {
+    if at == next.len() { table } else {
+        let from = places.get(at / classes).unwrap_or(0);
+        let to = places.get(next.get(at).unwrap_or(0) as u64).unwrap_or(0) as u32;
+        let cell = (from * classes + at % classes) as i64;
+        let table = if from == 0 { table } else { array::set(table, cell, to) };
+        next_by_place(next, places, classes, at + 1, table)
+    }
+}
+
+// `rules` with the earliest rule that accepts in every state from `state`
+// on, at its final number.
+fn winners_by_place(winners: Vec<Option<u32>>, places: Vec<u64>, state: u64, rules: [u32; ?]) -> [u32; ?] {
+    if state == winners.len() { rules } else {
+        let place = places.get(state).unwrap_or(0) as i64;
+        let rules = match winners.get(state).unwrap_or(Option::None) {
+            Some(rule) => array::set(rules, place, rule),
+            None => rules
+        };
+        winners_by_place(winners, places, state + 1, rules)
+    }
+}
+
+/// The states of `found` under their final numbers; `kinds` has the kind
+/// of each.
+pub fn arrange(found: Explored, kinds: Vec<u64>) -> Arranged {
+    let sizes = sizes_from(kinds, 0, array::splat<[u64; 7]>(0));
+    // The dead state is the state 0, so the first kind after it begins at 1.
+    let starts = starts_from(sizes, 1, 1, array::splat<[u64; 7]>(0));
+    let places = places_from(kinds, 0, starts, Vec::new());
+    // Every state that is not dead, and the dead state.
+    let states = kinds.len() - array::get(sizes, 0) + 1;
+    let cells = states * found.classes;
+    Arranged {
+        classes: found.classes,
+        states,
+        starts,
+        kinds: kinds_by_place(kinds, places, 0, array::splat<[u32; ?]>(states, 0)),
+        next: next_by_place(found.next, places, found.classes, 0, array::splat<[u32; ?]>(cells, 0)),
+        winners: winners_by_place(found.winners, places, 0, array::splat<[u32; ?]>(states, 0)),
+        start: places.get(0).unwrap_or(0)
+    }
+}
