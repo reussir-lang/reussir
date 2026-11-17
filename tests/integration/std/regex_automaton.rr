@@ -5,15 +5,17 @@
 // dead, the limit on the number of states, the columns that are shared, the
 // runs of states that stay in themselves, the lookup table that the runs
 // share, the longest match from a place of a text, over runs of every
-// form, and the fold over the matches of a text. A name is tested with
-// shuffle tables or with the lookup table, as the target has it.
+// form, the fold over the matches of a text, and the stream that the
+// matches of a text are pulled from. A name is tested with shuffle tables or
+// with the lookup table, as the target has it.
 // The first fuzz target builds the automaton of three random rules and
 // compares the longest match that its steps find in a random string, and
 // the rule that wins on the whole string, with a small matcher on the trees
 // of the rules; it also compares the run of the state reached with the
 // transitions of that state. The second compares the longest match from a
 // place of a text of repeated characters with the steps from that place,
-// and the fold from that place with one longest match after another.
+// and the fold and the stream from that place with one longest match after
+// another.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_automaton %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}regex_automaton
@@ -31,6 +33,7 @@
 // CHECK-NEXT: regex automaton/the lookup table: unit
 // CHECK-NEXT: regex automaton/the longest match: unit
 // CHECK-NEXT: regex automaton/the fold: unit
+// CHECK-NEXT: regex automaton/the stream: unit
 // CHECK-NEXT: regex automaton/automaton & the trees (fuzz):
 // CHECK-NEXT: regex automaton/the longest match & the steps (fuzz):
 
@@ -41,6 +44,7 @@ import std::regex::alphabet::bits::Bits;
 import std::regex::alphabet::char_set::CharSet;
 import std::regex::automaton::Automaton;
 import std::regex::automaton::ByteRange;
+import std::regex::automaton::Found;
 import std::regex::automaton::Match;
 import std::regex::automaton::Run;
 import std::regex::automaton::State;
@@ -677,6 +681,63 @@ fn same_fold(first: (u64, u64), second: (u64, u64)) -> bool {
     sum == other && reached == place
 }
 
+// The matches pulled from a stream as one number, as `folded` makes it, and
+// where the stream stops.
+fn pulled(automaton: Automaton, input: Text, from: u64) -> (u64, u64) {
+    let (stopped, sum, _) = while [matches = automaton.matches(input.view(), from), sum = 0, going = true] (going) {
+        let (rest, found) = matches.next();
+        match found {
+            Matched(found) => (rest, sum * 31 + (found.rule as u64) + found.start * 3 + found.end * 7, true),
+            Nothing => (rest, sum, false)
+        }
+    };
+    (sum, stopped.at())
+}
+
+// Whether `found` is the match of `rule` from `start` up to `end`.
+fn is_match(found: Found, rule: u32, start: u64, end: u64) -> bool {
+    match found {
+        Matched(found) => found.rule == rule && found.start == start && found.end == end,
+        Nothing => false
+    }
+}
+
+fn is_nothing_found(found: Found) -> bool {
+    match found {
+        Matched(_) => false,
+        Nothing => true
+    }
+}
+
+// The matches of a lexer pulled one by one: the stream moves on with every
+// match, stays at a byte that no rule matches, and stays at the end.
+fn test_stream() -> Outcome {
+    let rules = rules3(Regex::range(97, 122).plus(), Regex::range(48, 57).plus(), Regex::byte(32).plus());
+    built(rules, 100, |automaton: Automaton| {
+        let whole = Text::from_str("abc 42 de");
+        let broken = Text::from_str("abc 42!de");
+        let (second, word) = automaton.matches(whole.view(), 0).next();
+        let (third, space) = second.next();
+        let (stuck, number) = automaton.matches(broken.view(), 4).next();
+        let (still, nothing) = stuck.next();
+        let (again, same) = still.next();
+        let (ended, last) = automaton.matches(whole.view(), 9).next();
+        expect(is_match(word, 0, 0, 3) && second.at() == 3, "the first match is the word")
+            .and_then(|| expect(is_match(space, 2, 3, 4) && third.at() == 4, "the second is the space after it"))
+            .and_then(|| expect(is_match(number, 1, 4, 6) && stuck.at() == 6, "a stream begins where it is told"))
+            .and_then(|| expect(
+                is_nothing_found(nothing) && still.at() == 6 && is_nothing_found(same) && again.at() == 6,
+                "the stream stays at a byte that no rule matches"
+            ))
+            .and_then(|| expect(is_nothing_found(last) && ended.at() == 9, "and at the end of the text"))
+            .and_then(|| expect(same_fold(pulled(automaton, whole, 0), one_by_one(automaton, whole, 0)), "the stream is one longest match after another"))
+            .and_then(|| {
+                let (_, stopped) = pulled(automaton, broken, 0);
+                should_be(stopped, 6)
+            })
+    })
+}
+
 // The tokens of a lexer one after another, up to a byte that no rule
 // matches and up to the end.
 fn test_fold() -> Outcome {
@@ -828,6 +889,10 @@ fn fuzz_longest(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8
                 same_fold(folded(automaton, text_of(characters), from), one_by_one(automaton, text_of(characters), from)),
                 "the fold is not one longest match after another"
             ))
+            .and_then(|| expect(
+                same_fold(pulled(automaton, text_of(characters), from), one_by_one(automaton, text_of(characters), from)),
+                "the stream is not one longest match after another"
+            ))
     }
 }
 
@@ -843,6 +908,7 @@ fn suite() -> TestTree {
         .with_case("the lookup table", test_lookup)
         .with_case("the longest match", test_longest)
         .with_case("the fold", test_fold)
+        .with_case("the stream", test_stream)
         .with_fuzz(
             "automaton & the trees (fuzz)",
             tuple3(

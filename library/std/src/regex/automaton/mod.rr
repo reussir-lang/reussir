@@ -42,10 +42,12 @@
 //!
 //! - `encoding`: how a cell of the table and the word of a run are packed.
 //! - `scan`: matching.
+//! - `stream`: the matches of a text, pulled one after another.
 //! - `inspect`: an automaton one step at a time.
 //! - `native`: the loops that read the bytes of the input through a
 //!   pointer, sixteen or eight at a time.
 
+import core::ptr::Generic;
 import std::collections::pure::list::List;
 import std::regex::alphabet::byte_classes::ByteClasses;
 import std::regex::automaton::arrange;
@@ -57,6 +59,7 @@ import std::regex::automaton::pack;
 import std::regex::node::refine;
 import std::regex::tree::ByteRegex;
 import std::result::Result;
+import std::text::TextView;
 
 mod arrange;
 mod classify;
@@ -69,6 +72,7 @@ mod native;
 mod pack;
 mod scan;
 mod shuffle;
+mod stream;
 mod vectors;
 
 /// A state of an automaton.
@@ -104,6 +108,30 @@ pub enum [value] Found {
     Matched(Match),
     /// No rule matches from there.
     Nothing
+}
+
+/// What a stream of matches reads: an automaton, a text, and where the
+/// bytes of the text begin. It holds the text, so those bytes stay readable
+/// for as long as a stream is around.
+pub struct Reading {
+    automaton: Automaton,
+    input: TextView,
+    bytes: ConstPtr<Generic>
+}
+
+/// The matches of the rules in a text, one after another: each begins where
+/// the one before ended. A match is pulled with `next`, which answers the
+/// stream after it:
+///
+/// ```text
+/// let (rest, found) = matches.next();
+/// ```
+///
+/// The stream is a pointer and a place, and a loop that keeps pulling from
+/// the stream it was just given moves it along without counting references.
+pub struct [value] Matches {
+    reading: Reading,
+    at: u64
 }
 
 /// A stretch of bytes, both ends included.

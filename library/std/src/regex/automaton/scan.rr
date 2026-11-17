@@ -65,10 +65,10 @@ impl Automaton {
     }
 }
 
-// The cell of the last state that accepts on the way from the start state
-// at the byte `from` of the `length` bytes at `bytes`, and where it does;
-// the cell 0 when none does.
-fn scan(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64) {
+/// The cell of the last state that accepts on the way from the start state
+/// at the byte `from` of the `length` bytes at `bytes`, and where it does;
+/// the cell 0 when none does.
+pub fn scan(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64) {
     // A start state that neither accepts nor has a run takes its first
     // step in one read.
     let quick = encoding::kind(automaton.start) == 6 && from < length;
