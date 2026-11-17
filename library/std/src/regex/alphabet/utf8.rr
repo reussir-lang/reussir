@@ -11,8 +11,9 @@
 
 import std::collections::pure::list::List;
 import std::option::Option;
+import std::collections::pure::wavlmap::Iter;
+import std::collections::pure::wavlmap::Step;
 import std::regex::alphabet::char_set::CharSet;
-import std::regex::alphabet::char_set::Span;
 
 /// The bytes from `start` to `end`, both included.
 pub struct [value] Utf8Range {
@@ -97,7 +98,14 @@ fn stretch<A>(lo: u32, hi: u32, acc: A, step: (A, Utf8Sequence) -> A) -> A {
 /// the order of the bytes. Together they hold the encoding of every member
 /// and no other string.
 pub fn fold_sequences<A>(set: CharSet, initial: A, step: (A, Utf8Sequence) -> A) -> A {
-    set.spans().fold_left(initial, |acc: A, span: Span| stretch(span.start, span.end - 1, acc, step))
+    feed(set.iter(), initial, step)
+}
+
+fn feed<A>(stretches: Iter<u32, u32>, acc: A, step: (A, Utf8Sequence) -> A) -> A {
+    match stretches.next() {
+        More(entry, rest) => feed(rest, stretch(entry.key, entry.value - 1, acc, step), step),
+        Done => acc
+    }
 }
 
 impl Utf8Sequence {
