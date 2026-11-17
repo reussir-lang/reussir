@@ -181,10 +181,14 @@ impl Nodes {
         match self.numbers.get(found) {
             Some(number) => (self, Node { number }),
             None => {
-                let number = self.entries.len() as u32;
+                // The fields leave `self` first: a field that `self` still
+                // holds is copied by its update.
+                let entries = self.entries;
+                let numbers = self.numbers;
+                let number = entries.len() as u32;
                 let table = Nodes {
-                    entries: self.entries.push(Entry { shape, empty }),
-                    numbers: self.numbers.insert(found, number)
+                    entries: entries.push(Entry { shape, empty }),
+                    numbers: numbers.insert(found, number)
                 };
                 (table, Node { number })
             }

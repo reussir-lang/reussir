@@ -95,12 +95,18 @@ impl StateTable {
         match self.numbers.get(state) {
             Some(number) => (self, number),
             None => {
-                let number = self.states.len() as u32;
+                // The fields leave `self` first: a field that `self` still
+                // holds is copied by its update.
+                let nodes = self.nodes;
+                let states = self.states;
+                let numbers = self.numbers;
+                let next = self.next;
+                let number = states.len() as u32;
                 let grown = StateTable {
-                    nodes: self.nodes,
-                    states: self.states.push(state),
-                    numbers: self.numbers.insert(state, number),
-                    next: self.next
+                    nodes,
+                    states: states.push(state),
+                    numbers: numbers.insert(state, number),
+                    next
                 };
                 (grown, number)
             }
@@ -109,8 +115,14 @@ impl StateTable {
 
     // The nodes that `state` leads to on `class`.
     fn derive(self: Self, state: List<Node>, class: u64) -> (Self, List<Node>) {
-        let (nodes, target) = derive_all(self.nodes, state, class);
-        (StateTable { nodes, states: self.states, numbers: self.numbers, next: self.next }, target)
+        // The nodes leave `self` first, so that a new node is added to
+        // them in place.
+        let nodes = self.nodes;
+        let states = self.states;
+        let numbers = self.numbers;
+        let next = self.next;
+        let (nodes, target) = derive_all(nodes, state, class);
+        (StateTable { nodes, states, numbers, next }, target)
     }
 
     // One more transition of the row that is being written.
