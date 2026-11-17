@@ -74,10 +74,10 @@ fn kinds_by_place(kinds: Vec<u64>, places: [u64; ?], state: u64, by_place: [u32;
 // `table` with the transitions of `next` from its cell `at` on, under the
 // final numbers. The row of the dead state stays zero: it leads only to
 // itself.
-fn next_by_place(next: Vec<u32>, places: [u64; ?], classes: u64, at: u64, table: [u32; ?]) -> [u32; ?] {
-    if at == next.len() { table } else {
+fn next_by_place(next: [u32; ?], places: [u64; ?], classes: u64, at: u64, table: [u32; ?]) -> [u32; ?] {
+    if at == array::dim(next, 0) { table } else {
         let from = array::get(places, (at / classes) as i64);
-        let target = next.get(at).unwrap_or(0) as i64;
+        let target = array::get(next, at as i64) as i64;
         let to = array::get(places, target) as u32;
         let cell = (from * classes + at % classes) as i64;
         let table = if from == 0 { table } else { array::set(table, cell, to) };
@@ -98,9 +98,9 @@ fn winners_by_place(winners: Vec<Option<u32>>, places: [u64; ?], state: u64, rul
     }
 }
 
-/// The states of `found` under their final numbers; `kinds` has the kind
-/// of each.
-pub fn arrange(found: Explored, kinds: Vec<u64>) -> Arranged {
+/// The states of `found` under their final numbers; `next` has their
+/// transitions and `kinds` the kind of each.
+pub fn arrange(found: Explored, next: [u32; ?], kinds: Vec<u64>) -> Arranged {
     let sizes = sizes_from(kinds, 0, array::splat<[u64; 7]>(0));
     // The dead state is the state 0, so the first kind after it begins at 1.
     let starts = starts_from(sizes, 1, 1, array::splat<[u64; 7]>(0));
@@ -113,7 +113,7 @@ pub fn arrange(found: Explored, kinds: Vec<u64>) -> Arranged {
         states,
         starts,
         kinds: kinds_by_place(kinds, places, 0, array::splat<[u32; ?]>(states, 0)),
-        next: next_by_place(found.next, places, found.classes, 0, array::splat<[u32; ?]>(cells, 0)),
+        next: next_by_place(next, places, found.classes, 0, array::splat<[u32; ?]>(cells, 0)),
         winners: winners_by_place(found.winners, places, 0, array::splat<[u32; ?]>(states, 0)),
         start: array::get(places, 0)
     }
