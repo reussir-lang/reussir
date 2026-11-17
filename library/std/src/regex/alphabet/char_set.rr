@@ -66,15 +66,19 @@ fn add(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> 
 // `stretches` without the code points from `start` up to `end`. O(log n)
 // and the stretches removed.
 fn cut(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
+    // Read before the removal: a map that is still read afterwards is held
+    // twice, and every removal from it copies its path.
+    let last = stretches.predecessor_entry(end);
+    let before = stretches.predecessor_entry(start);
     let outside = remove_keys(stretches, stretches.range_to_list(start, end));
     // The last stretch that begins before `end` keeps its part from `end`.
-    let outside = match stretches.predecessor_entry(end) {
+    let outside = match last {
         Some(last) if last.value > end => outside.insert(end, last.value),
         // No stretch begins before `end`, or it ends by `end`.
         _ => outside
     };
     // A stretch that begins before `start` keeps its part before `start`.
-    match stretches.predecessor_entry(start) {
+    match before {
         Some(before) if before.value > start => outside.insert(before.key, start),
         // No stretch begins before `start`, or it ends by `start`.
         _ => outside
