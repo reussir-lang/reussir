@@ -1,0 +1,44 @@
+// The layout of a JSON tree.
+//
+// An array or an object is a group: it is written on one line when it fits
+// in what is left of the line, and else with every element on a line of its
+// own, one level in. Groups decide one by one, so a short array stays on
+// one line inside an object that does not fit.
+
+import root::json::Json;
+import root::json::Member;
+import std::collections::pure::list::List;
+import std::format::Display;
+import std::format::Format;
+import std::format::join;
+
+// `items` between `open` and `close`, `indent` columns in when they do
+// not fit on the line.
+fn enclosed(open: str, close: str, items: List<Format>, indent: u64) -> Format {
+    match items {
+        Nil => open.fmt().append(close.fmt()),
+        // At least one item.
+        _ => open.fmt()
+            .append(Format::Softline.append(join(",".fmt().append(Format::Line), items)).nest(indent))
+            .append(Format::Softline)
+            .append(close.fmt())
+            .group()
+    }
+}
+
+/// `value` laid out with `indent` columns to a level.
+pub fn layout(value: Json, indent: u64) -> Format {
+    match value {
+        Null => "null".fmt(),
+        Bool(truth) => truth.fmt(),
+        Number(written) => written.fmt(),
+        Text(written) => written.fmt(),
+        Array(items) => enclosed("[", "]", items.map(|item: Json| layout(item, indent)), indent),
+        Object(members) => enclosed(
+            "{",
+            "}",
+            members.map(|member: Member| member.name.fmt().append(": ".fmt()).append(layout(member.value, indent))),
+            indent
+        )
+    }
+}

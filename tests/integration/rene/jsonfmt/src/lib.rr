@@ -1,0 +1,90 @@
+// A JSON formatter: reads a JSON text from stdin and writes it to stdout
+// laid out in at most 80 columns, two spaces to a level. A text that is not
+// JSON is reported on stderr with the line and column where it stops being
+// one, and the exit code is 1.
+
+import root::json;
+import root::json::Error;
+import root::pretty;
+import std::format::Display;
+import std::format::Format;
+import std::format::Options;
+import std::process::exit;
+import std::string::RawString;
+import std::string::String;
+import std::text::Text;
+
+mod json;
+mod pretty;
+
+extern "rust" [{
+    use reussir_rt::collections::string::String as RString;
+    use std::io::Read;
+}];
+
+// All of stdin. Bytes that are not UTF-8 are read as U+FFFD.
+#[ffi(import)]
+fn read_stdin() -> RawString [{
+    {
+        let mut bytes = std::vec::Vec::new();
+        std::io::stdin().read_to_end(&mut bytes).ok();
+        RString::from(std::string::String::from_utf8_lossy(&bytes).into_owned())
+    }
+}];
+
+// The line and the column of the byte `offset` of `text`, both from one. A
+// column counts bytes.
+fn place(text: Text, offset: u64) -> (u64, u64) {
+    let (_, line, column) = while [at = (0 as u64), line = (1 as u64), column = (1 as u64)] (at < offset && at < text.len()) {
+        if text.byte_at(at) == 10 {
+            (at + 1, line + 1, 1)
+        } else {
+            (at + 1, line, column + 1)
+        }
+    };
+    (line, column)
+}
+
+// What is wrong, and the byte where it is.
+fn explain(error: Error) -> (str, u64) {
+    match error {
+        Unexpected(at) => ("this token cannot be here", at),
+        Ended(at) => ("the text ends before the value does", at),
+        Unmatched(at) => ("no token of JSON begins here", at)
+    }
+}
+
+// Writes `message` for the byte `offset` of `text` to stderr and ends the
+// program.
+fn fail(text: Text, message: str, offset: u64) {
+    let (line, column) = place(text, offset);
+    let report = "jsonfmt: line ".fmt()
+        .append(line.fmt())
+        .append(", column ".fmt())
+        .append(column.fmt())
+        .append(": ".fmt())
+        .append(message.fmt())
+        .append(Format::Hardline);
+    let _ = report.dump_stderr(Options::default());
+    exit(1)
+}
+
+#[main]
+pub fn entry() {
+    let text = Text::from_string(String::from_raw(read_stdin()));
+    match json::lexer() {
+        Ok(lexer) => match json::document(lexer, text.view()) {
+            Ok(value) => {
+                let laid_out = pretty::layout(value, 2).append(Format::Hardline);
+                if laid_out.dump_stdout(Options { width: 80, indent: 2 }).is_err() {
+                    exit(1)
+                }
+            },
+            Err(error) => {
+                let (message, offset) = explain(error);
+                fail(text, message, offset)
+            }
+        },
+        Err(_) => fail(text, "the rules of JSON need too many states", 0)
+    }
+}

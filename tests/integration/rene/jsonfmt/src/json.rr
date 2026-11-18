@@ -1,0 +1,273 @@
+// JSON as a tree, made of the tokens of a lexer.
+//
+// The lexer has one rule for each kind of token. Each sign and each of the
+// three words is a constant, a number and a string are made from the bytes
+// of their match, and white space gives no token:
+//
+//     [ \t\n\r]+                                  skipped
+//     { } [ ] : ,   true false null               a constant each
+//     -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?   a number
+//     "([^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"   a string
+//
+// A number and a string are kept as they are written, so that a formatter
+// writes them back unchanged. The parser pulls tokens from the stream and
+// hands the stream on, one function for each form of the grammar.
+
+import std::collections::pure::list::List;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::Match;
+import std::regex::automaton::TooManyStates;
+import std::regex::lexer::Action;
+import std::regex::lexer::Lexed;
+import std::regex::lexer::Lexer;
+import std::regex::lexer::Rule;
+import std::regex::lexer::Tokens;
+import std::regex::tree::Regex;
+import std::result::Result;
+import std::text::Text;
+import std::text::TextView;
+
+pub enum Token {
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    Colon,
+    Comma,
+    True,
+    False,
+    Null,
+    /// A number as it is written.
+    Number(TextView),
+    /// A string as it is written, with its quotes.
+    Quoted(TextView)
+}
+
+/// A member of an object: its name as it is written, with its quotes.
+pub struct Member {
+    pub name: TextView,
+    pub value: Json
+}
+
+pub enum Json {
+    Null,
+    Bool(bool),
+    /// A number as it is written.
+    Number(TextView),
+    /// A string as it is written, with its quotes.
+    Text(TextView),
+    Array(List<Json>),
+    /// The members in the order they are written.
+    Object(List<Member>)
+}
+
+/// Why a text is not JSON, and the byte where it stops being one.
+pub enum [value] Error {
+    /// A token that the grammar does not allow there.
+    Unexpected(u64),
+    /// The text ends inside a value.
+    Ended(u64),
+    /// No token begins at this byte.
+    Unmatched(u64)
+}
+
+// ------------------------------- The lexer -------------------------------
+
+// One of these bytes.
+fn one_of(first: u8, second: u8) -> Regex {
+    Regex::bytes(Bits::single(first as u64).insert(second as u64))
+}
+
+fn digit() -> Regex {
+    Regex::range(48, 57)
+}
+
+// -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+fn number() -> Regex {
+    let whole = Regex::byte(48).or(Regex::range(49, 57).then(digit().star()));
+    let fraction = Regex::byte(46).then(digit().plus());
+    let exponent = one_of(69, 101).then(one_of(43, 45).optional()).then(digit().plus());
+    Regex::byte(45).optional().then(whole).then(fraction.optional()).then(exponent.optional())
+}
+
+// "([^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"
+fn string() -> Regex {
+    let plain = Regex::bytes(Bits::range(0, 31).insert(34).insert(92).complement());
+    let hex = Regex::bytes(Bits::range(48, 57).union(Bits::range(65, 70)).union(Bits::range(97, 102)));
+    // " \ / b f n r t
+    let short = Regex::bytes(Bits::single(34).insert(92).insert(47).insert(98).insert(102).insert(110).insert(114).insert(116));
+    let long = Regex::byte(117).then(hex).then(hex).then(hex).then(hex);
+    let escape = Regex::byte(92).then(short.or(long));
+    Regex::byte(34).then(plain.or(escape).star()).then(Regex::byte(34))
+}
+
+fn blank() -> Regex {
+    Regex::bytes(Bits::single(9).insert(10).insert(13).insert(32)).plus()
+}
+
+fn sign(byte: u8, token: Token) -> Rule<Token> {
+    Rule::new(Regex::byte(byte), Action::Constant { token })
+}
+
+fn word(spelled: str, token: Token) -> Rule<Token> {
+    Rule::new(Regex::literal(Text::from_str(spelled)), Action::Constant { token })
+}
+
+// `rule` before `rules`.
+fn with(rule: Rule<Token>, rules: List<Rule<Token>>) -> List<Rule<Token>> {
+    List::Cons { rule, rules }
+}
+
+/// The lexer of JSON.
+pub fn lexer() -> Result<Lexer<Token>, TooManyStates> {
+    let values = with(word("true", Token::True),
+        with(word("false", Token::False),
+        with(word("null", Token::Null),
+        with(Rule::new(number(), Action::InvokeOnView { |written: TextView| Token::Number { written } }),
+        with(Rule::new(string(), Action::InvokeOnView { |written: TextView| Token::Quoted { written } }),
+        List::Nil)))));
+    let signs = with(sign(123, Token::LeftBrace),
+        with(sign(125, Token::RightBrace),
+        with(sign(91, Token::LeftBracket),
+        with(sign(93, Token::RightBracket),
+        with(sign(58, Token::Colon),
+        with(sign(44, Token::Comma), values))))));
+    Lexer::build(with(Rule::new(blank(), Action::Skip), signs), 1000)
+}
+
+// ------------------------------- The parser -------------------------------
+
+// A token with the byte where it begins, and the stream after it.
+struct Pulled {
+    token: Token,
+    at: u64,
+    rest: Tokens<Token>
+}
+
+// A value, and the stream after it.
+struct Parsed {
+    value: Json,
+    rest: Tokens<Token>
+}
+
+// The next token: a text that has none is not JSON here.
+fn pull(tokens: Tokens<Token>) -> Result<Pulled, Error> {
+    let (rest, lexed) = tokens.next();
+    match lexed {
+        Token(token, found) => Result::Ok { Pulled { token, at: found.start, rest } },
+        End => Result::Err { Error::Ended { rest.at() } },
+        Stuck => Result::Err { Error::Unmatched { rest.at() } }
+    }
+}
+
+fn done(value: Json, rest: Tokens<Token>) -> Result<Parsed, Error> {
+    Result::Ok { Parsed { value, rest } }
+}
+
+// The value that begins with `token`, which was at the byte `at`.
+fn value_from(token: Token, at: u64, rest: Tokens<Token>) -> Result<Parsed, Error> {
+    match token {
+        Null => done(Json::Null, rest),
+        True => done(Json::Bool { true }, rest),
+        False => done(Json::Bool { false }, rest),
+        Number(written) => done(Json::Number { written }, rest),
+        Quoted(written) => done(Json::Text { written }, rest),
+        LeftBracket => array(rest),
+        LeftBrace => object(rest),
+        // A sign that begins no value.
+        _ => Result::Err { Error::Unexpected { at } }
+    }
+}
+
+fn value(tokens: Tokens<Token>) -> Result<Parsed, Error> {
+    pull(tokens).and_then(|pulled: Pulled| value_from(pulled.token, pulled.at, pulled.rest))
+}
+
+// What follows `[`.
+fn array(tokens: Tokens<Token>) -> Result<Parsed, Error> {
+    pull(tokens).and_then(|pulled: Pulled| match pulled.token {
+        RightBracket => done(Json::Array { List::Nil }, pulled.rest),
+        // The first element.
+        _ => value_from(pulled.token, pulled.at, pulled.rest)
+            .and_then(|first: Parsed| elements(first.rest, List::Cons { first.value, List::Nil }))
+    })
+}
+
+// What follows an element: `items` are those so far, the last one first.
+// The call for the rest is the last thing an arm does, written without a
+// closure around it, so an array of any length is read in a loop.
+fn elements(tokens: Tokens<Token>, items: List<Json>) -> Result<Parsed, Error> {
+    match pull(tokens) {
+        Ok(pulled) => match pulled.token {
+            Comma => match value(pulled.rest) {
+                Ok(next) => elements(next.rest, List::Cons { next.value, items }),
+                Err(error) => Result::Err { error }
+            },
+            RightBracket => done(Json::Array { items.reverse() }, pulled.rest),
+            // Neither a comma nor the end of the array.
+            _ => Result::Err { Error::Unexpected { pulled.at } }
+        },
+        Err(error) => Result::Err { error }
+    }
+}
+
+// A member, and the stream after it.
+struct Named {
+    member: Member,
+    rest: Tokens<Token>
+}
+
+// A member from its name on: a string, a colon and a value.
+fn member(tokens: Tokens<Token>) -> Result<Named, Error> {
+    pull(tokens).and_then(|name: Pulled| match name.token {
+        Quoted(written) => pull(name.rest).and_then(|colon: Pulled| match colon.token {
+            Colon => value(colon.rest).map(|parsed: Parsed| {
+                Named { member: Member { name: written, value: parsed.value }, rest: parsed.rest }
+            }),
+            // Anything but a colon after a name.
+            _ => Result::Err { Error::Unexpected { colon.at } }
+        }),
+        // Anything but a string where a name is due.
+        _ => Result::Err { Error::Unexpected { name.at } }
+    })
+}
+
+// What follows `{`.
+fn object(tokens: Tokens<Token>) -> Result<Parsed, Error> {
+    // The stream is a value: a look at its next token leaves `tokens` where
+    // it was, for `member` to read the name from.
+    pull(tokens).and_then(|pulled: Pulled| match pulled.token {
+        RightBrace => done(Json::Object { List::Nil }, pulled.rest),
+        // The name of the first member.
+        _ => member(tokens).and_then(|first: Named| members(first.rest, List::Cons { first.member, List::Nil }))
+    })
+}
+
+// What follows a member: `found` are those so far, the last one first. As
+// in `elements`, the call for the rest is the last thing an arm does.
+fn members(tokens: Tokens<Token>, found: List<Member>) -> Result<Parsed, Error> {
+    match pull(tokens) {
+        Ok(pulled) => match pulled.token {
+            Comma => match member(pulled.rest) {
+                Ok(next) => members(next.rest, List::Cons { next.member, found }),
+                Err(error) => Result::Err { error }
+            },
+            RightBrace => done(Json::Object { found.reverse() }, pulled.rest),
+            // Neither a comma nor the end of the object.
+            _ => Result::Err { Error::Unexpected { pulled.at } }
+        },
+        Err(error) => Result::Err { error }
+    }
+}
+
+/// The one value that `input` is, or why it is not JSON.
+pub fn document(lexer: Lexer<Token>, input: TextView) -> Result<Json, Error> {
+    value(lexer.tokens(input, 0)).and_then(|parsed: Parsed| {
+        let (rest, lexed) = parsed.rest.next();
+        match lexed {
+            End => Result::Ok { parsed.value },
+            Token(_, found) => Result::Err { Error::Unexpected { found.start } },
+            Stuck => Result::Err { Error::Unmatched { rest.at() } }
+        }
+    })
+}
