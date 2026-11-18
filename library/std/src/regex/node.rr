@@ -164,7 +164,10 @@ impl Nodes {
     // A number this table does not have is read as the node that matches
     // nothing.
     fn entry(self: Self, node: Node) -> Entry {
-        self.entries.get(node.number as u64).unwrap_or(Entry { shape: Shape::Empty, empty: false })
+        match self.entries.get(node.number as u64) {
+            Some(entry) => entry,
+            None => Entry { shape: Shape::Empty, empty: false }
+        }
     }
 
     /// Whether `node` matches the empty string.
