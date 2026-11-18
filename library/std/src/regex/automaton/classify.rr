@@ -88,7 +88,7 @@ fn live_states(found: Explored, next: [u32; ?]) -> [bool; ?] {
     let states = found.states();
     // The states that accept.
     let (_, accepting) = while [state = 0, accepting = List::Nil] (state < states) {
-        let accepts = found.winners.get(state).unwrap_or(Option::None).is_some();
+        let accepts = found.winners.get_or(state, Option::None).is_some();
         (state + 1, if accepts { List::Cons { state as u32, accepting } } else { accepting })
     };
     // No state is live yet.
@@ -103,7 +103,7 @@ pub fn kinds(found: Explored, next: [u32; ?]) -> Vec<u64> {
     let live = live_states(found, next);
     let (_, kinds) = while [state = 0, kinds = Vec::new()] (state < found.states()) {
         let kind = if array::get(live, state as i64) {
-            kind_of(found.winners.get(state).unwrap_or(Option::None).is_some(), stays_put(next, state, classes), leaves(next, live, state, classes))
+            kind_of(found.winners.get_or(state, Option::None).is_some(), stays_put(next, state, classes), leaves(next, live, state, classes))
         } else { 0 };
         (state + 1, kinds.push(kind))
     };

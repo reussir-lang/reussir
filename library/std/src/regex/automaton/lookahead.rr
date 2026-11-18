@@ -103,7 +103,7 @@ impl LoopOptimizer {
                     (at + 1, marks.push(0))
                 };
                 let (_, marked) = while [byte = (0 as u64), marks = grown] (byte < 256) {
-                    let old = marks.get(first + byte).unwrap_or(0);
+                    let old = marks.get_or(first + byte, 0);
                     (byte + 1, if leaving.contains(byte) { marks.set(first + byte, old | bit) } else { marks })
                 };
                 let grown = LoopOptimizer {
@@ -246,7 +246,7 @@ impl LoopOptimizer {
     /// Four vectors of sixteen bytes for every run.
     pub fn vectors(self: Self) -> [u8; ?] {
         let fours = self.fours;
-        let words = array::tabulate<[u32; ?]>(fours.len(), |run: i64| fours.get(run as u64).unwrap_or(0));
+        let words = array::tabulate<[u32; ?]>(fours.len(), |run: i64| fours.get_or(run as u64, 0));
         array::tabulate<[u8; ?]>(fours.len() * 64, |at: i64| {
             let word = array::get(words, at / 64);
             vectors::lane(word, (at as u64) % 64)
