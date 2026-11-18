@@ -79,7 +79,11 @@ struct StateTable {
 // `others` with `rule` in front of them, unless `node` matches nothing: the
 // derivative of nothing is nothing, so such a rule never matches again.
 fn keep(rule: u32, node: Node, others: List<Live>) -> List<Live> {
-    if node == Node::nothing() { others } else { List::Cons { Live { rule, node }, others } }
+    if node == Node::nothing() {
+        others
+    } else {
+        List::Cons { Live { rule, node }, others }
+    }
 }
 
 // The rules that can match at all, numbered from `rule`, in their order.

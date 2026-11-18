@@ -56,7 +56,11 @@ fn places_from(kinds: Vec<u64>, state: u64, free: [u64; 7], places: [u64; ?]) ->
         let kind = kinds.get_or(state, 0) as i64;
         let place = array::get(free, kind);
         // Every dead state takes the number 0, so it stays free.
-        let free = if kind == 0 { free } else { array::set(free, kind, place + 1) };
+        let free = if kind == 0 {
+            free
+        } else {
+            array::set(free, kind, place + 1)
+        };
         places_from(kinds, state + 1, free, array::set(places, state as i64, place))
     }
 }
@@ -80,7 +84,11 @@ fn next_by_place(next: [u32; ?], places: [u64; ?], classes: u64, at: u64, table:
         let target = array::get(next, at as i64) as i64;
         let to = array::get(places, target) as u32;
         let cell = (from * classes + at % classes) as i64;
-        let table = if from == 0 { table } else { array::set(table, cell, to) };
+        let table = if from == 0 {
+            table
+        } else {
+            array::set(table, cell, to)
+        };
         next_by_place(next, places, classes, at + 1, table)
     }
 }

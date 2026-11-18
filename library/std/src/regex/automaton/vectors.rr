@@ -52,15 +52,29 @@ pub fn stretches(set: Bits) -> List<ByteRange> {
 /// byte, two for a longer stretch.
 pub fn few(set: Bits) -> Option<List<ByteRange>> {
     let found = stretches(set);
-    let cost = found.fold_left(0, |cost: u64, stretch: ByteRange| if stretch.start == stretch.end { cost + 1 } else { cost + 2 });
-    if cost <= 4 { Option::Some { found } } else { Option::None }
+    let cost = found.fold_left(0, |cost: u64, stretch: ByteRange| {
+        if stretch.start == stretch.end {
+            cost + 1
+        } else {
+            cost + 2
+        }
+    });
+    if cost <= 4 {
+        Option::Some { found }
+    } else {
+        Option::None
+    }
 }
 
 // The stretches of one byte (`wide` false) or of more.
 fn chosen(stretches: List<ByteRange>, wide: bool) -> List<ByteRange> {
     match stretches {
         Nil => List::Nil,
-        Cons(stretch, rest) => if (stretch.start != stretch.end) == wide { List::Cons { stretch, chosen(rest, wide) } } else { chosen(rest, wide) }
+        Cons(stretch, rest) => if (stretch.start != stretch.end) == wide {
+            List::Cons { stretch, chosen(rest, wide) }
+        } else {
+            chosen(rest, wide)
+        }
     }
 }
 
@@ -68,7 +82,8 @@ fn chosen(stretches: List<ByteRange>, wide: bool) -> List<ByteRange> {
 fn stretch_at(stretches: List<ByteRange>, place: u64, otherwise: ByteRange) -> ByteRange {
     match stretches {
         Nil => otherwise,
-        Cons(stretch, rest) => if place == 0 { stretch } else { stretch_at(rest, place - 1, otherwise) }
+        Cons(stretch, _) if place == 0 => stretch,
+        Cons(_, rest) => stretch_at(rest, place - 1, otherwise)
     }
 }
 

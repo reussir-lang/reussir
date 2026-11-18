@@ -23,7 +23,11 @@ fn sources_impl(next: [u32; ?], classes: u64, at: u64, last: i64, into: [List<u3
     if at == array::dim(next, 0) { into } else {
         let target = array::get(next, at as i64) as i64;
         let again = at % classes != 0 && target == last;
-        let into = if again { into } else { entered(into, target, (at / classes) as u32) };
+        let into = if again {
+            into
+        } else {
+            entered(into, target, (at / classes) as u32)
+        };
         sources_impl(next, classes, at + 1, target, into)
     }
 }
@@ -89,7 +93,12 @@ fn live_states(found: Explored, next: [u32; ?]) -> [bool; ?] {
     // The states that accept.
     let (_, accepting) = while [state = 0, accepting = List::Nil] (state < states) {
         let accepts = found.winners.get_or(state, Option::None).is_some();
-        (state + 1, if accepts { List::Cons { state as u32, accepting } } else { accepting })
+        let accepting = if accepts {
+            List::Cons { state as u32, accepting }
+        } else {
+            accepting
+        };
+        (state + 1, accepting)
     };
     // No state is live yet.
     let none = array::splat<[bool; ?]>(states, false);
