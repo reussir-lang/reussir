@@ -134,18 +134,6 @@ fn gap(gaps: Gaps, start: u32, end: u32) -> Gaps {
     Gaps { found: with_characters(gaps.found, gaps.from, start), from: end }
 }
 
-// Whether two iterators of the same length yield the same stretches.
-fn same(first: Iter<u32, u32>, second: Iter<u32, u32>) -> bool {
-    match first.next() {
-        More(a, first_rest) => match second.next() {
-            More(b, second_rest) if a.key == b.key && a.value == b.value => same(first_rest, second_rest),
-            // Another stretch.
-            _ => false
-        },
-        Done => true
-    }
-}
-
 impl CharSet {
     pub fn empty() -> Self {
         CharSet { stretches: WavlMap::new() }
@@ -234,7 +222,7 @@ impl CharSet {
 
 impl PartialEq for CharSet {
     fn eq(self: Self, other: Self) -> bool {
-        self.stretches.len() == other.stretches.len() && same(self.stretches.iter(), other.stretches.iter())
+        self.stretches == other.stretches
     }
 }
 
