@@ -85,11 +85,20 @@ impl LoopOptimizer {
         match self.assigned.get(leaving) {
             Some(number) => (self, number),
             None => {
-                let number = self.assigned.len();
+                // The record lets go of its tables before one is written:
+                // a table that is held twice is copied by a write.
+                let words = self.words;
+                let vectors = self.vectors;
+                let lookup = self.lookup;
+                let assigned = self.assigned;
+                let nibbles = self.nibbles;
+                let free = self.free;
+                let shuffled = self.shuffled;
+                let number = assigned.len();
                 let first = encoding::table_at(number);
                 let bit = encoding::table_bit(number);
                 // The first set of a table brings the table.
-                let (_, grown) = while [at = self.lookup.len(), marks = self.lookup] (at < first + 256) {
+                let (_, grown) = while [at = lookup.len(), marks = lookup] (at < first + 256) {
                     (at + 1, marks.push(0))
                 };
                 let (_, marked) = while [byte = (0 as u64), marks = grown] (byte < 256) {
@@ -97,13 +106,13 @@ impl LoopOptimizer {
                     (byte + 1, if leaving.contains(byte) { marks.set(first + byte, old | bit) } else { marks })
                 };
                 let grown = LoopOptimizer {
-                    words: self.words,
-                    vectors: self.vectors,
+                    words,
+                    vectors,
                     lookup: marked,
-                    assigned: self.assigned.insert(leaving, number),
-                    nibbles: self.nibbles,
-                    free: self.free,
-                    shuffled: self.shuffled
+                    assigned: assigned.insert(leaving, number),
+                    nibbles,
+                    free,
+                    shuffled
                 };
                 (grown, number)
             }
@@ -118,22 +127,31 @@ impl LoopOptimizer {
         match self.shuffled.get(set) {
             Some(word) => (self, word),
             None => {
+                // The record lets go of its tables before one is written:
+                // a table that is held twice is copied by a write.
+                let words = self.words;
+                let vectors = self.vectors;
+                let lookup = self.lookup;
+                let assigned = self.assigned;
+                let nibbles = self.nibbles;
+                let free = self.free;
+                let shuffled = self.shuffled;
                 let count = rows.len();
-                let fresh = self.free < count;
-                let used = if fresh { 0 } else { 8 - self.free };
-                let (_, grown) = while [added = (0 as u64), pairs = self.nibbles] (fresh && added < 32) {
+                let fresh = free < count;
+                let used = if fresh { 0 } else { 8 - free };
+                let (_, grown) = while [added = (0 as u64), pairs = nibbles] (fresh && added < 32) {
                     (added + 1, pairs.push(0))
                 };
                 let first = grown.len() - 32;
                 let word = encoding::shuffle_word(first, (((1 as u64) << count) - 1) << used);
                 let grown = LoopOptimizer {
-                    words: self.words,
-                    vectors: self.vectors,
-                    lookup: self.lookup,
-                    assigned: self.assigned,
+                    words,
+                    vectors,
+                    lookup,
+                    assigned,
                     nibbles: shuffle::with_rows(grown, first, set, rows, used),
                     free: 8 - used - count,
-                    shuffled: self.shuffled.insert(set, word)
+                    shuffled: shuffled.insert(set, word)
                 };
                 (grown, word)
             }
@@ -142,14 +160,23 @@ impl LoopOptimizer {
 
     // One more run: its word and its four vectors.
     fn push(self: Self, word: u64, bytes: Four) -> Self {
+        // The record lets go of its tables before one is written:
+        // a table that is held twice is copied by a write.
+        let words = self.words;
+        let vectors = self.vectors;
+        let lookup = self.lookup;
+        let assigned = self.assigned;
+        let nibbles = self.nibbles;
+        let free = self.free;
+        let shuffled = self.shuffled;
         LoopOptimizer {
-            words: self.words.push(word),
-            vectors: vectors::four(self.vectors, bytes),
-            lookup: self.lookup,
-            assigned: self.assigned,
-            nibbles: self.nibbles,
-            free: self.free,
-            shuffled: self.shuffled
+            words: words.push(word),
+            vectors: vectors::four(vectors, bytes),
+            lookup,
+            assigned,
+            nibbles,
+            free,
+            shuffled
         }
     }
 
