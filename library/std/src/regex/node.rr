@@ -135,7 +135,7 @@ fn place(sorted: List<Node>, node: Node) -> List<Node> {
 }
 
 // What the children of a union or of an intersection come to.
-struct Gathered {
+struct [value] Gathered {
     // A child decides the whole: every string for a union, none for an
     // intersection.
     decided: bool,
