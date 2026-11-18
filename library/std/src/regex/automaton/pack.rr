@@ -26,7 +26,6 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
     let shift = while [shift = 3] ((1 << shift) < columns) { shift + 1 };
     let first_run = array::get(starts, 3);
     let words = runs.words();
-    let vectors = runs.vectors();
     let marks = runs.lookup();
     let pairs = runs.nibbles();
     let first_classes = array::tabulate<[u64; ?]>(columns, |column: i64| firsts.get(column as u64).unwrap_or(0));
@@ -50,7 +49,7 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
     });
     let winner_cells = array::tabulate<[u32; ?]>(array::get(starts, 5), |place: i64| array::get(rules, place));
     let word_cells = array::tabulate<[u64; ?]>(words.len(), |at: i64| words.get(at as u64).unwrap_or(0));
-    let vector_cells = array::tabulate<[u8; ?]>(vectors.len(), |at: i64| vectors.get(at as u64).unwrap_or(0));
+    let vector_cells = runs.vectors();
     let mark_cells = array::tabulate<[u8; ?]>(marks.len(), |at: i64| marks.get(at as u64).unwrap_or(0));
     let pair_cells = array::tabulate<[u8; ?]>(pairs.len(), |at: i64| pairs.get(at as u64).unwrap_or(0));
     Automaton {
