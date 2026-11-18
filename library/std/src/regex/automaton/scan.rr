@@ -25,11 +25,7 @@ impl Automaton {
     /// match count from the beginning of `input`.
     pub fn longest(self: Self, input: TextView) -> (TextView, Option<Match>) {
         match self.unsafe_longest(input.unsafe_data_ptr(), input.len(), 0) {
-            Matched(found) => match input.slice_byte(found.end, input.len()) {
-                Some(rest) => (rest, Option::Some { found }),
-                // A match ends within the text it is found in.
-                None => (input, Option::None)
-            },
+            Matched(found) => (input.drop_byte(found.end), Option::Some { found }),
             Nothing => (input, Option::None)
         }
     }

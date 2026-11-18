@@ -46,6 +46,13 @@ fn check_view(base: Text) {
     check(suffix.slice_byte(6, suffix.len()).unwrap_or_panic().is_empty());
     check(suffix.slice_byte(7, suffix.len()).is_none());
     check(suffix.slice_byte(18446744073709551615, suffix.len()).is_none());
+    check(suffix.drop_byte(0).offset() == 3 && suffix.drop_byte(0).len() == 6);
+    check(suffix.drop_byte(1).offset() == 4 && suffix.drop_byte(1).head_char().is_none());
+    check(suffix.drop_byte(2).offset() == 5 && suffix.drop_byte(2).eq_str("猫!"));
+    check(suffix.drop_byte(6).is_empty() && suffix.drop_byte(6).offset() == base.len());
+    check(suffix.drop_byte(7).is_empty() && suffix.drop_byte(7).offset() == base.len());
+    let past = suffix.drop_byte(18446744073709551615);
+    check(past.is_empty() && past.offset() == base.len());
     let inside = suffix.tail_byte().unwrap_or_panic();
     check(inside.offset() == 4 && inside.len() == 5);
     check(inside.byte_at(0).unwrap_or_panic() == 187);

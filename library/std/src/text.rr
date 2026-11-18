@@ -172,6 +172,13 @@ impl TextView {
         } } }
     }
 
+    /// Removes the first `count` bytes, or all of them when the view has
+    /// fewer.
+    pub fn drop_byte(self: Self, count: u64) -> Self {
+        let dropped = if count < self.length { count } else { self.length };
+        TextView { base: self.base, offset: self.offset + dropped, length: self.length - dropped }
+    }
+
     fn decode_at(self: Self, index: u64) -> Option<(char, u64)> {
         if index >= self.length { Option::None } else {
             match self.base.decode_char(self.offset + index) {
