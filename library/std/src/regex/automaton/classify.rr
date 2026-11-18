@@ -9,28 +9,31 @@ import std::collections::pure::list::List;
 import std::option::Option;
 import std::regex::automaton::explore::Explored;
 
-// For every state, the states with a transition into it.
-fn sources(next: [u32; ?], states: u64, classes: u64) -> Vec<List<u32>> {
-    let (_, empty) = while [state = 0, into = Vec::new()] (state < states) {
-        (state + 1, into.push(List::Nil))
-    };
-    let (_, into) = while [at = 0, into = empty] (at < states * classes) {
-        let target = array::get(next, at as i64) as u64;
+// `into` with the state of every transition of `next` from its cell `at` on
+// among the sources of the state the transition leads to.
+fn sources_impl(next: [u32; ?], classes: u64, at: u64, into: [List<u32>; ?]) -> [List<u32>; ?] {
+    if at == array::dim(next, 0) { into } else {
+        let target = array::get(next, at as i64) as i64;
         let from = (at / classes) as u32;
-        (at + 1, into.set(target, List::Cons { from, into.get(target).unwrap_or(List::Nil) }))
-    };
-    into
+        let known = array::get(into, target);
+        sources_impl(next, classes, at + 1, array::set(into, target, List::Cons { from, known }))
+    }
+}
+
+// For every state, the states with a transition into it.
+fn sources(next: [u32; ?], states: u64, classes: u64) -> [List<u32>; ?] {
+    sources_impl(next, classes, 0, array::splat<[List<u32>; ?]>(states, List::Nil))
 }
 
 // Marks every state that reaches one of `pending`, which are live.
-fn mark(live: Vec<bool>, into: Vec<List<u32>>, pending: List<u32>) -> Vec<bool> {
+fn mark(live: [bool; ?], into: [List<u32>; ?], pending: List<u32>) -> [bool; ?] {
     match pending {
         Nil => live,
         Cons(state, rest) => {
-            let at = state as u64;
-            if live.get(at).unwrap_or(true) { mark(live, into, rest) } else {
-                let more = into.get(at).unwrap_or(List::Nil).fold_left(rest, |rest: List<u32>, from: u32| List::Cons { from, rest });
-                mark(live.set(at, true), into, more)
+            let at = state as i64;
+            if array::get(live, at) { mark(live, into, rest) } else {
+                let more = array::get(into, at).fold_left(rest, |rest: List<u32>, from: u32| List::Cons { from, rest });
+                mark(array::set(live, at, true), into, more)
             }
         }
     }
@@ -55,10 +58,10 @@ fn kind_of(accepts: bool, stays: bool, leaves: bool) -> u64 {
 }
 
 // Whether some class leads `state` to another live state.
-fn leaves(next: [u32; ?], live: Vec<bool>, state: u64, classes: u64) -> bool {
+fn leaves(next: [u32; ?], live: [bool; ?], state: u64, classes: u64) -> bool {
     let (_, any) = while [class = 0, any = false] (class < classes && !any) {
         let to = array::get(next, (state * classes + class) as i64) as u64;
-        (class + 1, to != state && live.get(to).unwrap_or(false))
+        (class + 1, to != state && array::get(live, to as i64))
     };
     any
 }
@@ -73,13 +76,15 @@ fn stays_put(next: [u32; ?], state: u64, classes: u64) -> bool {
 
 // Whether each state of `found`, whose transitions are `next`, is live: it
 // reaches a state that accepts.
-fn live_states(found: Explored, next: [u32; ?]) -> Vec<bool> {
+fn live_states(found: Explored, next: [u32; ?]) -> [bool; ?] {
     let states = found.states();
-    // The states that accept, and no state live yet.
-    let (_, accepting, none) = while [state = 0, accepting = List::Nil, live = Vec::new()] (state < states) {
+    // The states that accept.
+    let (_, accepting) = while [state = 0, accepting = List::Nil] (state < states) {
         let accepts = found.winners.get(state).unwrap_or(Option::None).is_some();
-        (state + 1, if accepts { List::Cons { state as u32, accepting } } else { accepting }, live.push(false))
+        (state + 1, if accepts { List::Cons { state as u32, accepting } } else { accepting })
     };
+    // No state is live yet.
+    let none = array::splat<[bool; ?]>(states, false);
     mark(none, sources(next, states, found.classes), accepting)
 }
 
@@ -89,7 +94,7 @@ pub fn kinds(found: Explored, next: [u32; ?]) -> Vec<u64> {
     let classes = found.classes;
     let live = live_states(found, next);
     let (_, kinds) = while [state = 0, kinds = Vec::new()] (state < found.states()) {
-        let kind = if live.get(state).unwrap_or(false) {
+        let kind = if array::get(live, state as i64) {
             kind_of(found.winners.get(state).unwrap_or(Option::None).is_some(), stays_put(next, state, classes), leaves(next, live, state, classes))
         } else { 0 };
         (state + 1, kinds.push(kind))
