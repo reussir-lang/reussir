@@ -181,31 +181,42 @@ impl LoopOptimizer {
         }
     }
 
+    // The run of a state that stays on `set`, as a bit of the lookup table,
+    // which marks the bytes outside the set.
+    fn add_table(self: Self, set: Bits) -> Self {
+        let (optimizer, number) = self.assign_table(set.complement());
+        optimizer.push(encoding::table_word(number), vectors::blank())
+    }
+
+    // The run of a state that stays on `set`, as shuffle tables for the
+    // bytes outside the set when they are at most eight rectangles, else as
+    // a bit of the lookup table.
+    fn add_outside(self: Self, set: Bits) -> Self {
+        let outside = shuffle::rows(set.complement());
+        if outside.len() <= 8 {
+            let (optimizer, word) = self.assign_shuffle(set.complement(), outside);
+            optimizer.push(word, vectors::blank())
+        } else { self.add_table(set) }
+    }
+
+    // The run of a state that stays on `set`, as shuffle tables for the set
+    // when it is at most eight rectangles, else for the bytes outside it.
+    fn add_inside(self: Self, set: Bits) -> Self {
+        let inside = shuffle::rows(set);
+        if inside.len() <= 8 {
+            let (optimizer, word) = self.assign_shuffle(set, inside);
+            optimizer.push(encoding::inside(word), vectors::blank())
+        } else { self.add_outside(set) }
+    }
+
     // The run of a state that stays on `set`, of which neither the bytes
     // nor the other bytes are a few stretches: shuffle tables for the set
     // or for the other bytes when either is at most eight rectangles, else
-    // a bit of the lookup table.
+    // a bit of the lookup table. The rectangles are only found where the
+    // target has shuffle tables, and those of the other bytes only when the
+    // set has too many.
     fn add_wide(self: Self, set: Bits) -> Self {
-        let inside = shuffle::rows(set);
-        let outside = shuffle::rows(set.complement());
-        let blank = vectors::blank();
-        let fits = native::shuffles() && inside.len() <= 8;
-        let way: u64 = (if fits { 1 } else { 0 }) + (if !fits && native::shuffles() && outside.len() <= 8 { 2 } else { 0 });
-        match way {
-            1 => {
-                let (optimizer, word) = self.assign_shuffle(set, inside);
-                optimizer.push(encoding::inside(word), blank)
-            },
-            2 => {
-                let (optimizer, word) = self.assign_shuffle(set.complement(), outside);
-                optimizer.push(word, blank)
-            },
-            // 0: the lookup table.
-            _ => {
-                let (optimizer, number) = self.assign_table(set.complement());
-                optimizer.push(encoding::table_word(number), blank)
-            }
-        }
+        if native::shuffles() { self.add_inside(set) } else { self.add_table(set) }
     }
 
     /// Adds the run of a state that stays on `set`, which is not empty: the
