@@ -29,6 +29,20 @@ impl Matches {
     pub fn at(self: Self) -> u64 {
         self.at
     }
+
+    /// Folds over the matches left in the stream, one after another. The
+    /// fold ends at the end of the text, where no rule matches, or at a
+    /// match of no bytes; the place where it ended comes with the value.
+    pub fn fold<A>(self: Self, initial: A, step: (A, Match) -> A) -> (A, u64) {
+        // `step` is passed along to the fold of the rest, which lets the
+        // compiler specialize the fold for a closure written at the call;
+        // a loop clones the closure for every match.
+        let (rest, found) = self.next();
+        match found {
+            Matched(found) => rest.fold(step(initial, found), step),
+            Nothing => (initial, rest.at())
+        }
+    }
 }
 
 impl Reading {
