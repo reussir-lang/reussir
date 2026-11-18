@@ -980,6 +980,36 @@ fn from_list_impl<K : Ord, V>(
     }
 }
 
+// The outcome of comparing a subtree with the entries that an iterator
+// yields next: the iterator after those entries, or that an entry differed.
+enum [value] Compared<K, V> {
+    Same(Iter<K, V>),
+    Differ
+}
+
+// Compares the entries of `t`, in ascending order, with the next entries of
+// `others`: the keys must be equal and the values `==`. The walk stops at
+// the first entry that differs.
+fn equals_impl<K : Ord, V : PartialEq>(
+    t : Tree<K, V>,
+    others : Iter<K, V>
+) -> Compared<K, V> {
+    match t {
+        Tree::Leaf => Compared::Same { others },
+        Tree::Node(_, l, k, v, rt) => match equals_impl(l, others) {
+            Compared::Same(others) => match others.next() {
+                Step::More(other, rest) => match k.cmp(other.key) {
+                    Ordering::Equal if v == other.value => equals_impl(rt, rest),
+                    // Another key, or another value.
+                    _ => Compared::Differ
+                },
+                Step::Done => Compared::Differ
+            },
+            Compared::Differ => Compared::Differ
+        }
+    }
+}
+
 impl<K : Ord, V> WavlMap<K, V> {
     /// Creates an empty map. O(1).
     pub fn new() -> Self {
@@ -1389,10 +1419,16 @@ impl<K : Ord, V> WavlMap<K, V> {
 
 impl<K : Ord, V : PartialEq> WavlMap<K, V> {
     /// Returns true when both maps contain equal values for exactly the same
-    /// keys. O(n log n).
+    /// keys. O(n).
     pub fn equals(self : Self, other : Self) -> bool {
-        self.len() == other.len()
-            && self.is_submap_by(other, |left, right| left == right)
+        if self.len() == other.len() {
+            match equals_impl(self.root, other.iter()) {
+                Compared::Same(_) => true,
+                Compared::Differ => false
+            }
+        } else {
+            false
+        }
     }
 
     /// Returns true when every entry in this map also occurs in `other`.
