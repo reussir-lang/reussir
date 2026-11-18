@@ -293,9 +293,13 @@ fn lower(regex: Regex) -> (ByteRegex, bool) {
         Not(inner) => {
             let (a, text) = lower(inner);
             let all = ByteRegex::Not { a };
-            // Over text, only strings of whole characters.
-            let within = ByteRegex::Intersect { ByteRegex::Star { encodings(CharSet::full()) }, all };
-            (if text { within } else { all }, text)
+            if text {
+                // Over text, only strings of whole characters.
+                let whole = ByteRegex::Star { encodings(CharSet::full()) };
+                (ByteRegex::Intersect { whole, all }, true)
+            } else {
+                (all, false)
+            }
         }
     }
 }
