@@ -142,6 +142,9 @@ struct Gathered {
     // The sets among the children, as one set.
     set: Bits,
     has_set: bool,
+    // Whether the children make the whole match the empty string: one of
+    // them does for a union, each of them for an intersection.
+    empty: bool,
     // The other children.
     rest: List<Node>
 }
@@ -198,14 +201,6 @@ impl Nodes {
     /// The node that matches every string: the complement of nothing.
     pub fn all(self: Self) -> (Self, Node) {
         self.intern(Shape::Not { Node::nothing() }, true)
-    }
-
-    fn is_all(self: Self, node: Node) -> bool {
-        match self.entry(node).shape {
-            Not(inner) => inner == Node::nothing(),
-            // Any other shape.
-            _ => false
-        }
     }
 
     /// One byte of the classes in `classes`.
@@ -280,20 +275,32 @@ impl Nodes {
             // Nothing is dropped by its number, without a read.
             Cons(child, rest) if child == Node::nothing() => self.gather_union(rest, so_far),
             Cons(child, rest) => {
-                let next = match self.entry(child).shape {
+                let entry = self.entry(child);
+                let empty = so_far.empty || entry.empty;
+                let next = match entry.shape {
                     Empty => so_far,
                     Set(classes) => Gathered {
                         decided: so_far.decided,
                         set: so_far.set.union(classes),
                         has_set: true,
+                        empty,
                         rest: so_far.rest
                     },
                     Union(inner) => self.gather_union(inner, so_far),
-                    // Any other shape is a child of its own.
-                    _ => Gathered {
-                        decided: so_far.decided || self.is_all(child),
+                    // The complement of nothing is the node of every string.
+                    Not(inner) => Gathered {
+                        decided: so_far.decided || inner == Node::nothing(),
                         set: so_far.set,
                         has_set: so_far.has_set,
+                        empty,
+                        rest: place(so_far.rest, child)
+                    },
+                    // Any other shape is a child of its own.
+                    _ => Gathered {
+                        decided: so_far.decided,
+                        set: so_far.set,
+                        has_set: so_far.has_set,
+                        empty,
                         rest: place(so_far.rest, child)
                     }
                 };
@@ -308,22 +315,34 @@ impl Nodes {
         match children {
             Nil => so_far,
             Cons(child, rest) => {
-                let next = match self.entry(child).shape {
-                    Empty => Gathered { decided: true, set: so_far.set, has_set: so_far.has_set, rest: so_far.rest },
+                let entry = self.entry(child);
+                let empty = so_far.empty && entry.empty;
+                let next = match entry.shape {
+                    Empty => Gathered {
+                        decided: true,
+                        set: so_far.set,
+                        has_set: so_far.has_set,
+                        empty,
+                        rest: so_far.rest
+                    },
                     Set(classes) => Gathered {
                         decided: so_far.decided,
                         set: so_far.set.intersect(classes),
                         has_set: true,
+                        empty,
                         rest: so_far.rest
                     },
                     Intersect(inner) => self.gather_intersect(inner, so_far),
-                    // Any other shape is a child of its own, but for the
-                    // node of every string.
+                    // The complement of nothing is the node of every string,
+                    // which an intersection drops.
+                    Not(inner) if inner == Node::nothing() => so_far,
+                    // Any other shape is a child of its own.
                     _ => Gathered {
                         decided: so_far.decided,
                         set: so_far.set,
                         has_set: so_far.has_set,
-                        rest: if self.is_all(child) { so_far.rest } else { place(so_far.rest, child) }
+                        empty,
+                        rest: place(so_far.rest, child)
                     }
                 };
                 self.gather_intersect(rest, next)
@@ -335,8 +354,9 @@ impl Nodes {
     pub fn union_all(self: Self, children: List<Node>) -> (Self, Node) {
         let gathered = self.gather_union(
             children,
-            Gathered { decided: false, set: Bits::empty(), has_set: false, rest: List::Nil }
+            Gathered { decided: false, set: Bits::empty(), has_set: false, empty: false, rest: List::Nil }
         );
+        let empty = gathered.empty;
         if gathered.decided { self.all() } else {
             let (table, set) = self.set(gathered.set);
             // An empty set is the node of nothing, which a union drops.
@@ -344,7 +364,7 @@ impl Nodes {
             match members {
                 Nil => (table, Node::nothing()),
                 Cons(only, more) => if more.is_nil() { (table, only) } else {
-                    table.intern(Shape::Union { members }, members.any(|member: Node| table.accepts_empty(member)))
+                    table.intern(Shape::Union { members }, empty)
                 }
             }
         }
@@ -354,8 +374,9 @@ impl Nodes {
     pub fn intersect_all(self: Self, children: List<Node>) -> (Self, Node) {
         let gathered = self.gather_intersect(
             children,
-            Gathered { decided: false, set: Bits::full(), has_set: false, rest: List::Nil }
+            Gathered { decided: false, set: Bits::full(), has_set: false, empty: true, rest: List::Nil }
         );
+        let empty = gathered.empty;
         // Sets that share no class match nothing together.
         if gathered.decided || (gathered.has_set && gathered.set.is_empty()) { (self, Node::nothing()) } else {
             let (table, set) = self.set(gathered.set);
@@ -363,7 +384,7 @@ impl Nodes {
             match members {
                 Nil => table.all(),
                 Cons(only, more) => if more.is_nil() { (table, only) } else {
-                    table.intern(Shape::Intersect { members }, members.all(|member: Node| table.accepts_empty(member)))
+                    table.intern(Shape::Intersect { members }, empty)
                 }
             }
         }
