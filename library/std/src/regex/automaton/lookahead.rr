@@ -41,9 +41,10 @@ import std::regex::automaton::vectors::Four;
 /// added after another. The lookup tables and the shuffle tables are shared
 /// by all runs, as the `GLOBAL_LUT` of Paguroidea's `LoopOptimizer` is.
 pub struct LoopOptimizer {
-    // The word of every run added, and its four vectors.
+    // The word of every run added, and the four bytes that its vectors
+    // repeat, in one word.
     words: Vec<u64>,
-    vectors: Vec<u8>,
+    fours: Vec<u32>,
     // The lookup tables one after another, and the number of every set of
     // leaving bytes that has a bit in them.
     lookup: Vec<u8>,
@@ -69,7 +70,7 @@ impl LoopOptimizer {
     pub fn new() -> Self {
         LoopOptimizer {
             words: Vec::new(),
-            vectors: Vec::new(),
+            fours: Vec::new(),
             lookup: Vec::new(),
             assigned: HashMap::new(),
             nibbles: Vec::new(),
@@ -88,7 +89,7 @@ impl LoopOptimizer {
                 // The record lets go of its tables before one is written:
                 // a table that is held twice is copied by a write.
                 let words = self.words;
-                let vectors = self.vectors;
+                let fours = self.fours;
                 let lookup = self.lookup;
                 let assigned = self.assigned;
                 let nibbles = self.nibbles;
@@ -107,7 +108,7 @@ impl LoopOptimizer {
                 };
                 let grown = LoopOptimizer {
                     words,
-                    vectors,
+                    fours,
                     lookup: marked,
                     assigned: assigned.insert(leaving, number),
                     nibbles,
@@ -130,7 +131,7 @@ impl LoopOptimizer {
                 // The record lets go of its tables before one is written:
                 // a table that is held twice is copied by a write.
                 let words = self.words;
-                let vectors = self.vectors;
+                let fours = self.fours;
                 let lookup = self.lookup;
                 let assigned = self.assigned;
                 let nibbles = self.nibbles;
@@ -146,7 +147,7 @@ impl LoopOptimizer {
                 let word = encoding::shuffle_word(first, (((1 as u64) << count) - 1) << used);
                 let grown = LoopOptimizer {
                     words,
-                    vectors,
+                    fours,
                     lookup,
                     assigned,
                     nibbles: shuffle::with_rows(grown, first, set, rows, used),
@@ -158,12 +159,12 @@ impl LoopOptimizer {
         }
     }
 
-    // One more run: its word and its four vectors.
+    // One more run: its word and the four bytes of its vectors.
     fn push(self: Self, word: u64, bytes: Four) -> Self {
         // The record lets go of its tables before one is written:
         // a table that is held twice is copied by a write.
         let words = self.words;
-        let vectors = self.vectors;
+        let fours = self.fours;
         let lookup = self.lookup;
         let assigned = self.assigned;
         let nibbles = self.nibbles;
@@ -171,7 +172,7 @@ impl LoopOptimizer {
         let shuffled = self.shuffled;
         LoopOptimizer {
             words: words.push(word),
-            vectors: vectors::four(vectors, bytes),
+            fours: fours.push(vectors::packed(bytes)),
             lookup,
             assigned,
             nibbles,
@@ -232,8 +233,13 @@ impl LoopOptimizer {
     }
 
     /// Four vectors of sixteen bytes for every run.
-    pub fn vectors(self: Self) -> Vec<u8> {
-        self.vectors
+    pub fn vectors(self: Self) -> [u8; ?] {
+        let fours = self.fours;
+        let words = array::tabulate<[u32; ?]>(fours.len(), |run: i64| fours.get(run as u64).unwrap_or(0));
+        array::tabulate<[u8; ?]>(fours.len() * 64, |at: i64| {
+            let word = array::get(words, at / 64);
+            vectors::lane(word, (at as u64) % 64)
+        })
     }
 
     /// The lookup tables one after another, 256 bytes each.
