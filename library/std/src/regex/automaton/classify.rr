@@ -9,20 +9,28 @@ import std::collections::pure::list::List;
 import std::option::Option;
 import std::regex::automaton::explore::Explored;
 
+// `into` with `from` among the sources of `target`.
+fn entered(into: [List<u32>; ?], target: i64, from: u32) -> [List<u32>; ?] {
+    let known = array::get(into, target);
+    array::set(into, target, List::Cons { from, known })
+}
+
 // `into` with the state of every transition of `next` from its cell `at` on
-// among the sources of the state the transition leads to.
-fn sources_impl(next: [u32; ?], classes: u64, at: u64, into: [List<u32>; ?]) -> [List<u32>; ?] {
+// among the sources of the state the transition leads to. `last` is the
+// state that the cell before leads to: a state that leads to one state on
+// classes next to each other is entered once for them.
+fn sources_impl(next: [u32; ?], classes: u64, at: u64, last: i64, into: [List<u32>; ?]) -> [List<u32>; ?] {
     if at == array::dim(next, 0) { into } else {
         let target = array::get(next, at as i64) as i64;
-        let from = (at / classes) as u32;
-        let known = array::get(into, target);
-        sources_impl(next, classes, at + 1, array::set(into, target, List::Cons { from, known }))
+        let again = at % classes != 0 && target == last;
+        let into = if again { into } else { entered(into, target, (at / classes) as u32) };
+        sources_impl(next, classes, at + 1, target, into)
     }
 }
 
 // For every state, the states with a transition into it.
 fn sources(next: [u32; ?], states: u64, classes: u64) -> [List<u32>; ?] {
-    sources_impl(next, classes, 0, array::splat<[List<u32>; ?]>(states, List::Nil))
+    sources_impl(next, classes, 0, 0, array::splat<[List<u32>; ?]>(states, List::Nil))
 }
 
 // Marks every state that reaches one of `pending`, which are live.
