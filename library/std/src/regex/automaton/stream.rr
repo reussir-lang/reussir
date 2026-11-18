@@ -30,6 +30,11 @@ impl Matches {
         self.at
     }
 
+    /// The text that the stream reads.
+    pub fn input(self: Self) -> TextView {
+        self.reading.input
+    }
+
     /// Folds over the matches left in the stream, one after another. The
     /// fold ends at the end of the text, where no rule matches, or at a
     /// match of no bytes; the place where it ended comes with the value.

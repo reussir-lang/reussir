@@ -1,0 +1,264 @@
+//! A lexer: rules that each have an action.
+//!
+//! An automaton answers which rule matches and where. A rule of a lexer is
+//! a regex with an `Action`, which says what the match is worth: a token,
+//! or nothing at all.
+//!
+//! ```text
+//! let rules = List::Cons { Rule::new(letters, Action::InvokeOnView { |word: TextView| Token::Word { word } }),
+//!     List::Cons { Rule::new(digits, Action::InvokeOnRange { |start: u64, end: u64| Token::Number { start, end } }),
+//!     List::Cons { Rule::new(plus, Action::Constant { Token::Plus }),
+//!     List::Cons { Rule::new(spaces, Action::Skip), List::Nil } } } };
+//! match Lexer::build(rules, 100) {
+//!     Ok(lexer) => lexer.fold(input, 0, 0, |count: u64, token: Token, found: Match| count + 1),
+//!     ...
+//! }
+//! ```
+//!
+//! `InvokeOnLexeme` is the general form: its action reads what it wants of
+//! the match and says whether the match gives a token. The other forms are
+//! the common cases of it, which read less of a match.
+//!
+//! The ends of a match count from the beginning of the text that the lexer
+//! was given, as those of the automaton do.
+
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::Matches;
+import std::regex::automaton::TooManyStates;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import std::result::Result;
+import std::text::TextView;
+
+/// A match as an action sees it: the text that was read, and where in it
+/// the match is.
+pub struct [value] Lexeme {
+    input: TextView,
+    found: Match
+}
+
+impl Lexeme {
+    /// The text that was read.
+    pub fn input(self: Self) -> TextView {
+        self.input
+    }
+
+    /// The match: its rule and its two ends.
+    pub fn found(self: Self) -> Match {
+        self.found
+    }
+
+    /// The rule that matched.
+    pub fn rule(self: Self) -> u32 {
+        self.found.rule
+    }
+
+    /// The index of the first byte of the match.
+    pub fn start(self: Self) -> u64 {
+        self.found.start
+    }
+
+    /// The index of the byte after the match.
+    pub fn end(self: Self) -> u64 {
+        self.found.end
+    }
+
+    /// The number of bytes of the match: none for a match that is written
+    /// to end before it begins, which `Action::run` may be given.
+    pub fn len(self: Self) -> u64 {
+        if self.found.end > self.found.start {
+            self.found.end - self.found.start
+        } else {
+            0
+        }
+    }
+
+    /// The bytes of the match: those that the text has, for a match that
+    /// is written to reach past its end.
+    pub fn view(self: Self) -> TextView {
+        self.input.drop_byte(self.found.start).take_byte(self.len())
+    }
+}
+
+/// What an action makes of a match.
+pub enum [value] Emit<R> {
+    /// The match is this token.
+    Value(R),
+    /// The match gives no token: the stream goes on to the next match.
+    Skipped
+}
+
+/// What a rule does with its match.
+pub enum Action<R> {
+    /// Every match is this token.
+    Constant(R),
+    /// The token is made from the bytes of the match.
+    InvokeOnView(TextView -> R),
+    /// The token is made from the two ends of the match: the index of its
+    /// first byte and the index of the byte after it.
+    InvokeOnRange((u64, u64) -> R),
+    /// The match gives no token, as that of a space or a comment.
+    Skip,
+    /// The action reads what it wants of the match and says whether it
+    /// gives a token.
+    InvokeOnLexeme(Lexeme -> Emit<R>)
+}
+
+impl<R> Action<R> {
+    /// What the action makes of the match `found` of `input`.
+    pub fn run(self: Self, input: TextView, found: Match) -> Emit<R> {
+        // The lexeme is made only for the forms that read the text.
+        match self {
+            Constant(value) => Emit::Value { value },
+            InvokeOnView(make) => Emit::Value { make(Lexeme { input, found }.view()) },
+            InvokeOnRange(make) => Emit::Value { make(found.start, found.end) },
+            Skip => Emit::Skipped,
+            InvokeOnLexeme(decide) => decide(Lexeme { input, found })
+        }
+    }
+}
+
+/// A rule of a lexer: what it matches, and what a match is worth.
+pub struct Rule<R> {
+    pub regex: Regex,
+    pub action: Action<R>
+}
+
+impl<R> Rule<R> {
+    /// The rule that runs `action` on a match of `regex`.
+    pub fn new(regex: Regex, action: Action<R>) -> Self {
+        Rule { regex, action }
+    }
+}
+
+/// The automaton of a list of rules, and the action of each.
+pub struct Lexer<R> {
+    automaton: Automaton,
+    // The action of every rule, in the order of the rules.
+    actions: Vec<Action<R>>
+}
+
+/// What a stream of tokens gives.
+pub enum [value] Lexed<R> {
+    /// A token, and the match it was made of.
+    Token(R, Match),
+    /// No token: the text has ended, or the stream began past its end.
+    End,
+    /// No token, before the end of the text: no rule matches where the
+    /// stream stands, or the match has no bytes.
+    Stuck
+}
+
+/// The tokens of a text, one after another. A token is pulled with `next`,
+/// which answers the stream after it, as `Matches::next` does:
+///
+/// ```text
+/// let (rest, lexed) = tokens.next();
+/// ```
+pub struct [value] Tokens<R> {
+    // The action of every rule, in the order of the rules.
+    actions: Vec<Action<R>>,
+    matches: Matches
+}
+
+// The regex of every rule, over bytes, in the order of the rules.
+fn regexes<R>(rules: List<Rule<R>>) -> List<ByteRegex> {
+    rules.map(|rule: Rule<R>| rule.regex.to_bytes())
+}
+
+// The action of every rule, in the order of the rules.
+fn actions<R>(rules: List<Rule<R>>) -> Vec<Action<R>> {
+    rules.fold_left(Vec::new(), |actions: Vec<Action<R>>, rule: Rule<R>| actions.push(rule.action))
+}
+
+impl<R> Lexer<R> {
+    /// The lexer of `rules`. Where two rules match the same bytes, the
+    /// earlier one wins. The search for the states of the automaton gives
+    /// up when it has found more than `limit` of them.
+    pub fn build(rules: List<Rule<R>>, limit: u64) -> Result<Lexer<R>, TooManyStates> {
+        match Automaton::build(regexes(rules), limit) {
+            Ok(automaton) => Result::Ok { Lexer { automaton, actions: actions(rules) } },
+            Err(error) => Result::Err { error }
+        }
+    }
+
+    /// The automaton of the rules.
+    pub fn automaton(self: Self) -> Automaton {
+        self.automaton
+    }
+
+    /// The number of rules.
+    pub fn rules(self: Self) -> u64 {
+        self.actions.len()
+    }
+
+    /// The action of the rule `rule`.
+    pub fn action(self: Self, rule: u32) -> Option<Action<R>> {
+        self.actions.get(rule as u64)
+    }
+
+    /// The tokens of `input`, one after another, from the byte `from` on.
+    pub fn tokens(self: Self, input: TextView, from: u64) -> Tokens<R> {
+        Tokens { actions: self.actions, matches: self.automaton.matches(input, from) }
+    }
+
+    /// Folds over the tokens of `input`, one after another: the first match
+    /// begins at the byte `from`, and each next one where the one before
+    /// ended. `step` is given every token with the match it was made of.
+    /// The fold ends at the end of the input, where no rule matches, or at
+    /// a match of no bytes; the place where it ended comes with the value.
+    pub fn fold<A>(self: Self, input: TextView, from: u64, initial: A, step: (A, R, Match) -> A) -> (A, u64) {
+        self.tokens(input, from).fold(initial, step)
+    }
+}
+
+impl<R> Tokens<R> {
+    /// The token of the first match from where the stream stands whose
+    /// action gives one, and the stream after it. Without a token the
+    /// stream stays where the matches ended, past those that gave none:
+    /// at the end of the text after `End`, before it after `Stuck`.
+    pub fn next(self: Self) -> (Tokens<R>, Lexed<R>) {
+        let actions = self.actions;
+        // A loop, not a call of `next` on the rest: a text may have any
+        // number of matches in a row that give no token.
+        let (matches, lexed, _) = while [matches = self.matches, lexed = Lexed::End, going = true] (going) {
+            let (rest, found) = matches.next();
+            match found {
+                // A rule of the automaton has an action; the read still
+                // needs a value to fall back on.
+                Matched(found) => match actions.get_or(found.rule as u64, Action::Skip).run(rest.input(), found) {
+                    Value(value) => (rest, Lexed::Token { value, found }, false),
+                    Skipped => (rest, lexed, true)
+                },
+                Nothing if rest.at() < rest.input().len() => (rest, Lexed::Stuck, false),
+                Nothing => (rest, lexed, false)
+            }
+        };
+        (Tokens { actions, matches }, lexed)
+    }
+
+    /// The index of the byte where the next match would begin.
+    pub fn at(self: Self) -> u64 {
+        self.matches.at()
+    }
+
+    /// Folds over the tokens left in the stream, one after another. `step`
+    /// is given every token with the match it was made of. The fold ends
+    /// at the end of the text, where no rule matches, or at a match of no
+    /// bytes; the place where it ended comes with the value.
+    pub fn fold<A>(self: Self, initial: A, step: (A, R, Match) -> A) -> (A, u64) {
+        // `step` is passed along to the fold of the rest, as in
+        // `Matches::fold`.
+        let (rest, lexed) = self.next();
+        match lexed {
+            Token(value, found) => rest.fold(step(initial, value, found), step),
+            // The end of the text, or a place where the stream is stuck.
+            _ => (initial, rest.at())
+        }
+    }
+}

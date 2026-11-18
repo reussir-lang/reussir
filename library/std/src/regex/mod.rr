@@ -6,8 +6,11 @@
 //! - `node`: regexes as nodes of a table, where equal regexes are the same
 //!   node, and their derivatives.
 //! - `automaton`: the states and transitions of a list of rules.
+//! - `lexer`: rules that each have an action, and the tokens that the
+//!   actions make of the matches of a text.
 
 pub mod alphabet;
 pub mod automaton;
+pub mod lexer;
 pub mod node;
 pub mod tree;
