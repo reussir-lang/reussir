@@ -409,7 +409,11 @@ impl Nodes {
         if gathered.decided { self.all() } else {
             let (table, set) = self.set(gathered.set);
             // An empty set is the node of nothing, which a union drops.
-            let members = if set == Node::nothing() { gathered.rest } else { place(gathered.rest, set) };
+            let members = if set == Node::nothing() {
+                gathered.rest
+            } else {
+                place(gathered.rest, set)
+            };
             match members {
                 Nil => (table, Node::nothing()),
                 Cons(only, more) => if more.is_nil() { (table, only) } else {
@@ -431,7 +435,11 @@ impl Nodes {
         // Sets that share no class match nothing together.
         if gathered.decided || (gathered.has_set && gathered.set.is_empty()) { (self, Node::nothing()) } else {
             let (table, set) = self.set(gathered.set);
-            let members = if gathered.has_set { place(gathered.rest, set) } else { gathered.rest };
+            let members = if gathered.has_set {
+                place(gathered.rest, set)
+            } else {
+                gathered.rest
+            };
             match members {
                 Nil => table.all(),
                 Cons(only, more) => if more.is_nil() { (table, only) } else {
@@ -469,7 +477,8 @@ impl Nodes {
         match self.entry(node).shape {
             Empty => (self, Node::nothing()),
             Epsilon => (self, Node::nothing()),
-            Set(classes) => (self, if classes.contains(class) { Node::epsilon() } else { Node::nothing() }),
+            Set(classes) if classes.contains(class) => (self, Node::epsilon()),
+            Set(_) => (self, Node::nothing()),
             Concat(first, second) => {
                 let (table, after) = self.derive(first, class);
                 let (table, left) = table.concat(after, second);

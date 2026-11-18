@@ -50,7 +50,11 @@ fn last_end(entries: List<Entry<u32, u32>>, otherwise: u32) -> u32 {
 // `stretches` and the stretch from `start` up to `end` when it has a member;
 // it must not overlap or touch another.
 fn with_stretch(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> {
-    if start < end { stretches.insert(start, end) } else { stretches }
+    if start < end {
+        stretches.insert(start, end)
+    } else {
+        stretches
+    }
 }
 
 // `stretches` and the characters whose code points run from `start` up to
@@ -93,9 +97,17 @@ fn cut(stretches: WavlMap<u32, u32>, start: u32, end: u32) -> WavlMap<u32, u32> 
     let reach = last_end(inside, before.value);
     let outside = remove_keys(stretches, inside);
     // It keeps its part from `end`.
-    let outside = if reach > end { outside.insert(end, reach) } else { outside };
+    let outside = if reach > end {
+        outside.insert(end, reach)
+    } else {
+        outside
+    };
     // A stretch that begins before `start` keeps its part before `start`.
-    if before.value > start { outside.insert(before.key, start) } else { outside }
+    if before.value > start {
+        outside.insert(before.key, start)
+    } else {
+        outside
+    }
 }
 
 // `found` and the stretches of `entries`, each ended at `end` at the latest.

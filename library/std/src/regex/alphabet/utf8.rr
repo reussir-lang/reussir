@@ -56,7 +56,11 @@ fn width(point: u32) -> u64 {
 // After `most`, when the stretch runs across it: after `most` the encoding
 // is one byte longer.
 fn across(lo: u32, hi: u32, most: u32) -> Cut {
-    if lo <= most && most < hi { Cut::After { most } } else { Cut::Nowhere }
+    if lo <= most && most < hi {
+        Cut::After { most }
+    } else {
+        Cut::Nowhere
+    }
 }
 
 // Where to cut a stretch of one width so that the bytes holding its low
@@ -65,8 +69,16 @@ fn across(lo: u32, hi: u32, most: u32) -> Cut {
 fn ragged(lo: u32, hi: u32, bits: u32) -> Cut {
     let mask = (1 << bits) - 1;
     if (lo >> bits) == (hi >> bits) { Cut::Nowhere } else {
-        let after_lo = if (lo & mask) != 0 { Cut::After { lo | mask } } else { Cut::Nowhere };
-        let before_hi = if (hi & mask) != mask { Cut::After { ((hi >> bits) << bits) - 1 } } else { Cut::Nowhere };
+        let after_lo = if (lo & mask) != 0 {
+            Cut::After { lo | mask }
+        } else {
+            Cut::Nowhere
+        };
+        let before_hi = if (hi & mask) != mask {
+            Cut::After { ((hi >> bits) << bits) - 1 }
+        } else {
+            Cut::Nowhere
+        };
         after_lo.or(before_hi)
     }
 }
@@ -101,7 +113,11 @@ fn sequence(lo: u32, hi: u32) -> Utf8Sequence {
 fn stretch(lo: u32, hi: u32, found: List<Utf8Sequence>) -> List<Utf8Sequence> {
     let longer = across(lo, hi, 0x7F).or(across(lo, hi, 0x7FF)).or(across(lo, hi, 0xFFFF));
     // One byte is any range; later bytes must be whole.
-    let whole = if hi > 0x7F { ragged(lo, hi, 6).or(ragged(lo, hi, 12)).or(ragged(lo, hi, 18)) } else { Cut::Nowhere };
+    let whole = if hi > 0x7F {
+        ragged(lo, hi, 6).or(ragged(lo, hi, 12)).or(ragged(lo, hi, 18))
+    } else {
+        Cut::Nowhere
+    };
     match longer.or(whole) {
         After(last) => stretch(last + 1, hi, stretch(lo, last, found)),
         Nowhere => List::Cons { sequence(lo, hi), found }
