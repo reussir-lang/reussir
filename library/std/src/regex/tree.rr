@@ -34,6 +34,8 @@ pub enum Regex {
     Union(Regex, Regex),
     Intersect(Regex, Regex),
     Star(Regex),
+    /// Once or more.
+    Plus(Regex),
     Not(Regex)
 }
 
@@ -174,7 +176,7 @@ impl Regex {
 
     /// `self` once or more.
     pub fn plus(self: Self) -> Self {
-        Regex::Concat { self, Regex::Star { self } }
+        Regex::Plus { self }
     }
 
     /// `self` or the empty string.
@@ -300,6 +302,11 @@ fn lower(regex: Regex) -> (ByteRegex, bool) {
         Star(inner) => {
             let (a, text) = lower(inner);
             (ByteRegex::Star { a }, text)
+        },
+        Plus(inner) => {
+            // Lowered once: both places hold the same regex over bytes.
+            let (a, text) = lower(inner);
+            (ByteRegex::Concat { a, ByteRegex::Star { a } }, text)
         },
         Not(inner) => {
             let (a, text) = lower(inner);
