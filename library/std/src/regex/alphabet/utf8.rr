@@ -96,30 +96,36 @@ fn sequence(lo: u32, hi: u32) -> Utf8Sequence {
     }
 }
 
-// Feeds `step` the sequences of the code points from `lo` to `hi`, both
-// included, in order. No surrogate lies between them.
-fn stretch<A>(lo: u32, hi: u32, acc: A, step: (A, Utf8Sequence) -> A) -> A {
+// `found` and the sequences of the code points from `lo` to `hi`, both
+// included, the last in front. No surrogate lies between them.
+fn stretch(lo: u32, hi: u32, found: List<Utf8Sequence>) -> List<Utf8Sequence> {
     let longer = across(lo, hi, 0x7F).or(across(lo, hi, 0x7FF)).or(across(lo, hi, 0xFFFF));
     // One byte is any range; later bytes must be whole.
     let whole = if hi > 0x7F { ragged(lo, hi, 6).or(ragged(lo, hi, 12)).or(ragged(lo, hi, 18)) } else { Cut::Nowhere };
     match longer.or(whole) {
-        After(last) => stretch(last + 1, hi, stretch(lo, last, acc, step), step),
-        Nowhere => step(acc, sequence(lo, hi))
+        After(last) => stretch(last + 1, hi, stretch(lo, last, found)),
+        Nowhere => List::Cons { sequence(lo, hi), found }
     }
 }
 
-/// Feeds `step` the sequences of the encodings of the members of `set`, in
-/// the order of the bytes. Together they hold the encoding of every member
-/// and no other string.
-pub fn fold_sequences<A>(set: CharSet, initial: A, step: (A, Utf8Sequence) -> A) -> A {
-    feed(set.iter(), initial, step)
-}
-
-fn feed<A>(stretches: Iter<u32, u32>, acc: A, step: (A, Utf8Sequence) -> A) -> A {
+// `found` and the sequences of `stretches`, the last in front.
+fn feed(stretches: Iter<u32, u32>, found: List<Utf8Sequence>) -> List<Utf8Sequence> {
     match stretches.next() {
-        More(entry, rest) => feed(rest, stretch(entry.key, entry.value - 1, acc, step), step),
-        Done => acc
+        More(entry, rest) => feed(rest, stretch(entry.key, entry.value - 1, found)),
+        Done => found
     }
+}
+
+/// The sequences of the encodings of the members of `set`, in the order of
+/// the bytes. Together they hold the encoding of every member and no other
+/// string.
+pub fn sequences(set: CharSet) -> List<Utf8Sequence> {
+    feed(set.iter(), List::Nil).reverse()
+}
+
+/// Feeds `step` the sequences of `set`, in the order of the bytes.
+pub fn fold_sequences<A>(set: CharSet, initial: A, step: (A, Utf8Sequence) -> A) -> A {
+    sequences(set).fold_left(initial, step)
 }
 
 impl Utf8Sequence {
