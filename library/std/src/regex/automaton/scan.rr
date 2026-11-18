@@ -58,7 +58,11 @@ pub fn scan(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u
     // A start state that neither accepts nor has a run takes its first
     // step in one read.
     let quick = encoding::kind(automaton.start) == 6 && from < length;
-    let (begun, after) = if quick { (array::get(automaton.first, native::byte_at(bytes, from) as i64), from + 1) } else { (automaton.start, from) };
+    let (begun, after) = if quick {
+        (array::get(automaton.first, native::byte_at(bytes, from) as i64), from + 1)
+    } else {
+        (automaton.start, from)
+    };
     let (_, _, last, end, _) = while [cell = begun, at = after, last = 0, end = from, going = true] (going) {
         match encoding::kind(cell) {
             // The dead state: the match is the last one found.
@@ -88,7 +92,11 @@ fn stepped(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u3
 // far.
 fn arrived(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, at: u64, last: u32, end: u64) -> (u32, u64, u32, u64, bool) {
     let kind = encoding::kind(cell);
-    let moved = if kind >= 3 { skip(automaton, bytes, length, cell, at) } else { at };
+    let moved = if kind >= 3 {
+        skip(automaton, bytes, length, cell, at)
+    } else {
+        at
+    };
     match kind {
         // Accepts, and only its run goes on.
         3 => (cell, moved, cell, moved, false),
@@ -121,7 +129,11 @@ fn skip(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, 
         _ => native::shuffled(ptr::offset(array::unsafe_data_ptr(automaton.nibbles), encoding::first(word) as i64, PtrArithFlag::Inbounds), encoding::bits(word) as u8, inside, bytes, at, length)
     };
     // The vectors leave fewer than sixteen bytes at the end unread.
-    if reached + 16 > length { settled(automaton, bytes, length, cell, reached) } else { reached }
+    if reached + 16 > length {
+        settled(automaton, bytes, length, cell, reached)
+    } else {
+        reached
+    }
 }
 
 // Reads on byte by byte while the steps of the automaton stay in the state

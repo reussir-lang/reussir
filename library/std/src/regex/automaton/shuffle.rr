@@ -20,7 +20,12 @@ import std::regex::alphabet::bits::Bits;
 // each.
 fn row_of(set: Bits, row: u64) -> u64 {
     let (_, low) = while [half = (0 as u64), low = (0 as u64)] (half < 16) {
-        (half + 1, if set.contains(row * 16 + half) { low | ((1 as u64) << half) } else { low })
+        let low = if set.contains(row * 16 + half) {
+            low | ((1 as u64) << half)
+        } else {
+            low
+        };
+        (half + 1, low)
     };
     low
 }
@@ -38,7 +43,12 @@ fn has(rows: List<u64>, row: u64) -> bool {
 fn rows_from(set: Bits, row: u64, seen: List<u64>) -> List<u64> {
     if row == 16 { seen } else {
         let low = row_of(set, row);
-        rows_from(set, row + 1, if low == 0 || has(seen, low) { seen } else { List::Cons { low, seen } })
+        let seen = if low == 0 || has(seen, low) {
+            seen
+        } else {
+            List::Cons { low, seen }
+        };
+        rows_from(set, row + 1, seen)
     }
 }
 
@@ -47,9 +57,18 @@ fn rows_from(set: Bits, row: u64, seen: List<u64>) -> List<u64> {
 fn with_row(pairs: Vec<u8>, first: u64, set: Bits, low: u64, bit: u8) -> Vec<u8> {
     let (_, marked) = while [half = (0 as u64), pairs = pairs] (half < 16) {
         let lower = pairs.get_or(first + half, 0);
-        let lows = if ((low >> half) & 1) == 1 { pairs.set(first + half, lower | bit) } else { pairs };
+        let lows = if ((low >> half) & 1) == 1 {
+            pairs.set(first + half, lower | bit)
+        } else {
+            pairs
+        };
         let upper = lows.get_or(first + 16 + half, 0);
-        (half + 1, if row_of(set, half) == low { lows.set(first + 16 + half, upper | bit) } else { lows })
+        let both = if row_of(set, half) == low {
+            lows.set(first + 16 + half, upper | bit)
+        } else {
+            lows
+        };
+        (half + 1, both)
     };
     marked
 }

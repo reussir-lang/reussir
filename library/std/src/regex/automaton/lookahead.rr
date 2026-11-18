@@ -61,7 +61,12 @@ pub struct LoopOptimizer {
 fn stays(table: [u32; ?], sets: ByteClasses, state: u64, classes: u64) -> Bits {
     let (_, bytes) = while [class = 0, bytes = Bits::empty()] (class < classes) {
         let here = array::get(table, (state * classes + class) as i64) as u64 == state;
-        (class + 1, if here { bytes.union(sets.class(class).unwrap_or(Bits::empty())) } else { bytes })
+        let bytes = if here {
+            bytes.union(sets.class(class).unwrap_or(Bits::empty()))
+        } else {
+            bytes
+        };
+        (class + 1, bytes)
     };
     bytes
 }
@@ -104,7 +109,12 @@ impl LoopOptimizer {
                 };
                 let (_, marked) = while [byte = (0 as u64), marks = grown] (byte < 256) {
                     let old = marks.get_or(first + byte, 0);
-                    (byte + 1, if leaving.contains(byte) { marks.set(first + byte, old | bit) } else { marks })
+                    let marks = if leaving.contains(byte) {
+                        marks.set(first + byte, old | bit)
+                    } else {
+                        marks
+                    };
+                    (byte + 1, marks)
                 };
                 let grown = LoopOptimizer {
                     words,
@@ -216,7 +226,11 @@ impl LoopOptimizer {
     // target has shuffle tables, and those of the other bytes only when the
     // set has too many.
     fn add_wide(self: Self, set: Bits) -> Self {
-        if native::shuffles() { self.add_inside(set) } else { self.add_table(set) }
+        if native::shuffles() {
+            self.add_inside(set)
+        } else {
+            self.add_table(set)
+        }
     }
 
     /// Adds the run of a state that stays on `set`, which is not empty: the
