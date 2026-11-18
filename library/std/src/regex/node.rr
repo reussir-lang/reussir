@@ -149,6 +149,18 @@ struct Gathered {
     rest: List<Node>
 }
 
+impl Gathered {
+    // A union with no child yet.
+    fn union() -> Self {
+        Gathered { decided: false, set: Bits::empty(), has_set: false, empty: false, rest: List::Nil }
+    }
+
+    // An intersection with no child yet.
+    fn intersection() -> Self {
+        Gathered { decided: false, set: Bits::full(), has_set: false, empty: true, rest: List::Nil }
+    }
+}
+
 impl Nodes {
     /// A table with the two nodes that every table has.
     pub fn new() -> Self {
@@ -272,12 +284,33 @@ impl Nodes {
     fn gather_union(self: Self, children: List<Node>, so_far: Gathered) -> Gathered {
         match children {
             Nil => so_far,
-            // Nothing is dropped by its number, without a read.
-            Cons(child, rest) if child == Node::nothing() => self.gather_union(rest, so_far),
+            Cons(child, rest) => self.gather_union(rest, self.gather_union_child(child, so_far))
+        }
+    }
+
+    // The derivative by `class` of every node of `children`, gathered as
+    // the children of a union.
+    fn derive_union(self: Self, children: List<Node>, class: u64, so_far: Gathered) -> (Self, Gathered) {
+        match children {
+            Nil => (self, so_far),
             Cons(child, rest) => {
+                let (table, derived) = self.derive(child, class);
+                let next = table.gather_union_child(derived, so_far);
+                table.derive_union(rest, class, next)
+            }
+        }
+    }
+
+    // One more child of a union.
+    fn gather_union_child(self: Self, child: Node, so_far: Gathered) -> Gathered {
+        match child.number {
+            // Nothing is dropped by its number, without a read.
+            0 => so_far,
+            // Any other node: its shape decides.
+            _ => {
                 let entry = self.entry(child);
                 let empty = so_far.empty || entry.empty;
-                let next = match entry.shape {
+                match entry.shape {
                     Empty => so_far,
                     Set(classes) => Gathered {
                         decided: so_far.decided,
@@ -303,8 +336,7 @@ impl Nodes {
                         empty,
                         rest: place(so_far.rest, child)
                     }
-                };
-                self.gather_union(rest, next)
+                }
             }
         }
     }
@@ -314,48 +346,65 @@ impl Nodes {
     fn gather_intersect(self: Self, children: List<Node>, so_far: Gathered) -> Gathered {
         match children {
             Nil => so_far,
+            Cons(child, rest) => self.gather_intersect(rest, self.gather_intersect_child(child, so_far))
+        }
+    }
+
+    // The derivative by `class` of every node of `children`, gathered as
+    // the children of an intersection.
+    fn derive_intersect(self: Self, children: List<Node>, class: u64, so_far: Gathered) -> (Self, Gathered) {
+        match children {
+            Nil => (self, so_far),
             Cons(child, rest) => {
-                let entry = self.entry(child);
-                let empty = so_far.empty && entry.empty;
-                let next = match entry.shape {
-                    Empty => Gathered {
-                        decided: true,
-                        set: so_far.set,
-                        has_set: so_far.has_set,
-                        empty,
-                        rest: so_far.rest
-                    },
-                    Set(classes) => Gathered {
-                        decided: so_far.decided,
-                        set: so_far.set.intersect(classes),
-                        has_set: true,
-                        empty,
-                        rest: so_far.rest
-                    },
-                    Intersect(inner) => self.gather_intersect(inner, so_far),
-                    // The complement of nothing is the node of every string,
-                    // which an intersection drops.
-                    Not(inner) if inner == Node::nothing() => so_far,
-                    // Any other shape is a child of its own.
-                    _ => Gathered {
-                        decided: so_far.decided,
-                        set: so_far.set,
-                        has_set: so_far.has_set,
-                        empty,
-                        rest: place(so_far.rest, child)
-                    }
-                };
-                self.gather_intersect(rest, next)
+                let (table, derived) = self.derive(child, class);
+                let next = table.gather_intersect_child(derived, so_far);
+                table.derive_intersect(rest, class, next)
+            }
+        }
+    }
+
+    // One more child of an intersection.
+    fn gather_intersect_child(self: Self, child: Node, so_far: Gathered) -> Gathered {
+        let entry = self.entry(child);
+        let empty = so_far.empty && entry.empty;
+        match entry.shape {
+            Empty => Gathered {
+                decided: true,
+                set: so_far.set,
+                has_set: so_far.has_set,
+                empty,
+                rest: so_far.rest
+            },
+            Set(classes) => Gathered {
+                decided: so_far.decided,
+                set: so_far.set.intersect(classes),
+                has_set: true,
+                empty,
+                rest: so_far.rest
+            },
+            Intersect(inner) => self.gather_intersect(inner, so_far),
+            // The complement of nothing is the node of every string,
+            // which an intersection drops.
+            Not(inner) if inner == Node::nothing() => so_far,
+            // Any other shape is a child of its own.
+            _ => Gathered {
+                decided: so_far.decided,
+                set: so_far.set,
+                has_set: so_far.has_set,
+                empty,
+                rest: place(so_far.rest, child)
             }
         }
     }
 
     /// Any of `children`.
     pub fn union_all(self: Self, children: List<Node>) -> (Self, Node) {
-        let gathered = self.gather_union(
-            children,
-            Gathered { decided: false, set: Bits::empty(), has_set: false, empty: false, rest: List::Nil }
-        );
+        let gathered = self.gather_union(children, Gathered::union());
+        self.union_gathered(gathered)
+    }
+
+    // The node of the union of the children in `gathered`.
+    fn union_gathered(self: Self, gathered: Gathered) -> (Self, Node) {
         let empty = gathered.empty;
         if gathered.decided { self.all() } else {
             let (table, set) = self.set(gathered.set);
@@ -372,10 +421,12 @@ impl Nodes {
 
     /// All of `children`.
     pub fn intersect_all(self: Self, children: List<Node>) -> (Self, Node) {
-        let gathered = self.gather_intersect(
-            children,
-            Gathered { decided: false, set: Bits::full(), has_set: false, empty: true, rest: List::Nil }
-        );
+        let gathered = self.gather_intersect(children, Gathered::intersection());
+        self.intersect_gathered(gathered)
+    }
+
+    // The node of the intersection of the children in `gathered`.
+    fn intersect_gathered(self: Self, gathered: Gathered) -> (Self, Node) {
         let empty = gathered.empty;
         // Sets that share no class match nothing together.
         if gathered.decided || (gathered.has_set && gathered.set.is_empty()) { (self, Node::nothing()) } else {
@@ -398,18 +449,6 @@ impl Nodes {
     /// Both `first` and `second`.
     pub fn intersect(self: Self, first: Node, second: Node) -> (Self, Node) {
         self.intersect_all(List::Cons { first, List::Cons { second, List::Nil } })
-    }
-
-    // The derivative of every node of `children`.
-    fn derive_each(self: Self, children: List<Node>, class: u64) -> (Self, List<Node>) {
-        match children {
-            Nil => (self, List::Nil),
-            Cons(child, rest) => {
-                let (table, derived) = self.derive(child, class);
-                let (table, others) = table.derive_each(rest, class);
-                (table, List::Cons { derived, others })
-            }
-        }
     }
 
     /// The derivative of `node` by a class: the regex of what may follow one
@@ -447,12 +486,12 @@ impl Nodes {
                 table.concat(after, node)
             },
             Union(children) => {
-                let (table, derived) = self.derive_each(children, class);
-                table.union_all(derived)
+                let (table, gathered) = self.derive_union(children, class, Gathered::union());
+                table.union_gathered(gathered)
             },
             Intersect(children) => {
-                let (table, derived) = self.derive_each(children, class);
-                table.intersect_all(derived)
+                let (table, gathered) = self.derive_intersect(children, class, Gathered::intersection());
+                table.intersect_gathered(gathered)
             },
             Not(inner) => {
                 let (table, after) = self.derive(inner, class);
