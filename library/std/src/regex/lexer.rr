@@ -22,7 +22,7 @@
 //! The ends of a match count from the beginning of the text that the lexer
 //! was given, as those of the automaton do.
 
-import std::collections::cow::vec::Vec;
+import core::intrinsic::array;
 import std::collections::pure::list::List;
 import std::option::Option;
 import std::regex::automaton::Automaton;
@@ -140,7 +140,7 @@ impl<R> Rule<R> {
 pub struct Lexer<R> {
     automaton: Automaton,
     // The action of every rule, in the order of the rules.
-    actions: Vec<Action<R>>
+    actions: [Action<R>; ?]
 }
 
 /// What a stream of tokens gives.
@@ -162,7 +162,7 @@ pub enum [value] Lexed<R> {
 /// ```
 pub struct [value] Tokens<R> {
     // The action of every rule, in the order of the rules.
-    actions: Vec<Action<R>>,
+    actions: [Action<R>; ?],
     matches: Matches
 }
 
@@ -172,8 +172,15 @@ fn regexes<R>(rules: List<Rule<R>>) -> List<ByteRegex> {
 }
 
 // The action of every rule, in the order of the rules.
-fn actions<R>(rules: List<Rule<R>>) -> Vec<Action<R>> {
-    rules.fold_left(Vec::new(), |actions: Vec<Action<R>>, rule: Rule<R>| actions.push(rule.action))
+fn actions<R>(rules: List<Rule<R>>) -> [Action<R>; ?] {
+    // An array of counted elements is filled with one of them and then
+    // written slot by slot; it has one owner, so each write is in place.
+    let blank = array::splat<[Action<R>; ?]>(rules.len(), Action::Skip);
+    let (_, actions) = rules.fold_left((0, blank), |filled: (i64, [Action<R>; ?]), rule: Rule<R>| {
+        let (at, actions) = filled;
+        (at + 1, array::set(actions, at, rule.action))
+    });
+    actions
 }
 
 impl<R> Lexer<R> {
@@ -194,12 +201,16 @@ impl<R> Lexer<R> {
 
     /// The number of rules.
     pub fn rules(self: Self) -> u64 {
-        self.actions.len()
+        array::dim(self.actions, 0)
     }
 
     /// The action of the rule `rule`.
     pub fn action(self: Self, rule: u32) -> Option<Action<R>> {
-        self.actions.get(rule as u64)
+        if (rule as u64) < array::dim(self.actions, 0) {
+            Option::Some { array::get(self.actions, rule as i64) }
+        } else {
+            Option::None
+        }
     }
 
     /// The tokens of `input`, one after another, from the byte `from` on.
@@ -229,9 +240,9 @@ impl<R> Tokens<R> {
         let (matches, lexed, _) = while [matches = self.matches, lexed = Lexed::End, going = true] (going) {
             let (rest, found) = matches.next();
             match found {
-                // A rule of the automaton has an action; the read still
-                // needs a value to fall back on.
-                Matched(found) => match actions.get_or(found.rule as u64, Action::Skip).run(rest.input(), found) {
+                // The rule of a match is one of the lexer's, each of which
+                // has an action.
+                Matched(found) => match array::get(actions, found.rule as i64).run(rest.input(), found) {
                     Value(value) => (rest, Lexed::Token { value, found }, false),
                     Skipped => (rest, lexed, true)
                 },
