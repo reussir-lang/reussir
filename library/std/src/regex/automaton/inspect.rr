@@ -1,5 +1,5 @@
 //! An automaton one step at a time: its states, where they lead, which
-//! rule accepts in them, and their runs.
+//! rule accepts in them, their runs, and how a match can begin.
 
 import core::intrinsic::array;
 import std::option::Option;
@@ -51,6 +51,27 @@ impl Automaton {
         if kind >= 1 && kind <= 4 && place < array::dim(self.winners, 0) {
             Option::Some { array::get(self.winners, place as i64) }
         } else { Option::None }
+    }
+
+    /// The bytes that a match can begin with: those that do not lead the
+    /// start state to the dead state. A match of no bytes begins with none
+    /// of them: `accepts_empty` says whether there is one, at every place.
+    pub fn first_bytes(self: Self) -> Bits {
+        let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+            let bytes = if array::get(self.first, byte as i64) != 0 {
+                bytes.insert(byte)
+            } else {
+                bytes
+            };
+            (byte + 1, bytes)
+        };
+        bytes
+    }
+
+    /// Whether a rule matches no bytes: the start state accepts.
+    pub fn accepts_empty(self: Self) -> bool {
+        let kind = encoding::kind(self.start);
+        kind >= 1 && kind <= 4
     }
 
     /// The bytes on which `state` stays in itself.
