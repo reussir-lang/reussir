@@ -43,4 +43,19 @@ module @test {
     %2 = reussir.rc.create value(%1 : !list) : !rclist
     return %2 : !rclist
   }
+
+  // Under TBI the count of an immediate's dummy box can wrap to one, so a
+  // uniqueness test also asks that the value is a real box.
+  // CHECK-LABEL: func.func @is_unique
+  // CHECK: %[[ONE:.+]] = reussir.rc.is_unique
+  // TBI: %[[IMM:.+]] = reussir.rc.is_immediate(%{{.+}} :
+  // TBI: %[[BOX:.+]] = arith.xori %[[IMM]], %{{.+}} : i1
+  // TBI: %[[UNIQUE:.+]] = arith.andi %[[ONE]], %[[BOX]] : i1
+  // TBI: return %[[UNIQUE]]
+  // IMMORTAL-NOT: reussir.rc.is_immediate
+  // IMMORTAL: return %[[ONE]]
+  func.func @is_unique(%list: !rclist) -> i1 {
+    %unique = reussir.rc.is_unique (%list : !rclist) : i1
+    return %unique : i1
+  }
 }

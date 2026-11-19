@@ -125,8 +125,9 @@ namespace {
 //     expansion therefore takes its unique branch only for a value that is
 //     not one of the type's immediates (RcDecrementExpansion), and rc.inc
 //     only assumes `old >= 1` for real boxes. Under TBI `rc.is_unique` can
-//     then answer true for a wrapped dummy; no pass emits it for a type with
-//     immediates.
+//     then answer true for a wrapped dummy, so the special-pointer-tag pass
+//     joins `rc.is_immediate` to the tests of a program; a borrow entry's
+//     test only picks between two sound callees.
 //   * `rc.set` — the one decrementing store — skips the store for a
 //     recognized immediate (behind an unlikely branch), so a decrement never
 //     writes the dummy count.

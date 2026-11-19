@@ -19,6 +19,7 @@
 #include "Reussir/IR/ReussirTypes.h"
 #include "Reussir/Transformation/Passes.h"
 
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Pass/Pass.h>
@@ -86,6 +87,29 @@ struct NullaryVariantPattern
   }
 };
 
+// Under TBI the retains of an immediate count on its dummy box, whose count
+// can wrap to one, and an immediate is never unique. Only the tests present
+// now need the answer: those a later pass adds pick between sound paths.
+void guardUniquenessTests(mlir::ModuleOp module) {
+  llvm::SmallVector<ReussirRcIsUniqueOp> tests;
+  module.walk([&](ReussirRcIsUniqueOp op) {
+    if (op.getRcPtr().getType().mayCarrySpecialPointerTag())
+      tests.push_back(op);
+  });
+  for (ReussirRcIsUniqueOp op : tests) {
+    mlir::OpBuilder builder(op.getContext());
+    builder.setInsertionPointAfter(op);
+    mlir::Value isImmediate = ReussirRcIsImmediateOp::create(
+        builder, op.getLoc(), builder.getI1Type(), op.getRcPtr());
+    mlir::Value notImmediate = mlir::arith::XOrIOp::create(
+        builder, op.getLoc(), isImmediate,
+        mlir::arith::ConstantIntOp::create(builder, op.getLoc(), 1, 1));
+    auto unique = mlir::arith::AndIOp::create(builder, op.getLoc(),
+                                              op.getResult(), notImmediate);
+    op.getResult().replaceAllUsesExcept(unique, unique);
+  }
+}
+
 struct SpecialPointerTagPass
     : public impl::ReussirSpecialPointerTagPassBase<SpecialPointerTagPass> {
   using Base::Base;
@@ -101,6 +125,8 @@ struct SpecialPointerTagPass
     patterns.add<NullaryVariantPattern>(&getContext());
     if (mlir::failed(mlir::applyPatternsGreedily(module, std::move(patterns))))
       signalPassFailure();
+    if (encoding == kSpecialPtrTagTBI)
+      guardUniquenessTests(module);
   }
 };
 } // namespace
