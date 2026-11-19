@@ -285,31 +285,98 @@ static bool lendsLocalValue(mlir::func::CallOp call) {
   return false;
 }
 
+// Whether releasing a value of `type` can run code this pass cannot see: a
+// foreign cleanup hook, the drop of a closure, the release of a lock or of a
+// device buffer. A token is raw memory and an integer only returns its limbs,
+// so a record that reports an observable cleanup is asked member by member.
+static bool hasObservableCleanup(mlir::Type type,
+                                 llvm::SmallPtrSetImpl<mlir::Type> &seen) {
+  for (;;) {
+    if (!type)
+      return true;
+    if (auto rc = llvm::dyn_cast<RcType>(type)) {
+      type = rc.getElementType();
+    } else if (auto ref = llvm::dyn_cast<RefType>(type)) {
+      type = ref.getElementType();
+    } else if (auto nullable = llvm::dyn_cast<NullableType>(type)) {
+      type = nullable.getPtrTy();
+    } else if (auto cell = llvm::dyn_cast<CellType>(type)) {
+      if (cell.getMutex() || cell.getFlatlock() || cell.getRwlock())
+        return true;
+      type = cell.getElementType();
+    } else if (auto array = llvm::dyn_cast<ArrayType>(type);
+               array && !array.hasTargetAttr()) {
+      type = array.getElementType();
+    } else {
+      break;
+    }
+  }
+  if (isRCGMPIntegerType(type) || llvm::isa<TokenType>(type))
+    return false;
+  auto record = llvm::dyn_cast<RecordType>(type);
+  if (!record)
+    return !isTriviallyCopyable(type);
+  if (!record.getComplete())
+    return true;
+  if (!record.hasObservableCleanup() || !seen.insert(record).second)
+    return false;
+  return llvm::any_of(record.getMembers(), [&](mlir::Type member) {
+    return hasObservableCleanup(member, seen);
+  });
+}
+
+// Whether `op` only changes counts, tokens, or allocation.
+static bool isCountBookkeeping(mlir::Operation *op) {
+  return llvm::isa<
+      ReussirRcIncOp, ReussirRcFetchOp, ReussirRcFetchSubOp, ReussirRcSetOp,
+      ReussirRcReinterpretOp, ReussirRcCreateOp, ReussirRcCreateCompoundOp,
+      ReussirRcCreateVariantOp, ReussirRefAcquireOp, ReussirRefSpilledOp,
+      ReussirTokenAllocOp, ReussirTokenFreeOp, ReussirTokenEnsureOp,
+      ReussirTokenLaunderOp, ReussirTokenReallocOp>(op);
+}
+
+// Whether `op`, or an op nested in it, may release a value with such a
+// cleanup. Every op that is neither read-only nor count bookkeeping counts:
+// the decrement itself, a call of drop glue, a drop callback.
+static bool runsObservableCleanup(mlir::Operation *op) {
+  return op
+      ->walk([](mlir::Operation *nested) {
+        if (leavesCountsAlone(nested) || isCountBookkeeping(nested))
+          return mlir::WalkResult::advance();
+        llvm::SmallPtrSet<mlir::Type, 8> seen;
+        return llvm::any_of(nested->getOperandTypes(),
+                            [&](mlir::Type type) {
+                              return hasObservableCleanup(type, seen);
+                            })
+                   ? mlir::WalkResult::interrupt()
+                   : mlir::WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
 // Whether running `op` before a self call it used to follow is unobservable.
 // The op must be speculatable, since the call may not return, and its effects
 // must not conflict with the callee's. Besides pure ops, that admits reads of
 // immutable memory and the bookkeeping of retains and releases: counts,
 // tokens, and allocation. Another call, a store, or a read of memory the
 // callee may write does not qualify, and neither does a manual count change
-// (an `unsafe` retain or release), whose place the program chose. When the
-// call borrows a value that only this function keeps alive (`lends`), an op
-// that may release has to follow it as well.
+// (an `unsafe` retain or release), whose place the program chose, nor a
+// release with an observable cleanup. When the call borrows a value that only
+// this function keeps alive (`lends`), an op that may release has to follow
+// it as well.
 static bool canPrecedeSelfCall(mlir::Operation *op, bool lends) {
   if (llvm::isa<mlir::CallOpInterface>(op) || isUnsafeRcOperation(op))
     return false;
   if (auto load = llvm::dyn_cast<ReussirRefLoadOp>(op))
     return readsImmutableMemory(load);
-  if (llvm::isa<ReussirRcIncOp, ReussirRcDecOp, ReussirRcFetchOp,
-                ReussirRcFetchSubOp, ReussirRcSetOp, ReussirRcReinterpretOp,
-                ReussirRcCreateOp, ReussirRcCreateCompoundOp,
-                ReussirRcCreateVariantOp, ReussirRefAcquireOp, ReussirRefDropOp,
-                ReussirRefSpilledOp, ReussirTokenAllocOp, ReussirTokenFreeOp,
-                ReussirTokenEnsureOp, ReussirTokenLaunderOp,
-                ReussirTokenReallocOp>(op) ||
-      op->hasAttr(kExpandedDecrementAttr))
+  if (llvm::isa<ReussirRcDecOp, ReussirRefDropOp>(op) ||
+      isCountBookkeeping(op) || op->hasAttr(kExpandedDecrementAttr)) {
+    if (runsObservableCleanup(op))
+      return false;
     return !lends || leavesCountsAlone(op) ||
            llvm::isa<ReussirRcCreateOp, ReussirRcCreateCompoundOp,
                      ReussirRcCreateVariantOp, ReussirTokenAllocOp>(op);
+  }
   if (op->getNumRegions() == 0)
     return mlir::isPure(op);
   // Nested ops are judged one by one, so the region op only has to defer

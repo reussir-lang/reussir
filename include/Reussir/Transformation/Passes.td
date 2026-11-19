@@ -268,8 +268,10 @@ def ReussirTRMCRecursionAnalysisPass
     leaf is speculatable and has no effect that conflicts with the callee's:
     pure operations, reads of immutable memory, and the bookkeeping of retains
     and releases. Otherwise the call stays in place, as it does across a manual
-    count change (an `unsafe` retain or release) and across a release when the
-    call borrows a value that only this function keeps alive.
+    count change (an `unsafe` retain or release), across a release whose
+    cleanup is observable (a foreign hook, the drop of a closure), and across
+    a release when the call borrows a value that only this function keeps
+    alive.
     Because every return leaf has a sound rewrite, mixed functions — where
     some arms pass the recursive result through another call first — keep
     full coverage of their constructor arms.

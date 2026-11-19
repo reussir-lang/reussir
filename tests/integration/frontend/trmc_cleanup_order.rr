@@ -1,0 +1,66 @@
+// UNSUPPORTED: darwin
+// RUN: %rrc %s -Onone --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/trmc_cleanup_order.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -Oaggressive --relocation-mode pic -o %t.opt.o
+// RUN: %cc %t.opt.o %S/trmc_cleanup_order.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+extern "rust" [{
+    use reussir_rt::rc::Rc;
+    use std::sync::Arc;
+    extern "C" { static mut live_slot: *const (); }
+    // Shared by every texture: its strong count is 1 + the open handles.
+    fn live() -> Arc<()> {
+        unsafe {
+            if live_slot.is_null() { live_slot = Arc::into_raw(Arc::new(())); }
+            Arc::increment_strong_count(live_slot);
+            Arc::from_raw(live_slot)
+        }
+    }
+}];
+
+#[ffi(rust = "::reussir_rt::rc::Rc<::std::sync::Arc<()>>")]
+pub struct Handle;
+
+#[ffi(import)]
+fn open() -> Handle [{ Rc::new(live()) }];
+
+#[ffi(import)]
+fn open_count() -> u64 [{ (Arc::strong_count(&live()) - 2) as u64 }];
+
+struct Holder { id: u64, handle: Handle }
+enum List { Nil, Cons(u64, List) }
+
+// `holder` is used after the recursion, so its handle is open during it.
+fn hold(n: u64) -> List {
+    if n == 0 { List::Cons { open_count(), List::Nil } } else {
+        let holder = Holder { n, open() };
+        let rest = hold(n - 1);
+        List::Cons { holder.id, rest }
+    }
+}
+
+// So is a handle that a closure captured.
+fn capture(n: u64) -> List {
+    if n == 0 { List::Cons { open_count(), List::Nil } } else {
+        let handle = open();
+        let keep = |x: u64| { let h = handle; x };
+        let rest = capture(n - 1);
+        List::Cons { keep(n), rest }
+    }
+}
+
+fn last(l: List) -> u64 {
+    match l {
+        List::Nil => 0,
+        List::Cons(x, rest) => match rest {
+            List::Nil => x,
+            List::Cons(y, more) => last(List::Cons { y, more })
+        }
+    }
+}
+fn held(n: u64) -> u64 { last(hold(n)) }
+extern "C" trampoline "held" = held;
+fn captured(n: u64) -> u64 { last(capture(n)) }
+extern "C" trampoline "captured" = captured;
