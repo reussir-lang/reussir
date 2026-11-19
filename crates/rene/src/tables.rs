@@ -69,12 +69,12 @@ pub fn dep_variant_key(profile: &str, name: &str, fuzzer: bool) -> String {
     }
 }
 
-/// The status key of one dependency's recorded source graph, a JSON
+/// The source graph used to build this dependency variant, a JSON
 /// `Vec<`[`crate::deps::SourceFile`]`>` — the per-dependency counterpart of
 /// the root's [`SOURCES`] table, compact because dependencies are read-only
 /// inputs scanned wholesale.
-pub fn dep_sources_key(name: &str) -> String {
-    format!("sources.dep.{name}")
+pub fn dep_sources_key(profile: &str, name: &str, fuzzer: bool) -> String {
+    format!("sources.{}", dep_variant_key(profile, name, fuzzer))
 }
 
 /// Teardown marker (JSON `true`), set by `clean` while it still holds the

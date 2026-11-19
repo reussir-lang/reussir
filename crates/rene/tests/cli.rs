@@ -2096,4 +2096,32 @@ fn mixed_fuzz_targets_use_separate_dependency_variants() {
         nodes.iter().all(|node| node["state"] == "current"),
         "{report}"
     );
+
+    // Warm a second profile before changing the common dependency.
+    let release = ["build", "--profile", "release", "--bin", "app"];
+    let out = fakes.rene(&release, &manifest, &root);
+    assert!(out.status.success(), "{}", stderr(&out));
+    std::fs::write(dep.join("src/lib.rr"), "pub fn added() -> u64 { 42 }\n").unwrap();
+
+    for (args, variant) in [
+        (&["build", "--bin", "app"][..], "dev/deps"),
+        (&["build", "--bin", "fuzz"][..], "dev/deps/fuzzer"),
+        (&release[..], "release/deps"),
+    ] {
+        let before = fakes.compiles().len();
+        let out = fakes.rene(args, &manifest, &root);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let commands = fakes.compiles();
+        for artifact in ["dep.rri", "libdep.a"] {
+            let output = root.join(variant).join(artifact);
+            assert!(
+                commands[before..]
+                    .iter()
+                    .any(|cmd| cmd.contains(&format!("-o {} ", output.display()))),
+                "expected {} to rebuild: {:?}",
+                output.display(),
+                &commands[before..]
+            );
+        }
+    }
 }
