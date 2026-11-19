@@ -104,19 +104,47 @@ public:
     });
   }
 
+  // What releasing a value stored in line does at its visit. A `Leaf` holds
+  // scalars and integers, released in place with no cleanup hook; `Boxes`
+  // adds shared boxes, whose release can wait; anything else is `Ordered`.
+  enum class Visit { Leaf, Boxes, Ordered };
+  static Visit classify(mlir::Type type) {
+    if (isTriviallyCopyable(type) || isRCGMPIntegerType(type))
+      return Visit::Leaf;
+    if (auto nullable = llvm::dyn_cast<NullableType>(type))
+      type = nullable.getPtrTy();
+    if (auto rc = llvm::dyn_cast<RcType>(type))
+      return rc.getCapability() == Capability::shared &&
+                     !llvm::isa<FFIObjectType, ClosureType>(rc.getElementType())
+                 ? Visit::Boxes
+                 : Visit::Ordered;
+    auto record = llvm::dyn_cast<RecordType>(type);
+    if (!record || !record.getComplete() || !record.isCompound())
+      return Visit::Ordered;
+    auto visit = Visit::Leaf;
+    for (auto [member, field] :
+         llvm::zip(record.getMembers(), record.getMemberIsField()))
+      if (!field)
+        visit = std::max(visit, classify(getProjectedType(member, false,
+                                                          Capability::shared)));
+    return visit;
+  }
+
+  // A leaf arm reaches no box, so it is released where it is found.
   bool dispatchLeaf(mlir::Value ref, llvm::function_ref<void()> onLeaf,
                     llvm::function_ref<void()> onOther) {
     auto refType = llvm::cast<RefType>(ref.getType());
     auto record = llvm::dyn_cast<RecordType>(refType.getElementType());
-    if (!record || !record.isVariant() || record.hasObservableCleanup()) {
+    if (!record || !record.isVariant() || !record.getComplete()) {
       return false;
     }
     llvm::SmallVector<bool> leaf;
     llvm::SmallVector<mlir::Attribute> tags;
     for (const auto &[i, member, field] :
          llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
-      leaf.push_back(field || isTriviallyCopyable(getProjectedType(
-                                  member, false, Capability::shared)));
+      leaf.push_back(field || classify(getProjectedType(member, false,
+                                                        Capability::shared)) ==
+                                  Visit::Leaf);
       tags.push_back(builder.getDenseI64ArrayAttr({int64_t(i)}));
     }
     if (!llvm::is_contained(leaf, true)) {
@@ -135,10 +163,14 @@ public:
           {RefType::get(builder.getContext(), projected,
                         Capability::unspecified, refType.getAtomicKind())},
           {loc});
-      if (leaf[i])
+      if (leaf[i]) {
+        if (!field)
+          visitInline(builder.getInsertionBlock()->getArgument(0),
+                      [](mlir::Value) {});
         onLeaf();
-      else
+      } else {
         onOther();
+      }
       ReussirScfYieldOp::create(builder, loc, nullptr);
     }
     return true;
@@ -339,26 +371,26 @@ public:
     schedule(task, rc, false);
   }
 
-  static bool canReleasePure(mlir::Type type) {
-    if (isTriviallyCopyable(type))
-      return true;
-    if (auto nullable = llvm::dyn_cast<NullableType>(type))
-      type = nullable.getPtrTy();
-    if (auto rc = llvm::dyn_cast<RcType>(type))
-      return rc.getCapability() == Capability::shared;
-    auto record = llvm::dyn_cast<RecordType>(type);
-    if (!record || record.hasObservableCleanup())
+  // Whether `releasePure` serves the record. It decrements every box first,
+  // as the backward walk does: there it serves each arm that holds a box or
+  // an integer. The forward walk does not, so there no hook may be in reach.
+  bool canReleasePure(RecordType record) const {
+    if (!record.getComplete())
       return false;
-    return llvm::all_of(
-        llvm::zip(record.getMembers(), record.getMemberIsField()),
-        [&](auto member) {
-          auto [type, field] = member;
-          auto projected = getProjectedType(type, field, Capability::shared);
-          auto nested = llvm::dyn_cast<RecordType>(projected);
-          return field || isTriviallyCopyable(projected) ||
-                 ((!record.isCompound() || !nested || !nested.isVariant()) &&
-                  canReleasePure(projected));
-        });
+    bool forward = isForwardDrop(module);
+    if (forward && record.hasObservableCleanup())
+      return false;
+    if (record.isCompound())
+      return classify(record) != Visit::Ordered;
+    unsigned pure = 0, other = 0;
+    for (auto [member, field] :
+         llvm::zip(record.getMembers(), record.getMemberIsField())) {
+      auto type = getProjectedType(member, false, Capability::shared);
+      if (field || isTriviallyCopyable(type))
+        continue;
+      ++(classify(type) != Visit::Ordered ? pure : other);
+    }
+    return other == 0 || (!forward && pure != 0);
   }
 
   // Drop one reference and report whether the child needs release.
@@ -424,8 +456,42 @@ public:
     call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
   }
 
+  // Release the integers stored in line in `slot` and hand its boxes to
+  // `onBox`. Only for a slot that `classify` does not call `Ordered`.
+  void visitInline(mlir::Value slot,
+                   llvm::function_ref<void(mlir::Value)> onBox) {
+    auto slotType = llvm::cast<RefType>(slot.getType());
+    auto valueType = slotType.getElementType();
+    if (isTriviallyCopyable(valueType))
+      return;
+    if (isRCGMPIntegerType(valueType)) {
+      ReussirRefDropOp::create(builder, loc, slot);
+      return;
+    }
+    if (auto record = llvm::dyn_cast<RecordType>(valueType)) {
+      assert(record.isCompound());
+      for (const auto &[i, member, field] :
+           llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
+        if (field)
+          continue;
+        auto projected = getProjectedType(
+            member, false, Capability::unspecified, slotType.getAtomicKind());
+        visitInline(
+            ReussirRefProjectOp::create(
+                builder, loc,
+                RefType::get(builder.getContext(), projected,
+                             Capability::unspecified, slotType.getAtomicKind()),
+                slot, builder.getIndexAttr(i)),
+            onBox);
+      }
+      return;
+    }
+    onBox(ReussirRefLoadOp::create(builder, loc, valueType, slot));
+  }
+
   // Collect children before freeing the parent, then defer siblings and
-  // continue directly with one child. Only used without observable cleanup.
+  // continue directly with one child. No member runs a cleanup hook at its
+  // visit; an arm that does keeps the ordered backward release.
   void releasePure(mlir::Value ref, mlir::Value box) {
     auto refType = llvm::cast<RefType>(ref.getType());
     auto type = refType.getElementType();
@@ -449,41 +515,24 @@ public:
             {loc});
         if (field)
           emitBoxFree(box, loc, module, builder);
-        else
+        else if (classify(getProjectedType(
+                     member, false, Capability::shared)) != Visit::Ordered)
           releasePure(arm->getArgument(0), box);
+        else {
+          assert(!isForwardDrop(module));
+          ReussirRefDropOp::create(builder, loc, arm->getArgument(0), true,
+                                   nullptr);
+          emitBoxFree(box, loc, module, builder);
+        }
         ReussirScfYieldOp::create(builder, loc, nullptr);
       }
       return;
     }
     llvm::SmallVector<mlir::Value> children, dead;
-    auto collect = [&](auto &&self, mlir::Value slot) -> void {
-      auto slotType = llvm::cast<RefType>(slot.getType());
-      auto valueType = slotType.getElementType();
-      if (isTriviallyCopyable(valueType))
-        return;
-      if (auto record = llvm::dyn_cast<RecordType>(valueType)) {
-        assert(record.isCompound());
-        for (const auto &[i, member, field] :
-             llvm::enumerate(record.getMembers(), record.getMemberIsField())) {
-          if (field)
-            continue;
-          auto projected = getProjectedType(
-              member, false, Capability::unspecified, slotType.getAtomicKind());
-          self(self, ReussirRefProjectOp::create(
-                         builder, loc,
-                         RefType::get(builder.getContext(), projected,
-                                      Capability::unspecified,
-                                      slotType.getAtomicKind()),
-                         slot, builder.getIndexAttr(i)));
-        }
-        return;
-      }
-      mlir::Value child =
-          ReussirRefLoadOp::create(builder, loc, valueType, slot);
+    visitInline(ref, [&](mlir::Value child) {
       children.push_back(child);
       dead.push_back(deadTest(child));
-    };
-    collect(collect, ref);
+    });
     emitBoxFree(box, loc, module, builder);
     if (children.empty())
       return;
@@ -551,7 +600,7 @@ public:
       auto record = llvm::dyn_cast<RecordType>(type.getElementType());
       auto target = module->getAttrOfType<mlir::StringAttr>(
           mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
-      if (record && !record.hasObservableCleanup() && canReleasePure(record) &&
+      if (record && canReleasePure(record) &&
           (!target || !llvm::Triple(target.getValue()).isWasm())) {
         releasePure(ref, arg);
         return;
