@@ -233,7 +233,11 @@ fn dep_state(
         return Ok(State::Uninitialized);
     };
     let sources: Vec<SourceFile> = match dir
-        .status(&tables::dep_sources_key(name))?
+        .status(&tables::dep_sources_key(
+            ctx.profile_name,
+            name,
+            ctx.profile.fuzzer == Some(true),
+        ))?
         .and_then(|json| serde_json::from_str(&json).ok())
     {
         Some(files) => files,
@@ -401,7 +405,10 @@ pub fn record_dep(
             &tables::dep_variant_key(ctx.profile_name, name, ctx.profile.fuzzer == Some(true)),
             &record,
         ),
-        (&tables::dep_sources_key(name), &sources),
+        (
+            &tables::dep_sources_key(ctx.profile_name, name, ctx.profile.fuzzer == Some(true)),
+            &sources,
+        ),
     ])
     .map_err(Error::from)
 }
