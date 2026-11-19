@@ -55,7 +55,10 @@ fn among(chunk: Simd<[u8; 16]>, first: Simd<[u8; 16]>, span: Simd<[u8; 16]>) -> 
 
 // The loops below, one for each form, read on sixteen bytes at a time
 // while every byte is matched (`inside`) or none is, and leave fewer than
-// sixteen bytes at the end unread.
+// sixteen bytes at the end unread. They are given an `at` that is at most
+// `length`, the number of bytes that are there to read, and the caller
+// sees to it, as `scan` does once for every match: from an `at` near the
+// largest number, `at + 16` wraps and the bytes before the input are read.
 
 pub fn equal(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
     let stays = staying(inside);

@@ -5,9 +5,10 @@
 // dead, the limit on the number of states, the columns that are shared, the
 // runs of states that stay in themselves, the lookup table that the runs
 // share, the longest match from a place of a text, over runs of every
-// form, the fold over the matches of a text, and the stream that the
-// matches of a text are pulled from. A name is tested with shuffle tables or
-// with the lookup table, as the target has it.
+// form, the fold over the matches of a text, the stream that the matches
+// of a text are pulled from, and a match, a fold and a stream that begin
+// past the end of a text. A name is tested with shuffle tables or with the
+// lookup table, as the target has it.
 // The first fuzz target builds the automaton of three random rules and
 // compares the longest match that its steps find in a random string, and
 // the rule that wins on the whole string, with a small matcher on the trees
@@ -15,7 +16,8 @@
 // transitions of that state. The second compares the longest match from a
 // place of a text of repeated characters with the steps from that place,
 // and the fold and the stream from that place with one longest match after
-// another.
+// another; then the same match asked for by its place in the whole text,
+// and a match, a fold and a stream from two places past the end.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_automaton %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}regex_automaton
@@ -34,6 +36,7 @@
 // CHECK-NEXT: regex automaton/the longest match: unit
 // CHECK-NEXT: regex automaton/the fold: unit
 // CHECK-NEXT: regex automaton/the stream: unit
+// CHECK-NEXT: regex automaton/past the end: unit
 // CHECK-NEXT: regex automaton/automaton & the trees (fuzz):
 // CHECK-NEXT: regex automaton/the longest match & the steps (fuzz):
 
@@ -738,6 +741,109 @@ fn test_stream() -> Outcome {
     })
 }
 
+// The longest match from the byte `from` of `view`, asked for by its place:
+// `from` may be past the end.
+fn placed(automaton: Automaton, view: TextView, from: u64) -> Found {
+    held(view, automaton.unsafe_longest(view.unsafe_data_ptr(), view.len(), from))
+}
+
+// `found` as it is. The view is given along so that its last use comes
+// after the match, which reads its bytes through a pointer.
+fn held(view: TextView, found: Found) -> Found {
+    found
+}
+
+// The largest place there is.
+fn farthest() -> u64 {
+    18446744073709551615
+}
+
+// Nothing is found from `from` in `view`: by a match asked for by its
+// place, by a stream, which stays at `from`, and by a fold.
+fn nothing_from(automaton: Automaton, view: TextView, from: u64) -> Outcome {
+    let (rest, pulled) = automaton.matches(view, from).next();
+    let (count, reached) = automaton.fold(view, from, 0, |count: u64, found: Match| count + 1);
+    expect(is_nothing_found(placed(automaton, view, from)), "a match by its place begins past the end")
+        .and_then(|| expect(is_nothing_found(pulled) && rest.at() == from, "a stream past the end matched or moved"))
+        .and_then(|| expect(count == 0 && reached == from, "a fold past the end matched or moved"))
+}
+
+// Nothing is found from the places past the end of `view`: the first one,
+// and the ones where sixteen or eight more wrap around.
+fn nothing_past(automaton: Automaton, view: TextView) -> Outcome {
+    nothing_from(automaton, view, view.len() + 1)
+        .and_then(|| nothing_from(automaton, view, view.len() + 40))
+        .and_then(|| nothing_from(automaton, view, farthest()))
+        .and_then(|| nothing_from(automaton, view, farthest() - 3))
+        .and_then(|| nothing_from(automaton, view, farthest() - 7))
+        .and_then(|| nothing_from(automaton, view, farthest() - 8))
+        .and_then(|| nothing_from(automaton, view, farthest() - 15))
+        .and_then(|| nothing_from(automaton, view, farthest() - 16))
+}
+
+// A match that begins past the end reads no byte and finds nothing, for a
+// start state of every kind and a run of either size of step. Each text is
+// read through a view that begins sixteen bytes in, so the bytes before the
+// view are ones that a run would stay on.
+fn test_past_end() -> Outcome {
+    let name = Regex::bytes(Bits::range(48, 57).union(Bits::range(65, 90)).union(Bits::range(97, 122)).union(Bits::single(95)));
+    let letters = Text::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab");
+    let names = Text::from_str("a_Long_name_of_51_bytes_0123456789AZ_and_some_more+");
+    let marks = Text::from_str("ppppppppppppppppppppppppppppppppppppppppppppppppa");
+    let after = letters.view().drop_byte(16);
+    let rules = rules3(Regex::range(97, 122).plus(), Regex::range(48, 57).plus(), Regex::byte(32).plus());
+    // The start state neither accepts nor has a run.
+    built(rules, 100, |automaton: Automaton| {
+        let input = Text::from_str("abc 42");
+        expect(is_match(placed(automaton, input.view(), 4), 1, 4, 6), "a match by its place")
+            .and_then(|| expect(is_nothing_found(placed(automaton, input.view(), 6)), "nothing at the end"))
+            .and_then(|| nothing_past(automaton, input.view()))
+            .and_then(|| nothing_past(automaton, after))
+    })
+        // It accepts and goes on, and has no run.
+        .and_then(|| built(List::Cons { Regex::byte(97).optional().to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(is_match(placed(automaton, after, 0), 0, 0, 1), "one byte from the beginning")
+                .and_then(|| expect(is_match(placed(automaton, after, 33), 0, 33, 33), "a match of no bytes at the end of a text"))
+                .and_then(|| nothing_past(automaton, after))
+        }))
+        // It accepts, and only its run goes on.
+        .and_then(|| built(List::Cons { Regex::byte(97).star().to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(is_match(placed(automaton, after, 0), 0, 0, 32), "a run from the beginning")
+                .and_then(|| expect(is_match(placed(automaton, after, 20), 0, 20, 32), "from the middle"))
+                .and_then(|| expect(is_match(placed(automaton, after, 33), 0, 33, 33), "a match of no bytes at the end"))
+                .and_then(|| nothing_past(automaton, after))
+        }))
+        // It has a run and does not accept.
+        .and_then(|| built(List::Cons { Regex::byte(97).star().then(Regex::byte(98)).to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(is_match(placed(automaton, after, 0), 0, 0, 33), "a run and the byte after it")
+                .and_then(|| expect(is_nothing_found(placed(automaton, after, 33)), "nothing at the end of it"))
+                .and_then(|| nothing_past(automaton, after))
+        }))
+        // The same with a run of the lookup table, which reads on eight
+        // bytes at a time.
+        .and_then(|| built(List::Cons { Regex::bytes(scattered(0)).star().then(Regex::byte(97)).to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            let rest = marks.view().drop_byte(16);
+            expect(is_table(automaton.run(automaton.start()), 0, 1), "a run of the lookup table")
+                .and_then(|| expect(is_match(placed(automaton, rest, 0), 0, 0, 33), "a run of the table and the byte after it"))
+                .and_then(|| expect(is_nothing_found(placed(automaton, rest, 33)), "nothing at the end of the table's run"))
+                .and_then(|| nothing_past(automaton, rest))
+        }))
+        // It accepts, has a run, and goes on: the run is of shuffle tables
+        // or of the lookup table.
+        .and_then(|| built(rules2(name.star(), name.star().then(Regex::byte(43))), 100, |automaton: Automaton| {
+            let rest = names.view().drop_byte(16);
+            expect(is_match(placed(automaton, rest, 0), 1, 0, 35), "a name and the sign after it")
+                .and_then(|| expect(is_match(placed(automaton, rest, 35), 0, 35, 35), "a match of no bytes at the end of it"))
+                .and_then(|| nothing_past(automaton, rest))
+        }))
+        // It accepts, and no byte goes on.
+        .and_then(|| built(List::Cons { Regex::epsilon().to_bytes(), List::Nil }, 100, |automaton: Automaton| {
+            expect(is_match(placed(automaton, after, 5), 0, 5, 5), "a match of no bytes")
+                .and_then(|| expect(is_match(placed(automaton, after, 33), 0, 33, 33), "at the end too"))
+                .and_then(|| nothing_past(automaton, after))
+        }))
+}
+
 // The tokens of a lexer one after another, up to a byte that no rule
 // matches and up to the end.
 fn test_fold() -> Outcome {
@@ -876,6 +982,15 @@ fn repeated(pairs: List<(char, u8)>) -> List<char> {
     }
 }
 
+// Whether `found`, asked for from the byte `from`, is the match `best` of
+// the text after `from`.
+fn same_place(found: Found, best: Best, from: u64) -> bool {
+    match found {
+        Matched(found) => best.found && found.start == from && found.end == from + best.length && found.rule == best.rule,
+        Nothing => !best.found
+    }
+}
+
 // The longest match from a place of a text against the steps from there.
 fn fuzz_longest(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>), (List<(char, u8)>, u8))) -> Outcome {
     let (sets, programs, probe) = input;
@@ -898,6 +1013,12 @@ fn fuzz_longest(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8
                 same_fold(pulled(automaton, text_of(characters), from), one_by_one(automaton, text_of(characters), from)),
                 "the stream is not one longest match after another"
             ))
+            .and_then(|| expect(
+                same_place(placed(automaton, text_of(characters).view(), from), found(automaton, text_of(characters), from), from),
+                "a match by its place is not the match of the rest of the text"
+            ))
+            .and_then(|| nothing_from(automaton, text_of(characters).view(), bytes.len() + 1 + (place as u64)))
+            .and_then(|| nothing_from(automaton, text_of(characters).view(), farthest() - ((place as u64) % 32)))
     }
 }
 
@@ -914,6 +1035,7 @@ fn suite() -> TestTree {
         .with_case("the longest match", test_longest)
         .with_case("the fold", test_fold)
         .with_case("the stream", test_stream)
+        .with_case("past the end", test_past_end)
         .with_fuzz(
             "automaton & the trees (fuzz)",
             tuple3(

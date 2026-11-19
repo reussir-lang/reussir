@@ -33,7 +33,8 @@ impl Automaton {
     /// The longest match that begins at the byte `from` of the `length`
     /// bytes at `bytes`, which the caller keeps readable for the call. The
     /// answer is a plain value, so this is the way to ask for one match
-    /// after another.
+    /// after another. At the end of the bytes only a match of no bytes is
+    /// left, and past the end there is `Nothing`, whatever `from` is.
     pub fn unsafe_longest(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> Found {
         let (last, end) = scan(self, bytes, length, from);
         if last == 0 { Found::Nothing } else {
@@ -53,17 +54,26 @@ impl Automaton {
 
 /// The cell of the last state that accepts on the way from the start state
 /// at the byte `from` of the `length` bytes at `bytes`, and where it does;
-/// the cell 0 when none does.
+/// the cell 0 when none does. A `from` past the end is any number above
+/// `length`: no byte is read for it, and no state accepts.
+///
+/// The way never stands past the end, which is what the loops below and
+/// those of `native` count on: `at + 16 <= length` does not wrap for an
+/// `at` that is at most the `length` of bytes that are there to read.
 pub fn scan(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64) {
     // A start state that neither accepts nor has a run takes its first
     // step in one read.
     let quick = encoding::kind(automaton.start) == 6 && from < length;
-    let (begun, after) = if quick {
-        (array::get(automaton.first, native::byte_at(bytes, from) as i64), from + 1)
+    let (begun, after, begins) = if quick {
+        (array::get(automaton.first, native::byte_at(bytes, from) as i64), from + 1, true)
     } else {
-        (automaton.start, from)
+        // Past the end there is no match: the way does not begin. At the
+        // end the start state may still accept. The first cell stays the
+        // start state whatever `from` is, so that reading its run does not
+        // wait for the end of the match before.
+        (automaton.start, from, from <= length)
     };
-    let (_, _, last, end, _) = while [cell = begun, at = after, last = 0, end = from, going = true] (going) {
+    let (_, _, last, end, _) = while [cell = begun, at = after, last = 0, end = from, going = begins] (going) {
         match encoding::kind(cell) {
             // The dead state: the match is the last one found.
             0 => (cell, at, last, end, false),
