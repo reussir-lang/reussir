@@ -9,6 +9,8 @@
 !rc_list = !reussir.rc<!list>
 !box = !reussir.rc<i64>
 !cell = !reussir.rc<!reussir.cell<i64>>
+!handle = !reussir.rc<!reussir.ffi_object<"Handle", @handle_drop>>
+!holder = !reussir.rc<!reussir.record<compound "Holder" {i64, !handle}>>
 
 module {
   // Linearizing the self call would run the store before the recursion.
@@ -217,6 +219,74 @@ module {
       %local = reussir.rc.create value(%n : i64) : !box
       %rest = func.call @lent_parameter(%next, %box) : (i64, !box) -> !rc_list
       reussir.rc.dec(%local : !box)
+      %cons = reussir.record.compound(%n, %rest : i64, !rc_list) : !list_cons
+      %variant = reussir.record.variant[0] (%cons : !list_cons) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    }
+    return %result : !rc_list
+  }
+
+  func.func private @handle_drop(!handle)
+  func.func private @holder_release(!holder)
+
+  // A release that runs a foreign cleanup hook stays after the recursion.
+  // CHECK-LABEL: func.func @foreign_release_after(
+  // CHECK-NOT: .trmc
+  // CHECK: call @foreign_release_after(
+  // CHECK-NEXT: reussir.rc.dec
+  func.func @foreign_release_after(%n: i64, %owned: !handle) -> !rc_list {
+    %zero = arith.constant 0 : i64
+    %done = arith.cmpi eq, %n, %zero : i64
+    %result = scf.if %done -> (!rc_list) {
+      reussir.rc.dec(%owned : !handle) cleanup(@handle_drop)
+      %nil = reussir.record.compound : !list_nil
+      %variant = reussir.record.variant[1] (%nil : !list_nil) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    } else {
+      %one = arith.constant 1 : i64
+      %next = arith.subi %n, %one : i64
+      reussir.rc.inc(%owned : !handle)
+      %rest = func.call @foreign_release_after(%next, %owned) : (i64, !handle) -> !rc_list
+      reussir.rc.dec(%owned : !handle) cleanup(@handle_drop)
+      %cons = reussir.record.compound(%n, %rest : i64, !rc_list) : !list_cons
+      %variant = reussir.record.variant[0] (%cons : !list_cons) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    }
+    return %result : !rc_list
+  }
+
+  // So does the release of a record that holds one, here by a drop callback
+  // in the unique branch of an expanded decrement.
+  // CHECK-LABEL: func.func @worklist_release_after(
+  // CHECK-NOT: .trmc
+  // CHECK: call @worklist_release_after(
+  // CHECK: reussir.drop.run
+  func.func @worklist_release_after(%n: i64, %owned: !holder) -> !rc_list {
+    %zero = arith.constant 0 : i64
+    %done = arith.cmpi eq, %n, %zero : i64
+    %result = scf.if %done -> (!rc_list) {
+      reussir.rc.dec(%owned : !holder) cleanup(@handle_drop)
+      %nil = reussir.record.compound : !list_nil
+      %variant = reussir.record.variant[1] (%nil : !list_nil) : !list
+      %list = reussir.rc.create value(%variant : !list) : !rc_list
+      scf.yield %list : !rc_list
+    } else {
+      %one = arith.constant 1 : i64
+      %next = arith.subi %n, %one : i64
+      reussir.rc.inc(%owned : !holder)
+      %rest = func.call @worklist_release_after(%next, %owned) : (i64, !holder) -> !rc_list
+      %count = reussir.rc.fetch(%owned : !holder) : index
+      %single = arith.constant 1 : index
+      %unique = arith.cmpi eq, %count, %single : index
+      scf.if %unique {
+        reussir.drop.run @holder_release(%owned : !holder)
+      } else {
+        %less = arith.subi %count, %single : index
+        reussir.rc.set(%owned : !holder, %less : index)
+      } {reussir.expanded_decrement}
       %cons = reussir.record.compound(%n, %rest : i64, !rc_list) : !list_cons
       %variant = reussir.record.variant[0] (%cons : !list_cons) : !list
       %list = reussir.rc.create value(%variant : !list) : !rc_list
