@@ -110,6 +110,12 @@ struct RcDecrementExpansionPattern
         mlir::isa<FFIObjectType, ClosureType>(type.getElementType()))
       return mlir::failure();
 
+    // A decrement that `reussir-token-instantiation` has not reached gets its
+    // token here: no later pass pins decrements, so the type is final. The
+    // rebuilt decrement expands on its own visit.
+    if (!op.getNullableToken())
+      return op.replaceWithProduced(rewriter);
+
     // An atomic box decrements with one acquire-release `rc.fetch_sub`
     // (returning the previous count): the subtraction is already published,
     // so unlike the plain-load scheme below there is nothing to store on the

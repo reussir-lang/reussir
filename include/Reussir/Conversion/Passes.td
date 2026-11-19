@@ -211,6 +211,10 @@ def ReussirRcDecrementExpansionPass : Pass<"reussir-rc-decrement-expansion"> {
     `reussir-rc-decrement-expansion` expands Reussir rc decrement operations.
     This is separated from the ConvertToSTD pass because it may be used in
     early stages of the pipeline.
+
+    A decrement that has no token result yet receives the one that the
+    `producers` phase of `reussir-token-instantiation` gives it, and is then
+    expanded.
   }];
 
   let options = [
