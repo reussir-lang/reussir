@@ -110,6 +110,11 @@ struct RcDecrementExpansionPattern
         mlir::isa<FFIObjectType, ClosureType>(type.getElementType()))
       return mlir::failure();
 
+    // The token result comes from `reussir-token-instantiation`, which runs
+    // first by design. A decrement without it stays unexpanded.
+    if (!op.getNullableToken())
+      return rewriter.notifyMatchFailure(op, "requires token instantiation");
+
     // An atomic box decrements with one acquire-release `rc.fetch_sub`
     // (returning the previous count): the subtraction is already published,
     // so unlike the plain-load scheme below there is nothing to store on the
