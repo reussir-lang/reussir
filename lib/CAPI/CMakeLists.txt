@@ -48,6 +48,7 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirInstrumentNonlinearFFI
   MLIRReussirAttachNativeTarget
   MLIRReussirFixVectorScale
+  MLIRReussirLegalizeVectorStorage
   MLIRReussirIFRTJustInTimeTransform
   # transformations
   MLIRReussirClosureBetaReduction

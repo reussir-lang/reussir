@@ -38,6 +38,7 @@ const REUSSIR_ARCHIVES: &[&str] = &[
     "MLIRReussirInstrumentNonlinearFFI",
     "MLIRReussirAttachNativeTarget",
     "MLIRReussirFixVectorScale",
+    "MLIRReussirLegalizeVectorStorage",
     "MLIRReussirIFRTJustInTimeTransform",
     "MLIRReussirClosureBetaReduction",
     "MLIRReussirDefaultInliner",

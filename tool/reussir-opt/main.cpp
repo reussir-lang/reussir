@@ -149,6 +149,9 @@ int main(int argc, char **argv) {
     return reussir::createReussirFixVectorScalePass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirLegalizeVectorStoragePass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirInvariantGroupAnalysisPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {

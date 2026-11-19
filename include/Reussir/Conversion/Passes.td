@@ -397,6 +397,24 @@ def ReussirFixVectorScalePass
 }
 
 //===----------------------------------------------------------------------===//
+// LegalizeVectorStorage
+//===----------------------------------------------------------------------===//
+def ReussirLegalizeVectorStoragePass
+    : Pass<"reussir-legalize-vector-storage", "::mlir::func::FuncOp"> {
+  let summary = "make the storage of scalable vectors legal for SVE";
+  let description = [{
+    `reussir-legalize-vector-storage` applies the patterns of MLIR's
+    `arm-sve-legalize-vector-storage` without the greedy driver's cleanup.
+    That pass also folds and simplifies the regions of every function it
+    visits, and fails when this cleanup is not done after ten iterations,
+    which a large function without any vector can need. Like that pass, this
+    one fails when a use of a legalized allocation is left that the patterns
+    cannot rewrite.
+  }];
+  let dependentDialects = ["::mlir::arm_sve::ArmSVEDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // AttachNativeTarget
 //===----------------------------------------------------------------------===//
 def ReussirAttachNativeTargetPass

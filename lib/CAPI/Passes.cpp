@@ -43,7 +43,6 @@
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h>
-#include <mlir/Dialect/ArmSVE/Transforms/Passes.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -268,7 +267,7 @@ MlirPass reussirCreateFixVectorScalePass(unsigned scale) {
   return wrapOwned(reussir::createReussirFixVectorScalePass(options));
 }
 MlirPass reussirCreateArmSVELegalizeVectorStoragePass(void) {
-  return wrapOwned(mlir::arm_sve::createLegalizeVectorStoragePass());
+  return wrapOwned(reussir::createReussirLegalizeVectorStoragePass());
 }
 MlirPass reussirCreateConvertToLLVMPass(void) {
   return wrapOwned(reussir::createReussirConvertToLLVMPass());

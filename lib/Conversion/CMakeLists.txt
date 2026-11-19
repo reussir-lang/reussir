@@ -10,6 +10,7 @@ add_subdirectory(CompilePolymorphicFFI)
 add_subdirectory(InstrumentNonlinearFFI)
 add_subdirectory(AttachNativeTarget)
 add_subdirectory(FixVectorScale)
+add_subdirectory(LegalizeVectorStorage)
 add_subdirectory(IFRTJustInTimeTransform)
 
 set(REUSSIR_CONVERSION_AGGREGATE_LIBS
@@ -25,6 +26,7 @@ set(REUSSIR_CONVERSION_AGGREGATE_LIBS
   MLIRReussirInstrumentNonlinearFFI
   MLIRReussirAttachNativeTarget
   MLIRReussirFixVectorScale
+  MLIRReussirLegalizeVectorStorage
   MLIRReussirIFRTJustInTimeTransform
 )
 
