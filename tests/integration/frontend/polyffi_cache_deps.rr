@@ -20,6 +20,21 @@
 // RUN: cd %t/v2 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/cache NO_COMPILE=1 \
 // RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/v2-warm.ll
 // RUN: diff %t/v2.ll %t/v2-warm.ll
+// One open serves the module's textures: the store logs each open.
+// RUN: cd %t/v1 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/once \
+// RUN:   %rrc %s -v --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/once.ll 2>&1 | %FileCheck %s --check-prefix=OPEN
+// RUN: cd %t/v1 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/once NO_COMPILE=1 \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/once-warm.ll
+// RUN: diff %t/v1.ll %t/once-warm.ll
+// A failed open is reported once, and each texture compiles directly.
+// RUN: touch %t/not-a-directory
+// RUN: cd %t/v1 && env REAL_RUSTC=%rustc_path REUSSIR_RUSTC_DEPS=%library_path:crate=. XDG_CONFIG_HOME=%t/config XDG_CACHE_HOME=%t/not-a-directory \
+// RUN:   %rrc %s --polyffi-rust-path %t/rustc --emit llvm-ir -O aggressive -o %t/v1-direct.ll 2>&1 | %FileCheck %s --check-prefix=ONCE
+// RUN: diff %t/v1.ll %t/v1-direct.ll
+// OPEN: cache opened
+// OPEN-NOT: cache opened
+// ONCE: Polyffi cache:
+// ONCE-NOT: Polyffi cache:
 // V1-DAG: add i64 %x, 1111
 // V1-DAG: add i64 %x, 1113
 // V2-DAG: add i64 %x, 2222

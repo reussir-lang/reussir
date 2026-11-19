@@ -23,7 +23,16 @@
 #include <memory>
 #include <string>
 
+struct ReussirPolyffiCache;
+
 namespace reussir {
+struct PolyffiCacheCloser {
+  void operator()(ReussirPolyffiCache *cache) const;
+};
+/// The polyffi bitcode store; empty when it cannot be opened.
+using PolyffiCache = std::unique_ptr<ReussirPolyffiCache, PolyffiCacheCloser>;
+/// Open the store. A failure is reported on stderr.
+PolyffiCache openPolyffiCache();
 /// Locate the `rustc` used to compile FFI textures. A non-empty `preferred`
 /// path (an explicit `--polyffi-rust-path` threaded down from the driver) is
 /// returned verbatim; otherwise the `REUSSIR_RUSTC` environment variable and
@@ -44,11 +53,14 @@ compileRustSource(llvm::LLVMContext &context, llvm::StringRef sourceCode,
                   llvm::ArrayRef<llvm::StringRef> additionalArgs = {},
                   llvm::StringRef rustcPath = {},
                   llvm::ArrayRef<llvm::StringRef> rustcDepsDirs = {});
+/// Compile a texture to bitcode through `cache`, directly when it is empty.
+/// Without `cache`, a store is opened for this call.
 std::unique_ptr<llvm::MemoryBuffer>
 compileRustSourceToBitcode(llvm::LLVMContext &context,
                            llvm::StringRef sourceCode,
                            llvm::ArrayRef<llvm::StringRef> additionalArgs = {},
                            llvm::StringRef rustcPath = {},
-                           llvm::ArrayRef<llvm::StringRef> rustcDepsDirs = {});
+                           llvm::ArrayRef<llvm::StringRef> rustcDepsDirs = {},
+                           const PolyffiCache *cache = nullptr);
 } // namespace reussir
 #endif // REUSSIR_RUSTCOMPILER_H

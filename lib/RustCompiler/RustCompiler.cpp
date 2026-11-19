@@ -246,10 +246,18 @@ struct Compilation {
 };
 } // namespace
 
+void PolyffiCacheCloser::operator()(ReussirPolyffiCache *cache) const {
+  reussir_polyffi_cache_close(cache);
+}
+
+PolyffiCache openPolyffiCache() {
+  return PolyffiCache(reussir_polyffi_cache_open(cacheDiagnostic, nullptr));
+}
+
 std::unique_ptr<llvm::MemoryBuffer> compileRustSourceToBitcode(
     llvm::LLVMContext &context, llvm::StringRef sourceCode,
     llvm::ArrayRef<llvm::StringRef> additionalArgs, llvm::StringRef rustcPath,
-    llvm::ArrayRef<llvm::StringRef> rustcDepsDirs) {
+    llvm::ArrayRef<llvm::StringRef> rustcDepsDirs, const PolyffiCache *cache) {
   rustcPath = findRustCompiler(rustcPath);
   // ExecuteAndWait does not search PATH: its Program parameter is expected to
   // have come from findProgramByName. Resolve explicit/env bare names as well
@@ -317,15 +325,17 @@ std::unique_ptr<llvm::MemoryBuffer> compileRustSourceToBitcode(
     hashField(hasher, option);
   auto key = hasher.final();
 
-  std::unique_ptr<ReussirPolyffiCache, decltype(&reussir_polyffi_cache_close)>
-      cache(reussir_polyffi_cache_open(cacheDiagnostic, nullptr),
-            reussir_polyffi_cache_close);
-  if (!cache)
+  PolyffiCache opened;
+  if (!cache) {
+    opened = openPolyffiCache();
+    cache = &opened;
+  }
+  if (!*cache)
     return invokeRustc(sourceCode, rustcPath, options);
 
   Compilation request{sourceCode, rustcPath, options, nullptr};
   uint32_t status = reussir_polyffi_cache_get_or_produce(
-      cache.get(), key.data(), Compilation::produce, Compilation::receive,
+      cache->get(), key.data(), Compilation::produce, Compilation::receive,
       cacheDiagnostic, &request);
   if (status == 1)
     return invokeRustc(sourceCode, rustcPath, options);
