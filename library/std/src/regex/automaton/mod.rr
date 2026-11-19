@@ -46,6 +46,9 @@
 //! - `inspect`: an automaton one step at a time.
 //! - `native`: the loops that read the bytes of the input through a
 //!   pointer, sixteen or eight at a time.
+//!
+//! `lookahead` and `native` are also what `search::bytes` finds a byte
+//! with: a finder is one run that belongs to no state.
 
 import core::intrinsic::array;
 import core::ptr::Generic;
@@ -68,8 +71,8 @@ mod columns;
 mod encoding;
 mod explore;
 mod inspect;
-mod lookahead;
-mod native;
+pub mod lookahead;
+pub mod native;
 mod pack;
 mod scan;
 mod shuffle;

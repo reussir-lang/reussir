@@ -1,0 +1,6 @@
+//! Search: the places of a text where something is found, wherever they
+//! are.
+//!
+//! - `bytes`: `ByteFinder`, which finds the next byte of a set.
+
+pub mod bytes;

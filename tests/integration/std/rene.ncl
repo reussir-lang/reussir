@@ -33,6 +33,7 @@
     regex_alphabet = { kind = 'executable, path = "regex_alphabet.rr", fuzzer = true },
     regex_automaton = { kind = 'executable, path = "regex_automaton.rr", fuzzer = true },
     regex_node = { kind = 'executable, path = "regex_node.rr", fuzzer = true },
+    regex_search = { kind = 'executable, path = "regex_search.rr", fuzzer = true },
     regex_tree = { kind = 'executable, path = "regex_tree.rr", fuzzer = true },
     regex_utf8 = { kind = 'executable, path = "regex_utf8.rr", fuzzer = true },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },

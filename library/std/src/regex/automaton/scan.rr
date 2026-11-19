@@ -124,20 +124,7 @@ fn skip(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, cell: u32, 
     let word = array::get(automaton.run_words, place);
     // The vectors are read whole, which an array has no way to do.
     let vectors = ptr::offset(array::unsafe_data_ptr(automaton.vectors), place * 64, PtrArithFlag::Inbounds);
-    let inside = encoding::stays_inside(word);
-    let reached = match encoding::form(word) {
-        0 => native::equal(vectors, inside, bytes, at, length),
-        1 => native::equal_two(vectors, inside, bytes, at, length),
-        2 => native::equal_three(vectors, inside, bytes, at, length),
-        3 => native::equal_four(vectors, inside, bytes, at, length),
-        4 => native::stretched(vectors, inside, bytes, at, length),
-        5 => native::stretched_or_equal(vectors, inside, bytes, at, length),
-        6 => native::stretched_or_equal_two(vectors, inside, bytes, at, length),
-        7 => native::stretched_twice(vectors, inside, bytes, at, length),
-        8 => native::marked(automaton.lookup, encoding::first(word), encoding::bits(word) as u8, bytes, at, length),
-        // 9: the shuffle tables are read whole as well.
-        _ => native::shuffled(ptr::offset(array::unsafe_data_ptr(automaton.nibbles), encoding::first(word) as i64, PtrArithFlag::Inbounds), encoding::bits(word) as u8, inside, bytes, at, length)
-    };
+    let reached = native::run(word, vectors, automaton.lookup, automaton.nibbles, bytes, at, length);
     // The vectors leave fewer than sixteen bytes at the end unread.
     if reached + 16 > length {
         settled(automaton, bytes, length, cell, reached)

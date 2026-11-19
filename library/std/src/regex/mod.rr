@@ -6,8 +6,10 @@
 //! - `node`: regexes as nodes of a table, where equal regexes are the same
 //!   node, and their derivatives.
 //! - `automaton`: the states and transitions of a list of rules.
+//! - `search`: finding in a text, from any place of it.
 
 pub mod alphabet;
 pub mod automaton;
 pub mod node;
+pub mod search;
 pub mod tree;

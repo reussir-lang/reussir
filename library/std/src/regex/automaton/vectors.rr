@@ -48,18 +48,22 @@ pub fn stretches(set: Bits) -> List<ByteRange> {
     }
 }
 
-/// The stretches of `set` when they cost at most four: one for a single
-/// byte, two for a longer stretch.
-pub fn few(set: Bits) -> Option<List<ByteRange>> {
-    let found = stretches(set);
-    let cost = found.fold_left(0, |cost: u64, stretch: ByteRange| {
+/// The number of vectors that `stretches` are compared with: one for a
+/// single byte, two for a longer stretch.
+pub fn cost(stretches: List<ByteRange>) -> u64 {
+    stretches.fold_left(0, |cost: u64, stretch: ByteRange| {
         if stretch.start == stretch.end {
             cost + 1
         } else {
             cost + 2
         }
-    });
-    if cost <= 4 {
+    })
+}
+
+/// The stretches of `set` when they cost at most four.
+pub fn few(set: Bits) -> Option<List<ByteRange>> {
+    let found = stretches(set);
+    if cost(found) <= 4 {
         Option::Some { found }
     } else {
         Option::None
