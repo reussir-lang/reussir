@@ -15,6 +15,7 @@ program exercises.
 | `source_graph.rr` | the source-graph table and its rebuild conditions         |
 | `fib.rr`       | one package + polyffi console, release profile               |
 | `calc.rr`      | interpreter app + polyffi I/O dep: lexer/parser/eval modules |
+| `jsonfmt.rr`   | JSON formatter on `std`: lexer rules with actions, a parser over the token stream, `std::format` layout |
 | `inventory.rr` | four deps, two polyffi units, cross-package generics         |
 | `stats.rr`     | float pipeline + polyffi vector I/O, multi-unit release      |
 | `shapes.rr`    | impl methods over a vendor dep: value/Arc/regional receivers, cross-package generic method, private fields behind methods |
