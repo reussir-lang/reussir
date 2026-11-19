@@ -42,7 +42,10 @@ impl Occurrences {
     pub fn fold<A>(self: Self, initial: A, step: (A, Match) -> A) -> A {
         // `step` is passed along to the fold of the rest, which lets the
         // compiler specialize the fold for a closure written at the call;
-        // a loop clones the closure for every match.
+        // a loop clones the closure for every match. A fold that hands
+        // `step` to one of two folds is no faster than such a loop, so
+        // the way of the searcher is asked for every match, in `next`,
+        // and not once here.
         let (rest, found) = self.next();
         match found {
             Matched(found) => rest.fold(step(initial, found), step),
@@ -88,25 +91,64 @@ impl Searching {
         }
     }
 
-    // The same as a match with its rule.
+    // The next match of a stream that stands at the byte `at` when the
+    // rules match one literal and nothing else, as `Searcher::spotted`
+    // gives it: where it begins and where it ends, which is the same
+    // place when there is none. A literal has bytes, so no match of none
+    // is passed over. As in `next_span`, no reference is counted.
+    fn next_place(self: Self, at: u64) -> (u64, u64) {
+        self.searcher.spotted(self.bytes, self.input.len(), at)
+    }
+
+    // The same as a match with its rule. A literal that is all the rules
+    // match is found without the automaton, and its rule is the first.
     fn next_match(self: Self, at: u64, ended: bool) -> Found {
-        let (last, start, end) = self.next_span(at, ended);
-        if last == 0 { Found::Nothing } else {
-            Found::Matched { Match { rule: self.searcher.rule(last), start, end } }
+        match self.searcher.way {
+            Literal => {
+                let (start, end) = self.next_place(at);
+                if start < end {
+                    Found::Matched { Match { rule: 0, start, end } }
+                } else {
+                    Found::Nothing
+                }
+            },
+            _ => {
+                let (last, start, end) = self.next_span(at, ended);
+                if last == 0 { Found::Nothing } else {
+                    Found::Matched { Match { rule: self.searcher.rule(last), start, end } }
+                }
+            }
         }
     }
 
     // The number of matches of a stream that stands at the byte `at`,
-    // after a match that ended at `barred`.
+    // after a match that ended at `barred`. The way is asked once.
     fn count(self: Self, at: u64, barred: u64) -> u64 {
-        let (_, _, count, _) = while [at = at, barred = barred, count = (0 as u64), going = true] (going) {
-            let (last, start, end) = self.next_span(at, barred == at);
-            if last == 0 { (at, barred, count, false) } else {
-                let (at, barred) = Searching::after(start, end);
-                (at, barred, count + 1, true)
+        match self.searcher.way {
+            // The next place of the literal is sought from the end of
+            // the one before.
+            Literal => {
+                let (_, count, _) = while [at = at, count = (0 as u64), going = true] (going) {
+                    let (start, end) = self.next_place(at);
+                    if start < end {
+                        (end, count + 1, true)
+                    } else {
+                        (at, count, false)
+                    }
+                };
+                count
+            },
+            _ => {
+                let (_, _, count, _) = while [at = at, barred = barred, count = (0 as u64), going = true] (going) {
+                    let (last, start, end) = self.next_span(at, barred == at);
+                    if last == 0 { (at, barred, count, false) } else {
+                        let (at, barred) = Searching::after(start, end);
+                        (at, barred, count + 1, true)
+                    }
+                };
+                count
             }
-        };
-        count
+        }
     }
 }
 

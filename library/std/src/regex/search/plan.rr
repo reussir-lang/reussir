@@ -1,0 +1,67 @@
+//! How a searcher seeks, chosen from its automaton.
+//!
+//! The next place to try is where a match can begin. The more bytes of a
+//! match are known before it is found, the fewer places are tried, so the
+//! automaton is asked how every match begins, and the first of these
+//! that holds is the way:
+//!
+//! ```text
+//! a rule matches no bytes, or a match       every place is tried
+//! can begin with every byte
+//! the rules match one literal of two        the literal is sought, and
+//! bytes or more and nothing else            its places are the matches
+//! every match begins with the same two      those bytes are sought, and
+//! bytes or more                             the automaton matches there
+//! otherwise                                 the next first byte is sought
+//! ```
+//!
+//! One byte that every match begins with is a first byte like any other,
+//! and a literal of one byte is found by the finder of its byte. A literal
+//! that only a later rule matches is sought as the bytes that every match
+//! begins with: the automaton says the rule.
+//!
+//! No way is chosen by how common a byte is. A finder costs more than
+//! reading on to a place that is near, so `seek` tests four bytes one by
+//! one before it asks any finder: a byte that the text is full of is met
+//! there, and one that the text has rarely is worth the finder, whichever
+//! byte it is. The other side of it: where the first of the bytes that
+//! every match begins with is within four places of every place, the
+//! finder of those bytes is never asked, and every such place is tried
+//! with the automaton, as it was without them.
+
+import core::intrinsic::array;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::scan;
+import std::regex::search::Searcher;
+import std::regex::search::Way;
+
+impl Way {
+    // How the matches of `automaton` are sought: they can begin with the
+    // bytes `first`, and all of them begin with the bytes `prefix`. When
+    // the rules match those and nothing else, `cell` is the cell of the
+    // state after them, and else 0.
+    fn of(automaton: Automaton, first: Bits, prefix: [u8; ?], cell: u32) -> Way {
+        if automaton.accepts_empty() || first.len() == 256 { Way::EveryPlace } else {
+            if array::dim(prefix, 0) < 2 { Way::FirstBytes } else {
+                // The places of a literal are given as matches of the
+                // rule 0: when another rule accepts it, the automaton
+                // goes on matching, and says which.
+                if cell != 0 && scan::rule(automaton, cell) == 0 {
+                    Way::Literal
+                } else {
+                    Way::Prefix
+                }
+            }
+        }
+    }
+}
+
+impl Searcher {
+    /// How this searcher comes to the next place to try. Which way is
+    /// chosen for which rules is no promise: the matches are the same
+    /// whichever it is.
+    pub fn way(self: Self) -> Way {
+        self.way
+    }
+}
