@@ -41,6 +41,8 @@
 //! length. Nothing guards against that yet.
 //!
 //! - `bytes`: `ByteFinder`, which finds the next byte of a set.
+//! - `literal`: `LiteralFinder`, which finds some bytes one after another.
+//! - `rank`: how common every byte is.
 //! - `seek`: one search, the first match from a place.
 //! - `stream`: the matches of a text, pulled one after another.
 
@@ -54,6 +56,8 @@ import std::result::Result;
 import std::text::TextView;
 
 pub mod bytes;
+pub mod literal;
+pub mod rank;
 mod seek;
 mod stream;
 

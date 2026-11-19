@@ -17,7 +17,7 @@ pub fn byte_at(bytes: ConstPtr<Generic>, at: u64) -> u8 {
     ptr::load(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds))
 }
 
-fn chunk_at(bytes: ConstPtr<Generic>, at: u64) -> Simd<[u8; 16]> {
+pub fn chunk_at(bytes: ConstPtr<Generic>, at: u64) -> Simd<[u8; 16]> {
     ptr::load_extended<Simd<[u8; 16]>>(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), false, false, false, false, 1)
 }
 

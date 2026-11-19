@@ -1,0 +1,922 @@
+// Unit suite and coverage-guided fuzz driver for the literal finder of
+// `std::regex::search`: the places of some bytes, one after another, in a
+// text.
+// Unit cases find literals of two to seventy bytes from every place of
+// every view of a text, in texts shorter than sixteen bytes and shorter
+// than the literal; a literal of no bytes and of one byte; a view whose
+// text goes on with the rest of the literal, from its end and from places
+// past it; bytes that are no text; the two bytes that are tested first and
+// the ranks that choose them; the stream, the fold and the count, whose
+// places share no byte; and texts where many places have both bytes.
+// The fuzz targets build the finder of a random literal and compare what
+// it finds with comparing at every place byte by byte: in a text made of
+// the literal, of parts of it and of repeated characters, and in a view of
+// it, by one search from every place, the stream, the fold and the count;
+// and for a part of random bytes, whole or with one byte changed, in those
+// bytes and in a part of them.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_literal %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_literal
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_literal%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_literal%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex literal/the places of a literal: unit
+// CHECK-NEXT: regex literal/short texts: unit
+// CHECK-NEXT: regex literal/no byte and one byte: unit
+// CHECK-NEXT: regex literal/the end of a view: unit
+// CHECK-NEXT: regex literal/bytes that are no text: unit
+// CHECK-NEXT: regex literal/the bytes tested first: unit
+// CHECK-NEXT: regex literal/the stream: unit
+// CHECK-NEXT: regex literal/places that have both bytes: unit
+// CHECK-NEXT: regex literal/a finder of a literal & byte by byte (fuzz):
+// CHECK-NEXT: regex literal/a finder of a literal & byte by byte in any bytes (fuzz):
+
+import core::intrinsic::array;
+import core::ptr;
+import core::ptr::PtrArithFlag;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::search::literal::LiteralFinder;
+import std::regex::search::literal::Literals;
+import std::regex::search::rank;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ------------------------------ The oracle ------------------------------
+
+// The largest place there is: no literal begins there.
+fn farthest() -> u64 {
+    18446744073709551615
+}
+
+// The bytes of `view`, each asked for by its index.
+fn bytes_of(view: TextView) -> [u8; ?] {
+    let (_, listed) = while [at = (0 as u64), listed = Vec::new()] (at < view.len()) {
+        (at + 1, listed.push(view.byte_at(at).unwrap_or(0)))
+    };
+    array::tabulate<[u8; ?]>(listed.len(), |at: i64| listed.get_or(at as u64, 0))
+}
+
+// Whether the bytes of `needle` are at `place` of the `length` bytes of
+// `hay` from `start` on: every byte is compared.
+fn is_there(hay: [u8; ?], start: u64, length: u64, needle: [u8; ?], place: u64) -> bool {
+    let size = array::dim(needle, 0);
+    if place > length || size > length - place { false } else {
+        let (_, same) = while [at = (0 as u64), same = true] (same && at < size) {
+            (at + 1, array::get(hay, (start + place + at) as i64) == array::get(needle, at as i64))
+        };
+        same
+    }
+}
+
+// The first place of `needle` in those bytes at `from` or after it, or
+// the largest place when there is none: every place is tried.
+fn sought(hay: [u8; ?], start: u64, length: u64, needle: [u8; ?], from: u64) -> u64 {
+    let (_, found) = while [place = from, found = farthest()] (found == farthest() && place <= length) {
+        if is_there(hay, start, length, needle, place) {
+            (place, place)
+        } else {
+            (place + 1, found)
+        }
+    };
+    found
+}
+
+// What `unsafe_find` answers for that: the place, or the length for a
+// literal that has bytes and is nowhere, or `from` for one that has none.
+fn answered(hay: [u8; ?], start: u64, length: u64, needle: [u8; ?], from: u64) -> u64 {
+    let found = sought(hay, start, length, needle, from);
+    if found != farthest() { found } else {
+        if array::dim(needle, 0) == 0 {
+            from
+        } else {
+            length
+        }
+    }
+}
+
+// One more place in the number that stands for the places so far.
+fn mixed(sum: u64, start: u64, end: u64) -> u64 {
+    sum * 31 + start * 3 + end * 7 + 1
+}
+
+// The places of `needle` in those bytes from `from` on, as one number and
+// as how many they are: each search begins where the place before ended,
+// and one byte after a literal of no bytes.
+fn wanted(hay: [u8; ?], start: u64, length: u64, needle: [u8; ?], from: u64) -> (u64, u64) {
+    let size = array::dim(needle, 0);
+    let (_, sum, count, _) = while [at = from, sum = (0 as u64), count = (0 as u64), going = true] (going) {
+        let found = sought(hay, start, length, needle, at);
+        if found == farthest() { (at, sum, count, false) } else {
+            if size == 0 {
+                (found + 1, mixed(sum, found, found), count + 1, true)
+            } else {
+                (found + size, mixed(sum, found, found + size), count + 1, true)
+            }
+        }
+    };
+    (sum, count)
+}
+
+// ------------------------- What a finder finds -------------------------
+
+// Where `found` begins when it is a match of the rule 0 that has `size`
+// bytes; the largest place for `Nothing`, and one less for another match.
+fn begun(found: Found, size: u64) -> u64 {
+    match found {
+        Matched(found) => if found.rule == 0 && found.end == found.start + size {
+            found.start
+        } else {
+            farthest() - 1
+        },
+        Nothing => farthest()
+    }
+}
+
+// What `finder` finds from `from` in the bytes of `view`. The view is
+// asked for its length afterwards, so that its last use comes after its
+// bytes are read through the pointer; an answer that no length allows is
+// one less than the largest place.
+fn by_bytes(finder: LiteralFinder, view: TextView, from: u64) -> u64 {
+    let found = finder.unsafe_find(view.unsafe_data_ptr(), view.len(), from);
+    if found > view.len() && found != from {
+        farthest() - 1
+    } else {
+        found
+    }
+}
+
+// Whether `finder` finds from `from` in `view`, through the view and
+// through its bytes, what comparing at every place finds. `hay` has the
+// bytes of the text of `view`, which begins at `start` of them.
+fn agrees(finder: LiteralFinder, view: TextView, hay: [u8; ?], start: u64, from: u64) -> bool {
+    let needle = finder.needle();
+    let length = view.len();
+    begun(finder.find(view, from), finder.len()) == sought(hay, start, length, needle, from)
+        && by_bytes(finder, view, from) == answered(hay, start, length, needle, from)
+}
+
+// The same from every place of `view`, its end and the place past it.
+fn agrees_all(finder: LiteralFinder, view: TextView, hay: [u8; ?], start: u64) -> bool {
+    let (_, same) = while [from = (0 as u64), same = true] (same && from <= view.len() + 1) {
+        (from + 1, agrees(finder, view, hay, start, from))
+    };
+    same
+}
+
+// The same from places far past the end: the first one, and the ones
+// where sixteen more, or the length of a literal more, wrap around.
+fn nothing_past(finder: LiteralFinder, view: TextView, hay: [u8; ?], start: u64) -> bool {
+    let length = view.len();
+    agrees(finder, view, hay, start, length + 1) && agrees(finder, view, hay, start, length + 40)
+        && agrees(finder, view, hay, start, farthest()) && agrees(finder, view, hay, start, farthest() - 1)
+        && agrees(finder, view, hay, start, farthest() - 15) && agrees(finder, view, hay, start, farthest() - 16)
+        && agrees(finder, view, hay, start, farthest() - finder.len())
+}
+
+// The same in every view of `whole` that begins at `start`.
+fn agrees_from(finder: LiteralFinder, whole: TextView, hay: [u8; ?], start: u64) -> bool {
+    let (_, same) = while [end = start, same = true] (same && end <= whole.len()) {
+        let same = match whole.slice_byte(start, end) {
+            Some(part) => agrees_all(finder, part, hay, start),
+            None => false
+        };
+        (end + 1, same)
+    };
+    same
+}
+
+// The same in every view of `whole`, which is a whole text.
+fn agrees_within(finder: LiteralFinder, whole: TextView) -> bool {
+    let hay = bytes_of(whole);
+    let (_, same) = while [start = (0 as u64), same = true] (same && start <= whole.len()) {
+        (start + 1, agrees_from(finder, whole, hay, start))
+    };
+    same
+}
+
+// Whether a stream that has just answered `Nothing` answers it again and
+// stays where it is.
+fn stays(stream: Literals) -> bool {
+    let (rest, found) = stream.next();
+    begun(found, 0) == farthest() && rest.at() == stream.at()
+}
+
+// The places pulled from a stream, as `wanted` makes them. After every
+// place the stream stands at its end, or one byte after a place of no
+// bytes, and counts the places that it has left, which with those pulled
+// so far are as many every time. After `Nothing` the stream stands where
+// it stood, and is pulled once more. When one of these fails, or a place
+// is no match of the rule 0 with the bytes of the literal, the number of
+// places is one that no text has.
+fn pulled(finder: LiteralFinder, view: TextView, from: u64) -> (u64, u64) {
+    let first = finder.literals(view, from);
+    let size = finder.len();
+    let (last, sum, count, sound, _) = while [stream = first, sum = (0 as u64), count = (0 as u64), sound = first.count(), going = true] (going) {
+        let (rest, found) = stream.next();
+        match found {
+            Matched(found) => {
+                let stands = if size == 0 {
+                    found.start + 1
+                } else {
+                    found.end
+                };
+                let all = if count + 1 + rest.count() == sound && rest.at() == stands
+                    && found.rule == 0 && found.end == found.start + size {
+                    sound
+                } else {
+                    farthest()
+                };
+                (rest, mixed(sum, found.start, found.end), count + 1, all, true)
+            },
+            Nothing => (rest, sum, count, if rest.at() == stream.at() { sound } else { farthest() }, false)
+        }
+    };
+    if sound == count && stays(last) { (sum, count) } else { (sum, farthest()) }
+}
+
+// The same from two folds.
+fn folded(finder: LiteralFinder, view: TextView, from: u64) -> (u64, u64) {
+    let sum = finder.fold(view, from, 0 as u64, |sum: u64, found: Match| mixed(sum, found.start, found.end));
+    let count = finder.fold(view, from, 0 as u64, |count: u64, found: Match| count + 1);
+    (sum, count)
+}
+
+fn same_pair(first: (u64, u64), second: (u64, u64)) -> bool {
+    let (sum, count) = first;
+    let (other, many) = second;
+    sum == other && count == many
+}
+
+// Whether the stream, the fold and the count of `finder` in `view` from
+// `from` on give the places that comparing at every place gives.
+fn gives(finder: LiteralFinder, view: TextView, hay: [u8; ?], start: u64, from: u64) -> bool {
+    let all = wanted(hay, start, view.len(), finder.needle(), from);
+    let (_, count) = all;
+    same_pair(pulled(finder, view, from), all) && same_pair(folded(finder, view, from), all)
+        && finder.count(view, from) == count
+}
+
+// The finder of the bytes of `needle`.
+fn finder_of(needle: str) -> LiteralFinder {
+    LiteralFinder::new(Text::from_str(needle).view())
+}
+
+// Where the finder of `needle` finds it in `text` from `from`, or the
+// largest place.
+fn place(needle: str, text: Text, from: u64) -> u64 {
+    let finder = finder_of(needle);
+    begun(finder.find(text.view(), from), finder.len())
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+// A finder of `needle` finds what comparing at every place finds, from
+// every place of every view of a text of 95 bytes, and its stream, fold
+// and count give the same places from four places of the text.
+fn found_within(needle: str, message: str) -> Outcome {
+    let text = Text::from_str("he asked Sherlock Holmes of it; Sherlock Holmes said: she sells sea shells, Sherlock, shshshsh.");
+    let finder = finder_of(needle);
+    let hay = bytes_of(text.view());
+    expect(agrees_within(finder, text.view()), message)
+        .and_then(|| expect(gives(finder, text.view(), hay, 0, 0) && gives(finder, text.view(), hay, 0, 10), message))
+        .and_then(|| expect(gives(finder, text.view(), hay, 0, 33) && gives(finder, text.view(), hay, 0, 90), message))
+}
+
+fn test_places() -> Outcome {
+    let text = Text::from_str("he asked Sherlock Holmes of it");
+    let finder = finder_of("Sherlock Holmes");
+    should_be(begun(finder.find(text.view(), 0), 15), 9)
+        .and_then(|| should_be(begun(finder.find(text.view(), 9), 15), 9))
+        .and_then(|| should_be(begun(finder.find(text.view(), 10), 15), farthest()))
+        .and_then(|| should_be(by_bytes(finder, text.view(), 3), 9))
+        .and_then(|| should_be(by_bytes(finder, text.view(), 10), 30))
+        .and_then(|| should_be(finder.len(), 15))
+        .and_then(|| should_be(array::get(finder.needle(), 9), 72))
+        // A finder that is asked once is given up to the call: it is there
+        // until its literal is compared.
+        .and_then(|| should_be(place("Holmes", text, 0), 18))
+        .and_then(|| should_be(place("of it", text, 4), 25))
+        .and_then(|| should_be(place("he", text, 0), 0))
+        .and_then(|| should_be(place("he", text, 1), 10))
+        .and_then(|| should_be(place("he", text, 11), farthest()))
+        .and_then(|| should_be(place("it", text, 28), 28))
+        .and_then(|| should_be(place("it", text, 29), farthest()))
+        .and_then(|| should_be(place("he asked Sherlock Holmes of it", text, 0), 0))
+        .and_then(|| should_be(place("he asked Sherlock Holmes of it", text, 1), farthest()))
+        // Two bytes to seventy: fewer than eight, eight to fifteen,
+        // sixteen, and more, a multiple of sixteen or not.
+        .and_then(|| found_within("sh", "two bytes"))
+        .and_then(|| found_within("she", "three bytes"))
+        .and_then(|| found_within("Sherloc", "seven bytes"))
+        .and_then(|| found_within("Sherlock", "eight bytes"))
+        .and_then(|| found_within("Sherlock ", "nine bytes"))
+        .and_then(|| found_within("Sherlock Holmes", "fifteen bytes"))
+        .and_then(|| found_within("Sherlock Holmes ", "sixteen bytes"))
+        .and_then(|| found_within(" Sherlock Holmes ", "seventeen bytes"))
+        // Alike for sixteen bytes at a place where it is not.
+        .and_then(|| found_within(" Sherlock Holmes sa", "nineteen bytes"))
+        .and_then(|| found_within("Sherlock Holmes said: she sells s", "thirty-three bytes"))
+        .and_then(|| found_within("Sherlock Holmes said: she sells ", "thirty-two bytes"))
+        .and_then(|| found_within("Sherlock Holmes said: she sells sea shells, Sherlock, shshshsh.", "sixty-three bytes"))
+        .and_then(|| found_within("it; Sherlock Holmes said: she sells sea shells, Sherlock, shshshsh.", "to the end"))
+        // Nowhere, by the last byte, by the first, and by a byte inside.
+        .and_then(|| found_within("Sherlock Holmez", "all but the last byte"))
+        .and_then(|| found_within("sherlock Holmes", "all but the first byte"))
+        .and_then(|| found_within("Sherlock said: she sells sea shells, Sherlock; shshshsh.", "all but a byte inside"))
+        // Places that share bytes, and bytes that are alike.
+        .and_then(|| found_within("shsh", "places that share bytes"))
+        .and_then(|| found_within("ss", "two bytes alike"))
+        .and_then(|| found_within("ll", "two bytes alike, there"))
+        .and_then(|| found_within("zzzz", "four bytes alike, nowhere"))
+}
+
+// A finder of `needle` finds what comparing at every place finds in every
+// view of `text`.
+fn found_in(needle: str, text: str, message: str) -> Outcome {
+    let whole = Text::from_str(text);
+    let finder = finder_of(needle);
+    let hay = bytes_of(whole.view());
+    expect(agrees_within(finder, whole.view()), message)
+        .and_then(|| expect(gives(finder, whole.view(), hay, 0, 0) && gives(finder, whole.view(), hay, 0, 1), message))
+}
+
+// Texts shorter than sixteen bytes, texts in which the two bytes that are
+// tested stand too far for a vector, and literals longer than the text.
+fn test_short() -> Outcome {
+    let short = Text::from_str("a cat sat");
+    should_be(place("at", short, 0), 3)
+        .and_then(|| should_be(place("at", short, 4), 7))
+        .and_then(|| should_be(place("at", short, 8), farthest()))
+        .and_then(|| should_be(place("a cat sat", short, 0), 0))
+        .and_then(|| should_be(place("a cat sat.", short, 0), farthest()))
+        .and_then(|| should_be(place("a cat sat on a mat, and then some more of it", short, 0), farthest()))
+        .and_then(|| should_be(place("at", Text::from_str(""), 0), farthest()))
+        .and_then(|| should_be(place("at", Text::from_str("a"), 0), farthest()))
+        .and_then(|| should_be(place("at", Text::from_str("at"), 0), 0))
+        .and_then(|| should_be(by_bytes(finder_of("a cat sat."), short.view(), 0), 9))
+        .and_then(|| found_in("at", "a cat sat", "nine bytes"))
+        .and_then(|| found_in("t s", "a cat sat", "nine bytes, three"))
+        .and_then(|| found_in("a cat sat", "a cat sat", "the whole text"))
+        .and_then(|| found_in("a cat sat on", "a cat sat", "longer than the text"))
+        .and_then(|| found_in("ab", "abababababababa", "fifteen bytes"))
+        .and_then(|| found_in("ab", "ababababababababa", "seventeen bytes"))
+        .and_then(|| found_in("bab", "abababababababab", "sixteen bytes"))
+        // The rarest bytes are the last two: sixteen places are tested
+        // only in a text of the length of the literal and fifteen more.
+        .and_then(|| found_in("eeeeeeeeeeeeeeeeeeeeQZ", "eeeeeeeeeeeeeeeeeeeeeQZeeeeeeeeeeeeeeeeeeeeeeQZee", "the rarest bytes last"))
+        .and_then(|| found_in("QZeeeeeeeeeeeeeeeeeeee", "eeeeeQZeeeeeeeeeeeeeeeeeeeeeQZeeeeeeeeeeeeeeeeeeee", "the rarest bytes first"))
+}
+
+// A literal of no bytes is at every place, and a literal of one byte is
+// where the byte is.
+fn test_none_and_one() -> Outcome {
+    let text = Text::from_str("forty bytes of text, more than two vectors");
+    let hay = bytes_of(text.view());
+    let nothing = finder_of("");
+    let one = finder_of("t");
+    should_be(begun(nothing.find(text.view(), 0), 0), 0)
+        .and_then(|| should_be(begun(nothing.find(text.view(), 17), 0), 17))
+        .and_then(|| should_be(begun(nothing.find(text.view(), 42), 0), 42))
+        .and_then(|| should_be(begun(nothing.find(text.view(), 43), 0), farthest()))
+        .and_then(|| should_be(nothing.len(), 0))
+        .and_then(|| should_be(nothing.count(text.view(), 0), 43))
+        .and_then(|| should_be(nothing.count(text.view(), 40), 3))
+        .and_then(|| should_be(nothing.count(text.view(), 43), 0))
+        .and_then(|| should_be(nothing.count(Text::from_str("").view(), 0), 1))
+        .and_then(|| should_be(begun(one.find(text.view(), 0), 1), 3))
+        .and_then(|| should_be(begun(one.find(text.view(), 4), 1), 8))
+        .and_then(|| should_be(begun(one.find(text.view(), 41), 1), farthest()))
+        .and_then(|| should_be(one.len(), 1))
+        .and_then(|| should_be(one.count(text.view(), 0), 7))
+        .and_then(|| should_be(place("s", text, 0), 10))
+        .and_then(|| should_be(place("s", text, 11), 41))
+        .and_then(|| should_be(place("Q", text, 0), farthest()))
+        .and_then(|| expect(agrees_within(nothing, text.view()), "a literal of no bytes"))
+        .and_then(|| expect(agrees_within(one, text.view()), "a literal of one byte"))
+        .and_then(|| expect(gives(nothing, text.view(), hay, 0, 0) && gives(nothing, text.view(), hay, 0, 41), "the places of no bytes"))
+        .and_then(|| expect(gives(nothing, text.view(), hay, 0, 42) && gives(nothing, text.view(), hay, 0, 43), "the places of no bytes at the end"))
+        .and_then(|| expect(gives(one, text.view(), hay, 0, 0) && gives(one, text.view(), hay, 0, 8), "the places of one byte"))
+        .and_then(|| expect(nothing_past(nothing, text.view(), hay, 0) && nothing_past(one, text.view(), hay, 0), "past the end"))
+}
+
+// Whether `finder` finds what comparing finds in the views of `text` that
+// end before its last `after` bytes, also from the places past their end.
+fn ends(finder: LiteralFinder, text: Text, after: u64) -> bool {
+    let whole = text.view();
+    let hay = bytes_of(whole);
+    let most = whole.len() - after;
+    let (_, same) = while [start = (0 as u64), same = true] (same && start <= most) {
+        let same = match whole.slice_byte(start, most) {
+            Some(part) => nothing_past(finder, part, hay, start) && agrees_all(finder, part, hay, start)
+                && gives(finder, part, hay, start, 0),
+            None => false
+        };
+        (start + 1, same)
+    };
+    same
+}
+
+// A view ends where it says, whatever its text goes on with: the literal
+// begins in the view and ends after it, and is not found. (That no byte
+// past the end is read does not show here: the text goes on, so such a
+// byte could be read.)
+fn test_end() -> Outcome {
+    let text = Text::from_str("a quiet stretch of 40 bytes, and then Sherlock Holmes, Sherlock Holmes and Sherlock Holmes.");
+    let finder = finder_of("Sherlock Holmes");
+    let view = text.view();
+    match view.slice_byte(0, 52) {
+        Some(most) => should_be(begun(finder.find(most, 0), 15), farthest())
+            .and_then(|| should_be(by_bytes(finder, most, 0), 52))
+            .and_then(|| should_be(begun(finder.find(most, 52), 15), farthest()))
+            .and_then(|| should_be(begun(finder.find(most, 53), 15), farthest()))
+            .and_then(|| should_be(begun(finder.find(most, farthest()), 15), farthest()))
+            .and_then(|| should_be(by_bytes(finder, most, farthest() - 15), 52))
+            .and_then(|| should_be(finder.count(most, 0), 0))
+            // One byte more is the last byte of the literal.
+            .and_then(|| should_be(begun(finder.find(view, 0), 15), 38))
+            .and_then(|| should_be(finder.count(view, 0), 3)),
+        None => expect(false, "a view of 52 bytes")
+    }
+        .and_then(|| expect(ends(finder, text, 39) && ends(finder, text, 38), "all but the last byte"))
+        .and_then(|| expect(ends(finder, text, 45) && ends(finder, text, 46), "less than the two bytes"))
+        .and_then(|| expect(ends(finder, text, 17) && ends(finder, text, 1), "between two places"))
+        .and_then(|| expect(ends(finder_of("es"), text, 39) && ends(finder_of("es"), text, 17), "two bytes"))
+        .and_then(|| expect(ends(finder_of("s"), text, 39) && ends(finder_of(""), text, 39), "one byte and none"))
+        .and_then(|| expect(ends(finder_of("Sherlock Holmes, Sherlock Holmes and"), text, 20), "a long literal"))
+}
+
+// Whether `finder` finds from `from` in the `length` bytes of `bytes` from
+// `start` on what comparing at every place finds. The bytes are asked for
+// by index afterwards, so the array is there while they are read through
+// the pointer.
+fn agrees_in(finder: LiteralFinder, bytes: [u8; ?], start: u64, length: u64, from: u64) -> bool {
+    let first = ptr::offset(array::unsafe_data_ptr(bytes), start as i64, PtrArithFlag::Inbounds);
+    let found = finder.unsafe_find(first, length, from);
+    found == answered(bytes, start, length, finder.needle(), from)
+}
+
+// The same from every place of those bytes, their end, the place past it
+// and the places where sixteen more wrap around.
+fn agrees_part(finder: LiteralFinder, bytes: [u8; ?], start: u64, length: u64) -> bool {
+    let (_, same) = while [from = (0 as u64), same = true] (same && from <= length + 1) {
+        (from + 1, agrees_in(finder, bytes, start, length, from))
+    };
+    same && agrees_in(finder, bytes, start, length, farthest())
+        && agrees_in(finder, bytes, start, length, farthest() - 15)
+        && agrees_in(finder, bytes, start, length, farthest() - 16)
+}
+
+// The same in the parts of `bytes` of up to 80 bytes that begin at every
+// eleventh place.
+fn agrees_parts(finder: LiteralFinder, bytes: [u8; ?]) -> bool {
+    let all = array::dim(bytes, 0);
+    let (_, same) = while [start = (0 as u64), same = true] (same && start <= all) {
+        let most = if all - start < 80 {
+            all - start
+        } else {
+            80
+        };
+        let (_, same) = while [length = (0 as u64), same = true] (same && length <= most) {
+            (length + 1, agrees_part(finder, bytes, start, length))
+        };
+        (start + 11, same)
+    };
+    same
+}
+
+// The `size` bytes of `bytes` from `start` on.
+fn part_of(bytes: [u8; ?], start: u64, size: u64) -> [u8; ?] {
+    array::tabulate<[u8; ?]>(size, |at: i64| array::get(bytes, (start as i64) + at))
+}
+
+// The finder of a part of `bytes` finds it in the parts of `bytes`.
+fn found_part(bytes: [u8; ?], start: u64, size: u64, message: str) -> Outcome {
+    let finder = LiteralFinder::of_bytes(part_of(bytes, start, size));
+    expect(finder.len() == size, "a finder does not say the length of its literal")
+        .and_then(|| expect(agrees_parts(finder, bytes), message))
+}
+
+// A finder reads bytes, not text: 299 bytes with every byte among them,
+// in an order that no text has and that comes round after 256 bytes, so
+// that a literal from the first 43 bytes is there twice.
+fn test_any_bytes() -> Outcome {
+    let bytes = array::tabulate<[u8; ?]>(299, |at: i64| ((at * 37 + 11) % 256) as u8);
+    let zeros = array::tabulate<[u8; ?]>(120, |at: i64| (if at == 77 { 255 } else { 0 }) as u8);
+    found_part(bytes, 0, 2, "two bytes")
+        .and_then(|| found_part(bytes, 5, 3, "three bytes"))
+        .and_then(|| found_part(bytes, 40, 9, "nine bytes, there once"))
+        .and_then(|| found_part(bytes, 20, 16, "sixteen bytes"))
+        .and_then(|| found_part(bytes, 3, 40, "forty bytes"))
+        .and_then(|| found_part(bytes, 100, 70, "seventy bytes"))
+        .and_then(|| found_part(bytes, 250, 49, "the last bytes"))
+        .and_then(|| found_part(bytes, 0, 299, "every byte"))
+        .and_then(|| found_part(bytes, 7, 1, "one byte"))
+        .and_then(|| found_part(bytes, 7, 0, "no byte"))
+        // The bytes 255 and 0, in bytes that are nearly all 0.
+        .and_then(|| found_part(zeros, 70, 8, "the byte 255 and zeros"))
+        .and_then(|| found_part(zeros, 77, 2, "the byte 255 and a zero"))
+        .and_then(|| found_part(zeros, 0, 20, "twenty zeros"))
+        .and_then(|| found_part(zeros, 60, 35, "the byte 255 in the middle"))
+}
+
+// The first and the second place that the finder of `needle` tests, as
+// one number: a hundred times the first, and the second.
+fn tested(needle: str) -> u64 {
+    let (first, second) = finder_of(needle).tested();
+    first * 100 + second
+}
+
+// The ranks of all the bytes, each times its byte and one more, added.
+fn ranks() -> u64 {
+    let (_, sum) = while [byte = (0 as u64), sum = (0 as u64)] (byte < 256) {
+        (byte + 1, sum + (byte + 1) * (rank::rank(byte as u8) as u64))
+    };
+    sum
+}
+
+// The two bytes that are tested first are the rarest of the literal by
+// their ranks, the earliest of each: the rarest byte, and the rarest byte
+// at another place, which is another byte unless the literal has none or
+// begins with its rarest byte twice.
+fn test_tested() -> Outcome {
+    should_be(rank::rank(32), 255)
+        .and_then(|| should_be(ranks(), 6659430))
+        .and_then(|| should_be(rank::rank(101), 253))
+        .and_then(|| should_be(rank::rank(0), 55))
+        .and_then(|| should_be(rank::rank(81), 112))
+        .and_then(|| should_be(rank::rank(127), 27))
+        .and_then(|| should_be(rank::rank(192), 255))
+        .and_then(|| should_be(rank::rank(255), 255))
+        // 'H' at 9 and 'k' at 7.
+        .and_then(|| should_be(tested("Sherlock Holmes"), 907))
+        // The second byte is rarer than the first.
+        .and_then(|| should_be(tested("ab"), 100))
+        .and_then(|| should_be(tested("ba"), 1))
+        // 'z', then 'b' rather than a later 'z'.
+        .and_then(|| should_be(tested("zebraz"), 2))
+        .and_then(|| should_be(tested("eeQeeZee"), 205))
+        .and_then(|| should_be(tested("eeZeeQee"), 502))
+        // The earliest of bytes that are alike.
+        .and_then(|| should_be(tested("eeQeQeZZ"), 206))
+        // The rarest byte twice at the beginning, and no rarer byte
+        // after: both places of it. Not so when it comes later.
+        .and_then(|| should_be(tested("zze"), 1))
+        .and_then(|| should_be(tested("zzez"), 1))
+        .and_then(|| should_be(tested("ezz"), 100))
+        .and_then(|| should_be(tested("QQz"), 1))
+        // A rarer byte after: that one, and the first of the two.
+        .and_then(|| should_be(tested("zzQ"), 200))
+        // No other byte: two places of the one there is.
+        .and_then(|| should_be(tested("aaaa"), 1))
+        .and_then(|| should_be(tested("aa"), 1))
+        // Fewer than two bytes: none.
+        .and_then(|| should_be(tested("a"), 0))
+        .and_then(|| should_be(tested(""), 0))
+}
+
+// The places that a stream of `finder` in `text` gives from `from`, the
+// first four of them at most, as one number: every place in two digits
+// after a one.
+fn listed(finder: LiteralFinder, text: Text, from: u64) -> u64 {
+    let (_, digits, _) = while [stream = finder.literals(text.view(), from), digits = (1 as u64), left = (4 as u64)] (left > 0) {
+        let (rest, found) = stream.next();
+        match found {
+            Matched(found) => (rest, digits * 100 + found.start, left - 1),
+            Nothing => (rest, digits, 0)
+        }
+    };
+    digits
+}
+
+// A stream gives the places one after another, and no two of them share a
+// byte; it stands at the end of the place before, and stays where it is
+// when there is none left.
+fn test_stream() -> Outcome {
+    let text = Text::from_str("aaaaaaa, banana and bandana");
+    let three = finder_of("aaa");
+    let ana = finder_of("ana");
+    let stream = ana.literals(text.view(), 0);
+    let (second, first) = stream.next();
+    let (third, next) = second.next();
+    let (fourth, last) = third.next();
+    let (fifth, none) = fourth.next();
+    let (sixth, again) = fifth.next();
+    // The text goes on after the last place.
+    let longer = Text::from_str("banana, and more of it");
+    let (one, _) = ana.literals(longer.view(), 0).next();
+    let (two, nothing) = one.next();
+    let (three_more, _) = two.next();
+    should_be(stream.at(), 0)
+        .and_then(|| should_be(one.at(), 4))
+        .and_then(|| should_be(begun(nothing, 3), farthest()))
+        .and_then(|| should_be(two.at(), 4))
+        .and_then(|| should_be(three_more.at(), 4))
+        .and_then(|| should_be(ana.literals(longer.view(), 9).next().0.at(), 9))
+        .and_then(|| should_be(begun(first, 3), 10))
+        .and_then(|| should_be(second.at(), 13))
+        // The place at 12 shares a byte with the one at 10.
+        .and_then(|| should_be(begun(next, 3), 24))
+        .and_then(|| should_be(third.at(), 27))
+        .and_then(|| should_be(begun(last, 3), farthest()))
+        .and_then(|| should_be(fourth.at(), 27))
+        .and_then(|| should_be(begun(none, 3), farthest()))
+        .and_then(|| should_be(begun(again, 3), farthest()))
+        .and_then(|| should_be(sixth.at(), 27))
+        .and_then(|| should_be(second.count(), 1))
+        .and_then(|| should_be(stream.count(), 2))
+        .and_then(|| should_be(fourth.count(), 0))
+        .and_then(|| should_be(listed(three, text, 0), 10003))
+        .and_then(|| should_be(listed(three, text, 1), 10104))
+        .and_then(|| should_be(listed(three, text, 2), 102))
+        .and_then(|| should_be(listed(three, text, 5), 1))
+        .and_then(|| should_be(listed(finder_of("an"), text, 0), 110121621))
+        .and_then(|| should_be(listed(finder_of("a"), text, 5), 105061012))
+        .and_then(|| should_be(listed(finder_of(""), text, 25), 1252627))
+        .and_then(|| should_be(listed(finder_of(""), text, 28), 1))
+        .and_then(|| should_be(three.count(text.view(), 0), 2))
+        .and_then(|| should_be(ana.count(text.view(), 11), 2))
+        .and_then(|| should_be(ana.count(text.view(), 13), 1))
+        .and_then(|| should_be(ana.count(text.view(), 40), 0))
+        .and_then(|| should_be(ana.fold(text.view(), 0, 0 as u64, |sum: u64, found: Match| sum * 100 + found.end), 1327))
+        .and_then(|| should_be(ana.literals(text.view(), 11).fold(0 as u64, |sum: u64, found: Match| sum * 100 + found.start), 1224))
+        .and_then(|| should_be(second.fold(0 as u64, |sum: u64, found: Match| sum + found.start + (found.rule as u64)), 24))
+        .and_then(|| should_be(finder_of("a").count(text.view(), 0), 14))
+        .and_then(|| should_be(finder_of("an").literals(text.view(), 0).count(), 5))
+}
+
+// `count` copies of `piece` and then `end`.
+fn many(piece: str, count: u64, end: str) -> Text {
+    let (_, all) = while [left = count, all = String::new()] (left > 0) {
+        (left - 1, all.push_str(piece))
+    };
+    Text::from_string(all.push_str(end))
+}
+
+// The finder of `needle` finds in `text`, from six places and by its
+// stream, what comparing at every place finds.
+fn found_among(needle: str, text: Text, message: str) -> Outcome {
+    let finder = finder_of(needle);
+    let view = text.view();
+    let hay = bytes_of(view);
+    let length = view.len();
+    expect(agrees(finder, view, hay, 0, 0) && agrees(finder, view, hay, 0, 1) && agrees(finder, view, hay, 0, 17), message)
+        .and_then(|| expect(agrees(finder, view, hay, 0, length / 2) && agrees(finder, view, hay, 0, length - 20), message))
+        .and_then(|| expect(agrees(finder, view, hay, 0, length - 3) && nothing_past(finder, view, hay, 0), message))
+        .and_then(|| expect(gives(finder, view, hay, 0, 0) && gives(finder, view, hay, 0, 5), message))
+}
+
+// Many places have both bytes and are compared, several of every sixteen
+// and some of them for long, and the literal is at the end or nowhere.
+fn test_candidates() -> Outcome {
+    let run = many("a", 300, "b");
+    let forty = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Eight times 39 `a` and a `b`, then 42 `a`: every place has both
+    // bytes of forty `a` but one in forty, and three places have them all.
+    let broken = many("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", 8, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.");
+    // Every other place has the first forty bytes.
+    let turns = many("ab", 120, "ba, abab");
+    should_be(place(forty, broken, 0), 320)
+        .and_then(|| should_be(place(forty, broken, 322), 322))
+        .and_then(|| should_be(place(forty, broken, 323), farthest()))
+        .and_then(|| should_be(finder_of(forty).count(broken.view(), 0), 1))
+        .and_then(|| should_be(finder_of(forty).count(run.view(), 0), 7))
+        .and_then(|| found_among(forty, broken, "forty bytes alike"))
+        .and_then(|| should_be(place("ababababababababababababababababababababba", turns, 0), 200))
+        .and_then(|| found_among("ababababababababababababababababababababba", turns, "two bytes in turns"))
+        .and_then(|| found_among("ababababababababababababababababababababbb", turns, "two bytes in turns, nowhere"))
+        .and_then(|| should_be(place("aaaaaaab", run, 0), 293))
+        .and_then(|| should_be(place("aaaaaaab", run, 294), farthest()))
+        .and_then(|| should_be(place("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", run, 0), 260))
+        .and_then(|| should_be(place("baaaaaaa", run, 0), farthest()))
+        .and_then(|| should_be(finder_of("aaaaaaa").count(run.view(), 0), 42))
+        .and_then(|| found_among("aaaaaaab", run, "a run and its end"))
+        .and_then(|| found_among("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", run, "a long run and its end"))
+        .and_then(|| found_among("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac", run, "a long run and no end"))
+        .and_then(|| found_among("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", run, "a long run"))
+        .and_then(|| found_among("baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", run, "an end and a run"))
+        // Five places in sixteen have both bytes, and one of sixty the
+        // third.
+        .and_then(|| found_among("QZ.", many("QZ,QZ;", 40, "QZ.QZ!QZ.."), "the third byte differs"))
+        .and_then(|| should_be(place("QZ.", many("QZ,QZ;", 40, "QZ.QZ!QZ.."), 0), 240))
+        .and_then(|| should_be(finder_of("QZ.").count(many("QZ,QZ;", 40, "QZ.QZ!QZ..").view(), 0), 2))
+        // Every place of a sixteen has both bytes, and only the last of
+        // them, or the ninth, or one of the last sixteen of the text has
+        // the third; from 1 and 17 the sixteens begin elsewhere.
+        .and_then(|| should_be(place("QZ.", many("QZ", 23, ".QZQZ"), 0), 44))
+        .and_then(|| should_be(place("QQ.", many("Q", 31, ".QQQQQQQQQQQQQQQQQQQQ"), 0), 29))
+        .and_then(|| should_be(place("QQ.", many("Q", 31, ".QQQQQQQQQQQQQQQQQQQQ"), 1), 29))
+        .and_then(|| should_be(place("QQ.", many("Q", 31, ".QQQQQQQQQQQQQQQQQQQQ"), 30), farthest()))
+        .and_then(|| should_be(place("QQ.", many("Q", 24, ".QQQQQQQQQQQQQQQQQQQQ"), 0), 22))
+        .and_then(|| should_be(place("QQ.", many("Q", 40, "QQ."), 0), 40))
+        .and_then(|| should_be(place("QQ.", many("Q", 40, "QQ."), 39), 40))
+        .and_then(|| should_be(place("QQ.", many("Q", 40, "QQ,"), 0), farthest()))
+        .and_then(|| should_be(finder_of("QQ").count(many("Q", 41, ".").view(), 0), 20))
+        .and_then(|| should_be(finder_of("QQ").count(many("Q", 41, ".").view(), 8), 16))
+        .and_then(|| found_among("QQ.", many("Q", 31, ".QQQQQQQQQQQQQQQQQQQQ"), "sixteen places and the last"))
+        .and_then(|| found_among("QQ.", many("Q", 24, ".QQQQQQQQQQQQQQQQQQQQ"), "sixteen places and the ninth"))
+        .and_then(|| found_among("QQ,", many("Q", 50, ".QQQQQ,"), "sixteen places and the end"))
+        // The two bytes begin a literal of forty: the last place that it
+        // fits at is long before the last place that has both, and the
+        // literal is cut short at the end.
+        .and_then(|| found_among("QZaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", many("QZaaaaaaaaaaaaa", 9, "QZaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaQZaaaaaQZQZaaaQZ"), "places past the last"))
+        .and_then(|| should_be(place("QZaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", many("QZaaaaaaaaaaaaa", 9, "QZaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaQZaaaaaQZQZaaaQZ"), 0), farthest()))
+        .and_then(|| should_be(place("QZaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", many("QZaaaaaaaaaaaaa", 9, "QZaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaQZaaaaaQZQZaaaQZ"), 0), 135))
+        // Two, three, four, seven, eight and fifteen bytes that differ
+        // from a place in their first byte, in their last and inside.
+        .and_then(|| found_among("QZ", many("QY;Qz;Q", 20, "QZ"), "two bytes"))
+        .and_then(|| found_among("QZ.", many("QZ,QZ:.Z.", 20, "QZ."), "three bytes"))
+        .and_then(|| found_among("QZab", many("QZaa;QZbb;QZaB;", 20, "QZab"), "four bytes"))
+        .and_then(|| found_among("QZabcde", many("QZabcdf;QZaBcde;QZabcDe;", 20, "QZabcde"), "seven bytes"))
+        .and_then(|| found_among("QZabcdef", many("QZabcdeg;QZaBcdef;QZabcdEf;", 20, "QZabcdef"), "eight bytes"))
+        .and_then(|| found_among("QZabcdefghijklm", many("QZabcdefghijkln;QZabcdeFghijklm;QZaBcdefghijklm;", 9, "QZabcdefghijklm"), "fifteen bytes"))
+        // The two bytes that are tested stand last, and a place differs
+        // in the first byte only.
+        .and_then(|| found_among("aQZ", many("bQZ;", 20, "aQZ"), "the first of three bytes"))
+        .and_then(|| found_among("abQZ", many("bbQZ;", 20, "abQZ"), "the first of four bytes"))
+        .and_then(|| found_among("abcQZ", many("bbcQZ;", 20, "abcQZ"), "the first of five bytes"))
+        .and_then(|| found_among("abcdeQZ", many("abbdeQZ;", 20, "abcdeQZ"), "the third of seven bytes"))
+        .and_then(|| found_among("abcdefQZ", many("bbcdefQZ;", 20, "abcdefQZ"), "the first of eight bytes"))
+        .and_then(|| found_among("abcdefgQZ", many("bbcdefgQZ;", 20, "abcdefgQZ"), "the first of nine bytes"))
+        .and_then(|| found_among("abcdefghijklmQZ", many("abcdefbhijklmQZ;", 20, "abcdefghijklmQZ"), "the seventh of fifteen bytes"))
+        .and_then(|| found_among("abcabcabcabcabcabcabd", many("abc", 90, "abd, abcabcabcabcabcabcabd"), "a period of three"))
+        .and_then(|| found_among("xyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyz", many("xy", 120, "xyz xy"), "a period of two"))
+}
+
+// ---------------- Fuzz: a finder against byte by byte ----------------
+
+// `count` copies of `character` before `rest`.
+fn copies(character: char, count: u64, rest: List<char>) -> List<char> {
+    let (_, all) = while [left = count, all = rest] (left > 0) {
+        (left - 1, List::Cons { character, all })
+    };
+    all
+}
+
+// Every character as many times as its number says, fewer than `most`.
+fn repeated(pairs: List<(char, u8)>, most: u64) -> List<char> {
+    match pairs {
+        Nil => List::Nil,
+        Cons(pair, rest) => {
+            let (character, count) = pair;
+            copies(character, (count as u64) % most, repeated(rest, most))
+        }
+    }
+}
+
+fn written(out: String, characters: List<char>) -> String {
+    characters.fold_left(out, |string: String, character: char| string.push_char(character))
+}
+
+// All but the first of `characters`.
+fn but_first(characters: List<char>) -> List<char> {
+    match characters {
+        Nil => List::Nil,
+        Cons(_, rest) => rest
+    }
+}
+
+// All but the last of `characters`.
+fn but_last(characters: List<char>) -> List<char> {
+    match characters {
+        Nil => List::Nil,
+        Cons(character, rest) => match rest {
+            Nil => List::Nil,
+            Cons(_, _) => List::Cons { character, but_last(rest) }
+        }
+    }
+}
+
+// A text of pieces: the literal, the literal less its first or its last
+// character, or a character up to 23 times.
+fn pieced(needle: List<char>, pieces: List<(u8, char, u8)>) -> Text {
+    Text::from_string(pieces.fold_left(String::new(), |out: String, piece: (u8, char, u8)| {
+        let (kind, character, count) = piece;
+        match kind % 5 {
+            0 => written(out, needle),
+            1 => written(out, but_first(needle)),
+            2 => written(out, but_last(needle)),
+            _ => written(out, copies(character, (count % 24) as u64, List::Nil))
+        }
+    }))
+}
+
+// A literal of up to four characters, each up to eleven times, in a text
+// of pieces and in a view of it: one search from every place, from the
+// end and from past it, and the stream, the fold and the count from the
+// beginning and from a place.
+fn fuzz_finder(input: (List<(char, u8)>, List<(u8, char, u8)>, (u8, u8))) -> Outcome {
+    let (pairs, pieces, cut) = input;
+    let (before, after) = cut;
+    let characters = repeated(pairs, 12);
+    let needle = Text::from_string(written(String::new(), characters));
+    let finder = LiteralFinder::new(needle.view());
+    let view = pieced(characters, pieces).view();
+    let hay = bytes_of(view);
+    let start = (before as u64) % (view.len() + 1);
+    let end = view.len() - (after as u64) % (view.len() - start + 1);
+    expect(finder.len() == needle.len(), "a finder does not say the length of its literal")
+        .and_then(|| expect(agrees_all(finder, view, hay, 0), "a finder and byte by byte find different places in a text"))
+        .and_then(|| expect(nothing_past(finder, view, hay, 0), "a finder finds a literal past the end of a text"))
+        .and_then(|| expect(gives(finder, view, hay, 0, 0) && gives(finder, view, hay, 0, start), "a stream and byte by byte give different places in a text"))
+        .and_then(|| match view.slice_byte(start, end) {
+            Some(part) => expect(agrees_all(finder, part, hay, start), "a finder and byte by byte find different places in a view")
+                .and_then(|| expect(nothing_past(finder, part, hay, start), "a finder finds a literal past the end of a view"))
+                .and_then(|| expect(gives(finder, part, hay, start, 0) && gives(finder, part, hay, start, (after as u64) % 7), "a stream and byte by byte give different places in a view")),
+            None => expect(false, "a view of a text")
+        })
+}
+
+// Every byte as many times as its number says, up to 23.
+fn spread(pairs: List<(u8, u8)>) -> Vec<u8> {
+    pairs.fold_left(Vec::new(), |bytes: Vec<u8>, pair: (u8, u8)| {
+        let (byte, count) = pair;
+        let (_, bytes) = while [left = (count % 24) as u64, bytes = bytes] (left > 0) {
+            (left - 1, bytes.push(byte))
+        };
+        bytes
+    })
+}
+
+// A literal that is a part of some bytes, whole or with its first or last
+// byte changed, in those bytes and in a part of them, which need be no
+// text.
+fn fuzz_bytes(input: (List<(u8, u8)>, (u8, u8, u8), (u8, u8))) -> Outcome {
+    let (pairs, piece, cut) = input;
+    let (place, size, turn) = piece;
+    let (before, after) = cut;
+    let listed = spread(pairs);
+    let all = listed.len();
+    let bytes = array::tabulate<[u8; ?]>(all, |at: i64| listed.get_or(at as u64, 0));
+    let first = (place as u64) % (all + 1);
+    let size = (size as u64) % (all - first + 1);
+    let changed = match turn % 4 {
+        1 => 0,
+        2 => size - 1,
+        _ => size
+    };
+    let needle = array::tabulate<[u8; ?]>(size, |at: i64| {
+        let byte = array::get(bytes, (first as i64) + at);
+        if (at as u64) == changed {
+            byte ^ turn
+        } else {
+            byte
+        }
+    });
+    let finder = LiteralFinder::of_bytes(needle);
+    let start = (before as u64) % (all + 1);
+    let length = all - start - (after as u64) % (all - start + 1);
+    expect(finder.len() == size, "a finder does not say the length of its literal")
+        .and_then(|| expect(agrees_part(finder, bytes, 0, all), "a finder and byte by byte find different places"))
+        .and_then(|| expect(agrees_part(finder, bytes, start, length), "a finder and byte by byte find different places in a part"))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex literal")
+        .with_case("the places of a literal", test_places)
+        .with_case("short texts", test_short)
+        .with_case("no byte and one byte", test_none_and_one)
+        .with_case("the end of a view", test_end)
+        .with_case("bytes that are no text", test_any_bytes)
+        .with_case("the bytes tested first", test_tested)
+        .with_case("the stream", test_stream)
+        .with_case("places that have both bytes", test_candidates)
+        .with_fuzz(
+            "a finder of a literal & byte by byte (fuzz)",
+            tuple3(
+                tuple2(char_domain().utf8(), u8_domain()).list_with_len(0, 4),
+                tuple3(u8_domain(), char_domain().utf8(), u8_domain()).list_with_len(0, 8),
+                tuple2(u8_domain(), u8_domain())
+            ),
+            fuzz_finder
+        )
+        .with_fuzz(
+            "a finder of a literal & byte by byte in any bytes (fuzz)",
+            tuple3(
+                tuple2(u8_domain(), u8_domain()).list_with_len(0, 6),
+                tuple3(u8_domain(), u8_domain(), u8_domain()),
+                tuple2(u8_domain(), u8_domain())
+            ),
+            fuzz_bytes
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
