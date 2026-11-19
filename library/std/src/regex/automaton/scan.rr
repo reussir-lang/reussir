@@ -38,8 +38,19 @@ impl Automaton {
     pub fn unsafe_longest(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> Found {
         let (last, end) = scan(self, bytes, length, from);
         if last == 0 { Found::Nothing } else {
-            Found::Matched { Match { rule: array::get(self.winners, encoding::place(last, self.shift) as i64), start: from, end } }
+            Found::Matched { Match { rule: rule(self, last), start: from, end } }
         }
+    }
+
+    /// Whether a rule matches bytes that begin at the byte `from` of the
+    /// `length` bytes at `bytes`, which the caller keeps readable for the
+    /// call, or matches no bytes there. The answer comes with the first
+    /// state that accepts, so it does not wait for the end of the longest
+    /// match. A run on the way is read sixteen bytes at a time, which may
+    /// read bytes after the shortest match, and none past `length`. Past
+    /// the end no rule matches.
+    pub fn unsafe_begins(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> bool {
+        begins(self, bytes, length, from)
     }
 
     /// Folds over the matches of the rules in `input`, one after another:
@@ -86,6 +97,44 @@ pub fn scan(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u
         }
     };
     (last, end)
+}
+
+/// The earliest rule that accepts in the state of `cell`, the cell that
+/// `scan` answers for a match.
+pub fn rule(automaton: Automaton, cell: u32) -> u32 {
+    array::get(automaton.winners, encoding::place(cell, automaton.shift) as i64)
+}
+
+/// Whether a match that has bytes can begin with `byte`: the start state
+/// goes on with it.
+pub fn opens(automaton: Automaton, byte: u8) -> bool {
+    array::get(automaton.first, byte as i64) != 0
+}
+
+/// Whether a state accepts on the way from the start state at the byte
+/// `from` of the `length` bytes at `bytes`: the way ends at the first one
+/// that does. No byte is read for a `from` past the end.
+pub fn begins(automaton: Automaton, bytes: ConstPtr<Generic>, length: u64, from: u64) -> bool {
+    // The first step is the one of `scan`.
+    let quick = encoding::kind(automaton.start) == 6 && from < length;
+    let (begun, after, begins) = if quick {
+        (array::get(automaton.first, native::byte_at(bytes, from) as i64), from + 1, true)
+    } else {
+        (automaton.start, from, from <= length)
+    };
+    let (_, _, last, _, _) = while [cell = begun, at = after, last = 0, end = from, going = begins] (going) {
+        match encoding::kind(cell) {
+            // The dead state.
+            0 => (cell, at, last, end, false),
+            // Neither accepts nor has a run.
+            6 => stepped(automaton, bytes, length, cell, at, last, end),
+            // Does not accept: its run is read first.
+            5 => stepped(automaton, bytes, length, cell, skip(automaton, bytes, length, cell, at), last, end),
+            // 1 to 4: accepts.
+            _ => (cell, at, cell, at, false)
+        }
+    };
+    last != 0
 }
 
 // One step from `cell` on the byte at `at`, or the end of the way at the

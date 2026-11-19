@@ -1,6 +1,126 @@
 //! Search: the places of a text where something is found, wherever they
 //! are.
 //!
+//! A match of an automaton begins at the place it is asked from. A search
+//! finds the matches of the rules wherever they begin. A match that has a
+//! byte begins with one of the first bytes of the automaton, so the
+//! searcher seeks the next of them and asks the automaton for the longest
+//! match from there; when there is none, it seeks on from the byte after:
+//!
+//! ```text
+//! rule      [0-9]+ m
+//! text      run 12 km or 300m today
+//! seek      ----^                      a digit at 4
+//! match         --                     no match from there
+//! seek           ^                     a digit at 5
+//! match          -                     no match from there
+//! seek            -------^             a digit at 13
+//! match                  ----          the match, from 13 to 17
+//! ```
+//!
+//! The match found is the one that begins first, and of those that begin
+//! there the longest; where two rules match the same bytes, the earlier
+//! one. The next match begins where it ended or after.
+//!
+//! A match may have no bytes, when a rule matches none. Then every place
+//! is the beginning of a match and nothing is sought. A match of no bytes
+//! is not given at the place where the match before it ended, and the
+//! search goes on one byte after it, which may be inside a character.
+//! That is the rule of the iterator of `regex-automata`, the Rust crate:
+//!
+//! ```text
+//! rule      a*
+//! text      baab
+//! matches   0 to 0, 1 to 3, 4 to 4      and none from 3 to 3
+//! ```
+//!
+//! A place that gives no match costs the bytes that were read from it, and
+//! the next place is read from its own beginning. So the time of a search
+//! is not bounded by the length of the text alone: `a*b` in a text of `a`
+//! only reads from every place to the end, which is the square of the
+//! length. Nothing guards against that yet.
+//!
 //! - `bytes`: `ByteFinder`, which finds the next byte of a set.
+//! - `seek`: one search, the first match from a place.
+//! - `stream`: the matches of a text, pulled one after another.
+
+import core::ptr::Generic;
+import std::collections::pure::list::List;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::TooManyStates;
+import std::regex::search::bytes::ByteFinder;
+import std::regex::tree::ByteRegex;
+import std::result::Result;
+import std::text::TextView;
 
 pub mod bytes;
+mod seek;
+mod stream;
+
+/// A search for the matches of rules anywhere in a text. It is built once
+/// for the rules and searches any text from any place.
+pub struct Searcher {
+    automaton: Automaton,
+    // The finder of the bytes that a match can begin with.
+    finder: ByteFinder,
+    // Whether the next place to try is sought with the finder. It is not
+    // when every place is tried: a rule matches no bytes, or every byte
+    // can begin a match.
+    seeks: bool
+}
+
+/// What a stream of occurrences reads: a searcher, a text, and where the
+/// bytes of the text begin. It holds the text, so those bytes stay
+/// readable for as long as a stream is around.
+pub struct Searching {
+    searcher: Searcher,
+    input: TextView,
+    bytes: ConstPtr<Generic>
+}
+
+/// The matches of the rules anywhere in a text, one after another: each
+/// begins where the one before ended or after. A match is pulled with
+/// `next`, which answers the stream after it:
+///
+/// ```text
+/// let (rest, found) = occurrences.next();
+/// ```
+///
+/// A match of no bytes is not given at the place where the match before
+/// it ended. The stream is a pointer and two places, and a loop that
+/// keeps pulling from the stream it was just given moves it along without
+/// counting references.
+pub struct [value] Occurrences {
+    searching: Searching,
+    // Where the search for the next match begins.
+    at: u64,
+    // Where the match before ended: a match of no bytes is not given
+    // there. It is `at` after a match that has bytes and the byte before
+    // `at` after one that has none; before any match it is a place that
+    // `at` is not. A place rather than a yes or no, so that the stream is
+    // three words, which a call passes as they are.
+    barred: u64
+}
+
+impl Searcher {
+    /// The searcher of `rules`. The search for the states of their
+    /// automaton gives up when it has found more than `limit` of them.
+    pub fn build(rules: List<ByteRegex>, limit: u64) -> Result<Searcher, TooManyStates> {
+        match Automaton::build(rules, limit) {
+            Ok(automaton) => Result::Ok { Searcher::new(automaton) },
+            Err(error) => Result::Err { error }
+        }
+    }
+
+    /// The searcher of the rules of `automaton`.
+    pub fn new(automaton: Automaton) -> Searcher {
+        let first = automaton.first_bytes();
+        let seeks = !automaton.accepts_empty() && first.len() < 256;
+        Searcher { automaton, finder: ByteFinder::new(first), seeks }
+    }
+
+    /// The automaton of the rules, which matches from a given place.
+    pub fn automaton(self: Self) -> Automaton {
+        self.automaton
+    }
+}

@@ -1,0 +1,139 @@
+//! The matches of a text, pulled one after another.
+
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::search::Occurrences;
+import std::regex::search::Searcher;
+import std::regex::search::Searching;
+import std::text::TextView;
+
+impl Occurrences {
+    /// The first match that begins where the stream stands or after, and
+    /// the stream after it. After `Nothing` the stream stays where it is:
+    /// no match is left in the text, and pulling again searches the rest
+    /// of the text again to say so. A stream that begins past the end of
+    /// the text answers `Nothing` too.
+    pub fn next(self: Self) -> (Occurrences, Found) {
+        // The places are read first, so that taking `searching` is the
+        // last use of `self` and moves it.
+        let at = self.at;
+        let barred = self.barred;
+        let searching = self.searching;
+        match searching.next_match(at, barred == at) {
+            Matched(found) => {
+                let (at, barred) = Searching::after(found.start, found.end);
+                (Occurrences { searching, at, barred }, Found::Matched { found })
+            },
+            Nothing => (Occurrences { searching, at, barred }, Found::Nothing)
+        }
+    }
+
+    /// The index of the byte where the search for the next match begins:
+    /// the end of the match before, or one byte after it when that match
+    /// had no bytes; before any match, the place that the stream was made
+    /// from. It is greater than the length of the text for a stream made
+    /// past the end, and after a match of no bytes at the end.
+    pub fn at(self: Self) -> u64 {
+        self.at
+    }
+
+    /// Folds over the matches left in the stream, one after another, up
+    /// to the end of the text.
+    pub fn fold<A>(self: Self, initial: A, step: (A, Match) -> A) -> A {
+        // `step` is passed along to the fold of the rest, which lets the
+        // compiler specialize the fold for a closure written at the call;
+        // a loop clones the closure for every match.
+        let (rest, found) = self.next();
+        match found {
+            Matched(found) => rest.fold(step(initial, found), step),
+            Nothing => initial
+        }
+    }
+
+    /// The number of matches left in the stream. No rule is looked up for
+    /// them.
+    pub fn count(self: Self) -> u64 {
+        let at = self.at;
+        let barred = self.barred;
+        self.searching.count(at, barred)
+    }
+}
+
+impl Searching {
+    // Where a stream stands after a match from `start` to `end`, and the
+    // place where a match of no bytes is not given, its end: the stream
+    // stands one byte after a match of no bytes, so that it is not found
+    // again, and else at the end of the match.
+    fn after(start: u64, end: u64) -> (u64, u64) {
+        if end == start {
+            (end + 1, end)
+        } else {
+            (end, end)
+        }
+    }
+
+    // The next match of a stream that stands at the byte `at`: its cell,
+    // its beginning and its end, as `Searcher::sought` gives them. When
+    // `ended` says that a match ended at `at`, a match of no bytes there
+    // is passed over. The stream keeps `self` across the call, so the
+    // searcher, its automaton and its finder are read here without
+    // counting references.
+    fn next_span(self: Self, at: u64, ended: bool) -> (u32, u64, u64) {
+        let length = self.input.len();
+        let (last, start, end) = self.searcher.sought(self.bytes, length, at);
+        if ended && last != 0 && end == at {
+            self.searcher.sought(self.bytes, length, at + 1)
+        } else {
+            (last, start, end)
+        }
+    }
+
+    // The same as a match with its rule.
+    fn next_match(self: Self, at: u64, ended: bool) -> Found {
+        let (last, start, end) = self.next_span(at, ended);
+        if last == 0 { Found::Nothing } else {
+            Found::Matched { Match { rule: self.searcher.rule(last), start, end } }
+        }
+    }
+
+    // The number of matches of a stream that stands at the byte `at`,
+    // after a match that ended at `barred`.
+    fn count(self: Self, at: u64, barred: u64) -> u64 {
+        let (_, _, count, _) = while [at = at, barred = barred, count = (0 as u64), going = true] (going) {
+            let (last, start, end) = self.next_span(at, barred == at);
+            if last == 0 { (at, barred, count, false) } else {
+                let (at, barred) = Searching::after(start, end);
+                (at, barred, count + 1, true)
+            }
+        };
+        count
+    }
+}
+
+impl Searcher {
+    /// The matches of the rules in `input`, one after another, from the
+    /// byte `from` on. To take them all, pull from the stream, fold over
+    /// it or count: that asks for the searcher once for the whole text.
+    pub fn occurrences(self: Self, input: TextView, from: u64) -> Occurrences {
+        let searching = Searching { searcher: self, bytes: input.unsafe_data_ptr(), input };
+        // No match ended at `from` yet: any other place says so.
+        let barred = if from == 0 {
+            1
+        } else {
+            0
+        };
+        Occurrences { searching, at: from, barred }
+    }
+
+    /// Folds over the matches of the rules in `input` from the byte `from`
+    /// on, one after another, up to the end of the input.
+    pub fn fold<A>(self: Self, input: TextView, from: u64, initial: A, step: (A, Match) -> A) -> A {
+        self.occurrences(input, from).fold(initial, step)
+    }
+
+    /// The number of matches of the rules in `input` from the byte `from`
+    /// on.
+    pub fn count(self: Self, input: TextView, from: u64) -> u64 {
+        self.occurrences(input, from).count()
+    }
+}

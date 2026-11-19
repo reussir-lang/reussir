@@ -48,7 +48,8 @@
 //!   pointer, sixteen or eight at a time.
 //!
 //! `lookahead` and `native` are also what `search::bytes` finds a byte
-//! with: a finder is one run that belongs to no state.
+//! with: a finder is one run that belongs to no state. `scan` is also what
+//! `search` matches with, from the places that it finds.
 
 import core::intrinsic::array;
 import core::ptr::Generic;
@@ -74,7 +75,7 @@ mod inspect;
 pub mod lookahead;
 pub mod native;
 mod pack;
-mod scan;
+pub mod scan;
 mod shuffle;
 mod stream;
 mod vectors;

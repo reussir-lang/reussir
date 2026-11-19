@@ -1,0 +1,893 @@
+// Unit suite and coverage-guided fuzz driver for the searcher of
+// `std::regex::search`: the matches of rules anywhere in a text.
+// Unit cases find the first match from a place: the one that begins first,
+// the longest of those, the earliest rule; ask whether there is a match;
+// pull matches of no bytes, which are not given where a match ended and
+// are stepped over by one byte; pull from a stream, also of a view whose
+// text goes on; fold and count; search with rules whose every byte begins
+// a match, with rules that match nothing, and with an automaton that is
+// there already; find matches that are no byte to forty bytes apart; and
+// search the text that costs most.
+// The first fuzz target builds the searcher of three random rules and
+// compares its matches in a short random text, by the stream, the fold,
+// the count, and one search from every place, with a small matcher on the
+// trees of the rules that tries every beginning from the left and takes
+// the longest match there. The second compares them in a longer text of
+// repeated characters and in a view of it with the steps of the automaton
+// from every beginning, also from places past the end.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_searcher %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_searcher
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_searcher%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_searcher%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex searcher/the first match: unit
+// CHECK-NEXT: regex searcher/whether there is a match: unit
+// CHECK-NEXT: regex searcher/matches of no bytes: unit
+// CHECK-NEXT: regex searcher/the stream: unit
+// CHECK-NEXT: regex searcher/the fold and the count: unit
+// CHECK-NEXT: regex searcher/nothing to seek: unit
+// CHECK-NEXT: regex searcher/matches far apart: unit
+// CHECK-NEXT: regex searcher/the worst case: unit
+// CHECK-NEXT: regex searcher/a searcher & the trees (fuzz):
+// CHECK-NEXT: regex searcher/a searcher & the steps (fuzz):
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::State;
+import std::regex::search::Occurrences;
+import std::regex::search::Searcher;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import std::result::Result;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ----------------------- A matcher for the tests -----------------------
+
+// Whether `regex` matches the empty string.
+fn nullable(regex: ByteRegex) -> bool {
+    match regex {
+        Empty => false,
+        Epsilon => true,
+        Set(_) => false,
+        Concat(a, b) => nullable(a) && nullable(b),
+        Union(a, b) => nullable(a) || nullable(b),
+        Intersect(a, b) => nullable(a) && nullable(b),
+        Star(_) => true,
+        Not(a) => !nullable(a)
+    }
+}
+
+// What may follow `byte` for `regex` to match.
+fn derive(regex: ByteRegex, byte: u64) -> ByteRegex {
+    match regex {
+        Empty => ByteRegex::Empty,
+        Epsilon => ByteRegex::Empty,
+        Set(set) => if set.contains(byte) { ByteRegex::Epsilon } else { ByteRegex::Empty },
+        Concat(a, b) => {
+            let after = ByteRegex::Concat { derive(a, byte), b };
+            if nullable(a) { ByteRegex::Union { after, derive(b, byte) } } else { after }
+        },
+        Union(a, b) => ByteRegex::Union { derive(a, byte), derive(b, byte) },
+        Intersect(a, b) => ByteRegex::Intersect { derive(a, byte), derive(b, byte) },
+        Star(a) => ByteRegex::Concat { derive(a, byte), ByteRegex::Star { a } },
+        Not(a) => ByteRegex::Not { derive(a, byte) }
+    }
+}
+
+// The earliest of `rules` that matches the empty string, numbered from
+// `rule`.
+fn earliest(rules: List<ByteRegex>, rule: u32) -> Option<u32> {
+    match rules {
+        Nil => Option::None,
+        Cons(regex, rest) => if nullable(regex) { Option::Some { rule } } else { earliest(rest, rule + 1) }
+    }
+}
+
+// ------------------------------ The oracle ------------------------------
+
+// A match, or none.
+struct [value] Span {
+    found: bool,
+    rule: u32,
+    start: u64,
+    end: u64
+}
+
+fn no_span() -> Span {
+    Span { found: false, rule: 0, start: 0, end: 0 }
+}
+
+fn same_span(first: Span, second: Span) -> bool {
+    first.found == second.found
+        && (!first.found || (first.rule == second.rule && first.start == second.start && first.end == second.end))
+}
+
+fn span_of(found: Found) -> Span {
+    match found {
+        Matched(found) => Span { found: true, rule: found.rule, start: found.start, end: found.end },
+        Nothing => no_span()
+    }
+}
+
+// The longest match of the trees that begins at `start`, where `bytes`
+// begin: the rules are derived byte after byte, `at` is where the reading
+// stands, and `best` is the match so far.
+fn longest(rules: List<ByteRegex>, bytes: List<u8>, start: u64, at: u64, best: Span) -> Span {
+    let here = match earliest(rules, 0) {
+        Some(rule) => Span { found: true, rule, start, end: at },
+        None => best
+    };
+    match bytes {
+        Nil => here,
+        Cons(byte, rest) => longest(rules.map(|rule: ByteRegex| derive(rule, byte as u64)), rest, start, at + 1, here)
+    }
+}
+
+// The same from the steps of an automaton: it stops at the dead state.
+fn stepped(automaton: Automaton, state: State, bytes: List<u8>, start: u64, at: u64, best: Span) -> Span {
+    let here = match automaton.winner(state) {
+        Some(rule) => Span { found: true, rule, start, end: at },
+        None => best
+    };
+    match bytes {
+        Nil => here,
+        Cons(byte, rest) => {
+            let next = automaton.next(state, byte);
+            if next == Automaton::dead() { here } else { stepped(automaton, next, rest, start, at + 1, here) }
+        }
+    }
+}
+
+// The longest match that begins at every place of `bytes`, from the place
+// `start` where they begin up to their end, in order: `at_place` gives the
+// one that begins where the bytes it is given do.
+fn everywhere(bytes: List<u8>, start: u64, at_place: (List<u8>, u64) -> Span) -> List<Span> {
+    let here = at_place(bytes, start);
+    match bytes {
+        Nil => List::Cons { here, List::Nil },
+        Cons(_, rest) => List::Cons { here, everywhere(rest, start + 1, at_place) }
+    }
+}
+
+fn of_trees(rules: List<ByteRegex>, bytes: List<u8>) -> List<Span> {
+    everywhere(bytes, 0, |rest: List<u8>, start: u64| longest(rules, rest, start, start, no_span()))
+}
+
+fn of_steps(automaton: Automaton, bytes: List<u8>) -> List<Span> {
+    everywhere(bytes, 0, |rest: List<u8>, start: u64| stepped(automaton, automaton.start(), rest, start, start, no_span()))
+}
+
+// The first match that begins at the byte `from` or after it, with the
+// longest match of every place in `spans`: every beginning is tried from
+// the left.
+fn first(spans: List<Span>, from: u64) -> Span {
+    match spans {
+        Nil => no_span(),
+        Cons(span, rest) => if from == 0 {
+            if span.found { span } else { first(rest, 0) }
+        } else {
+            first(rest, from - 1)
+        }
+    }
+}
+
+// The largest place there is.
+fn farthest() -> u64 {
+    18446744073709551615
+}
+
+// One more match in the number that stands for the matches so far.
+fn mixed(sum: u64, rule: u32, start: u64, end: u64) -> u64 {
+    sum * 31 + (rule as u64) + start * 3 + end * 7
+}
+
+// The matches from the byte `from` on, as one number and as how many they
+// are, the way an iterator over searches gives them: each search begins
+// where the match before ended, and a match of no bytes that ends where
+// the match before ended is passed over for a search from one byte later.
+fn wanted(from: u64, search: u64 -> Span) -> (u64, u64) {
+    let (_, _, sum, count, _) = while [at = from, last = farthest(), sum = (0 as u64), count = (0 as u64), going = true] (going) {
+        let found = search(at);
+        let found = if found.found && found.start == found.end && found.end == last {
+            search(at + 1)
+        } else {
+            found
+        };
+        if found.found {
+            (found.end, found.end, mixed(sum, found.rule, found.start, found.end), count + 1, true)
+        } else {
+            (at, last, sum, count, false)
+        }
+    };
+    (sum, count)
+}
+
+// ------------------------- What a searcher finds -------------------------
+
+// Whether a stream that has just answered `Nothing` answers it again and
+// stays where it is.
+fn stays(stream: Occurrences) -> bool {
+    let (rest, found) = stream.next();
+    is_nothing(found) && rest.at() == stream.at()
+}
+
+// The matches pulled from a stream, as `wanted` makes them. After every
+// match the stream counts the matches that it has left, which with those
+// pulled so far are as many every time, and as many as were pulled in the
+// end; and after `Nothing` the stream is pulled once more. When one of
+// these fails, the number of matches is one that no text has.
+fn pulled(searcher: Searcher, view: TextView, from: u64) -> (u64, u64) {
+    let first = searcher.occurrences(view, from);
+    let (last, sum, count, sound, _) = while [stream = first, sum = (0 as u64), count = (0 as u64), sound = first.count(), going = true] (going) {
+        let (rest, found) = stream.next();
+        match found {
+            Matched(found) => {
+                let all = if count + 1 + rest.count() == sound { sound } else { farthest() };
+                (rest, mixed(sum, found.rule, found.start, found.end), count + 1, all, true)
+            },
+            Nothing => (rest, sum, count, sound, false)
+        }
+    };
+    if sound == count && stays(last) { (sum, count) } else { (sum, farthest()) }
+}
+
+// The same from two folds.
+fn folded(searcher: Searcher, view: TextView, from: u64) -> (u64, u64) {
+    let sum = searcher.fold(view, from, 0 as u64, |sum: u64, found: Match| mixed(sum, found.rule, found.start, found.end));
+    let count = searcher.fold(view, from, 0 as u64, |count: u64, found: Match| count + 1);
+    (sum, count)
+}
+
+fn same_pair(first: (u64, u64), second: (u64, u64)) -> bool {
+    let (sum, count) = first;
+    let (other, many) = second;
+    sum == other && count == many
+}
+
+// Whether the stream, the fold and the count of `searcher` in `view` from
+// `from` on give the matches `all`.
+fn gives(searcher: Searcher, view: TextView, from: u64, all: (u64, u64)) -> bool {
+    let (_, count) = all;
+    same_pair(pulled(searcher, view, from), all) && same_pair(folded(searcher, view, from), all)
+        && searcher.count(view, from) == count
+}
+
+// Whether one search from `from` finds `span`, and says that there is a
+// match when there is one.
+fn finds(searcher: Searcher, view: TextView, from: u64, span: Span) -> bool {
+    same_span(span_of(searcher.find(view, from)), span) && searcher.is_match(view, from) == span.found
+}
+
+// Whether `found` is the match of `rule` from `start` up to `end`.
+fn is_span(found: Found, rule: u32, start: u64, end: u64) -> bool {
+    same_span(span_of(found), Span { found: true, rule, start, end })
+}
+
+fn is_nothing(found: Found) -> bool {
+    !span_of(found).found
+}
+
+// The bytes of `view`, each asked for by its index.
+fn bytes_of(view: TextView) -> List<u8> {
+    let (_, bytes) = while [left = view.len(), bytes = List::Nil] (left > 0) {
+        (left - 1, List::Cons { view.byte_at(left - 1).unwrap_or(0), bytes })
+    };
+    bytes
+}
+
+fn rules1(a: Regex) -> List<ByteRegex> {
+    List::Cons { a.to_bytes(), List::Nil }
+}
+
+fn rules2(a: Regex, b: Regex) -> List<ByteRegex> {
+    List::Cons { a.to_bytes(), rules1(b) }
+}
+
+// The outcome of `check` on the searcher of `rules`, or a failure when
+// there are too many states.
+fn built(rules: List<ByteRegex>, check: Searcher -> Outcome) -> Outcome {
+    match Searcher::build(rules, 200) {
+        Ok(searcher) => check(searcher),
+        Err(_) => expect(false, "the automaton has too many states")
+    }
+}
+
+// Whether `searcher` gives in `view`, from every place of it and from the
+// place past its end, the matches that go with the longest match of every
+// place in `spans`.
+fn agrees(searcher: Searcher, view: TextView, spans: List<Span>) -> bool {
+    let (_, same) = while [from = (0 as u64), same = true] (same && from <= view.len() + 1) {
+        let all = wanted(from, |at: u64| first(spans, at));
+        (from + 1, gives(searcher, view, from, all) && finds(searcher, view, from, first(spans, from)))
+    };
+    same
+}
+
+// The same for the matches that the trees of `rules` have.
+fn agrees_with_trees(searcher: Searcher, rules: List<ByteRegex>, view: TextView) -> bool {
+    agrees(searcher, view, of_trees(rules, bytes_of(view)))
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+fn digit() -> Regex {
+    Regex::range(48, 57)
+}
+
+fn lower() -> Regex {
+    Regex::range(97, 122)
+}
+
+// Digits and an `m`.
+fn metres() -> List<ByteRegex> {
+    rules1(digit().plus().then(Regex::byte(109)))
+}
+
+// The first match is the one that begins first, however short; of those
+// that begin there the longest; and of the rules that match it the
+// earliest.
+fn test_find() -> Outcome {
+    let run = Text::from_str("run 12 km or 300m today");
+    let early = Regex::literal(Text::from_str("ab")).or(Regex::literal(Text::from_str("bcde")));
+    let long = Regex::byte(97).or(Regex::literal(Text::from_str("ab"))).or(Regex::literal(Text::from_str("abc")));
+    let keyword = rules2(Regex::literal(Text::from_str("while")), lower().plus());
+    built(metres(), |searcher: Searcher| {
+        expect(is_span(searcher.find(run.view(), 0), 0, 13, 17), "digits that an m follows")
+            .and_then(|| expect(is_span(searcher.find(run.view(), 13), 0, 13, 17), "from its first byte"))
+            .and_then(|| expect(is_span(searcher.find(run.view(), 14), 0, 14, 17), "from inside it, a shorter one"))
+            .and_then(|| expect(is_nothing(searcher.find(run.view(), 16)), "nothing after its last digit"))
+            .and_then(|| expect(
+                is_nothing(searcher.find(run.view(), 23)) && is_nothing(searcher.find(run.view(), 24))
+                    && is_nothing(searcher.find(run.view(), farthest())),
+                "nothing at the end, nor past it"
+            ))
+            .and_then(|| expect(agrees_with_trees(searcher, metres(), run.view()), "from every place"))
+    })
+        .and_then(|| built(rules1(early), |searcher: Searcher| {
+            expect(is_span(searcher.find(Text::from_str("abcde").view(), 0), 0, 0, 2), "the match that begins first, not the longer one after it")
+                .and_then(|| expect(is_span(searcher.find(Text::from_str("abcde").view(), 1), 0, 1, 5), "the longer one from its place"))
+        }))
+        .and_then(|| built(rules1(long), |searcher: Searcher| {
+            let text = Text::from_str("xabcabd");
+            expect(is_span(searcher.find(text.view(), 0), 0, 1, 4), "the longest match that begins there")
+                .and_then(|| expect(is_span(searcher.find(text.view(), 4), 0, 4, 6), "the next one is shorter"))
+                .and_then(|| expect(agrees_with_trees(searcher, rules1(long), text.view()), "from every place"))
+        }))
+        .and_then(|| built(keyword, |searcher: Searcher| {
+            let text = Text::from_str("a while whiles");
+            expect(is_span(searcher.find(text.view(), 0), 1, 0, 1), "a word")
+                .and_then(|| expect(is_span(searcher.find(text.view(), 1), 0, 2, 7), "both rules match the keyword; the earlier one wins"))
+                .and_then(|| expect(is_span(searcher.find(text.view(), 7), 1, 8, 14), "a longer word is a word"))
+                .and_then(|| expect(agrees_with_trees(searcher, keyword, text.view()), "from every place"))
+        }))
+}
+
+fn test_is_match() -> Outcome {
+    let run = Text::from_str("run 12 km or 300m today");
+    let most = Text::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab");
+    built(metres(), |searcher: Searcher| {
+        expect(searcher.is_match(run.view(), 0) && searcher.is_match(run.view(), 15), "there is a match, up to its last digit")
+            .and_then(|| expect(!searcher.is_match(run.view(), 16), "and none after it"))
+            .and_then(|| expect(
+                !searcher.is_match(run.view(), 23) && !searcher.is_match(run.view(), 24)
+                    && !searcher.is_match(run.view(), farthest()),
+                "none at the end, nor past it"
+            ))
+            .and_then(|| expect(!searcher.is_match(Text::from_str("12 km, 300 m").view(), 0), "none in a text without one"))
+    })
+        // The start state has a run.
+        .and_then(|| built(rules1(Regex::byte(97).star().then(Regex::byte(98))), |searcher: Searcher| {
+            match most.view().slice_byte(0, 43) {
+                Some(part) => expect(!searcher.is_match(part, 0), "no match without the last byte"),
+                None => expect(false, "a view of 43 bytes")
+            }
+                .and_then(|| expect(searcher.is_match(most.view(), 0) && searcher.is_match(most.view(), 43), "a match with it"))
+                .and_then(|| expect(!searcher.is_match(most.view(), 44), "none at the end"))
+        }))
+        // A rule that matches no bytes matches at every place, the end
+        // too, and at no place past it.
+        .and_then(|| built(rules1(digit().star()), |searcher: Searcher| {
+            expect(searcher.is_match(run.view(), 0) && searcher.is_match(run.view(), 23), "a match of no bytes, at the end too")
+                .and_then(|| expect(
+                    !searcher.is_match(run.view(), 24) && !searcher.is_match(run.view(), farthest()),
+                    "none past the end"
+                ))
+        }))
+}
+
+// The next three matches of a stream, as one number, with the stream after
+// them.
+fn three(stream: Occurrences) -> (Occurrences, u64) {
+    let (_, stream, sum) = while [left = (3 as u64), stream = stream, sum = (0 as u64)] (left > 0) {
+        let (rest, found) = stream.next();
+        let span = span_of(found);
+        (left - 1, rest, if span.found { mixed(sum, span.rule, span.start, span.end) } else { sum * 31 })
+    };
+    (stream, sum)
+}
+
+// A match of no bytes is given, but not at the place where the match before
+// it ended; after it the search goes on one byte later, inside a character
+// as anywhere else.
+fn test_empty() -> Outcome {
+    let stars = rules1(Regex::byte(97).star());
+    let baab = Text::from_str("baab");
+    built(stars, |searcher: Searcher| {
+        let (first, none) = searcher.occurrences(baab.view(), 0).next();
+        let (second, run) = first.next();
+        let (third, end) = second.next();
+        let (fourth, nothing) = third.next();
+        expect(is_span(none, 0, 0, 0) && first.at() == 1, "a match of no bytes, and the stream one byte after it")
+            .and_then(|| expect(is_span(run, 0, 1, 3) && second.at() == 3, "the run"))
+            .and_then(|| expect(is_span(end, 0, 4, 4) && third.at() == 5, "none at the end of the run, one at the end of the text"))
+            .and_then(|| expect(is_nothing(nothing) && fourth.at() == 5, "nothing after it"))
+            .and_then(|| should_be(searcher.count(baab.view(), 0), 3))
+            // One search does not know of a match before it.
+            .and_then(|| expect(is_span(searcher.find(baab.view(), 3), 0, 3, 3), "one search from the end of the run"))
+            .and_then(|| expect(is_span(searcher.find(baab.view(), 4), 0, 4, 4), "and from the end of the text"))
+            .and_then(|| expect(is_nothing(searcher.find(baab.view(), 5)), "nothing past the end"))
+            .and_then(|| should_be(searcher.count(baab.view(), 4), 1))
+            .and_then(|| should_be(searcher.count(baab.view(), 5), 0))
+            .and_then(|| expect(agrees_with_trees(searcher, stars, baab.view()), "from every place"))
+            // The two bytes of one character.
+            .and_then(|| {
+                let (_, sum) = three(searcher.occurrences(Text::from_str("é").view(), 0));
+                should_be(sum, mixed(mixed(mixed(0, 0, 0, 0), 0, 1, 1), 0, 2, 2))
+            })
+            .and_then(|| should_be(searcher.count(Text::from_str("é").view(), 0), 3))
+            // The stream counts what it has left: after the run, the
+            // match at the end of the text and none where the run ended.
+            .and_then(|| should_be(first.count(), 2))
+            .and_then(|| should_be(second.count(), 1))
+            .and_then(|| should_be(third.count(), 0))
+            // When no match is left none is given, however often the
+            // stream is asked: not one of no bytes where the last ended.
+            .and_then(|| {
+                let aa = Text::from_str("aa");
+                let (rest, all) = searcher.occurrences(aa.view(), 0).next();
+                let (stuck, nothing) = rest.next();
+                let (still, same) = stuck.next();
+                expect(is_span(all, 0, 0, 2) && rest.at() == 2, "all of the text")
+                    .and_then(|| expect(is_nothing(nothing) && stuck.at() == 2, "no match of no bytes at its end"))
+                    .and_then(|| expect(is_nothing(same) && still.at() == 2, "nor when the stream is asked again"))
+                    .and_then(|| should_be(rest.count(), 0))
+                    .and_then(|| should_be(stuck.count(), 0))
+            })
+    })
+        .and_then(|| built(rules1(Regex::epsilon()), |searcher: Searcher| {
+            let (rest, sum) = three(searcher.occurrences(Text::from_str("ab").view(), 0));
+            let (_, more) = rest.next();
+            should_be(sum, mixed(mixed(mixed(0, 0, 0, 0), 0, 1, 1), 0, 2, 2))
+                .and_then(|| expect(is_nothing(more), "three matches of no bytes in two bytes"))
+                .and_then(|| should_be(searcher.count(Text::from_str("").view(), 0), 1))
+        }))
+        // A match that has bytes is given where the match before it ended.
+        .and_then(|| built(rules2(Regex::byte(97).star(), Regex::byte(98)), |searcher: Searcher| {
+            let ab = Text::from_str("ab");
+            let (rest, sum) = three(searcher.occurrences(ab.view(), 0));
+            let (second, _) = searcher.occurrences(ab.view(), 0).next();
+            let (again, nothing) = rest.next();
+            should_be(sum, mixed(mixed(0, 0, 0, 1), 1, 1, 2) * 31)
+                .and_then(|| should_be(rest.at(), 2))
+                .and_then(|| expect(is_nothing(nothing) && again.at() == 2, "nothing when the stream is asked again"))
+                .and_then(|| should_be(second.count(), 1))
+                // A stream from the first place there is, and from the
+                // last, has no match before it.
+                .and_then(|| should_be(searcher.count(ab.view(), 0), 2))
+                .and_then(|| should_be(searcher.count(ab.view(), 1), 1))
+                .and_then(|| should_be(searcher.count(ab.view(), 2), 1))
+        }))
+}
+
+// The matches pulled one by one: the stream stands at the end of the last
+// match and stays there when no match is left. A view ends where it says,
+// whatever its text goes on with.
+fn test_stream() -> Outcome {
+    let run = Text::from_str("run 12 km or 300m today 5m");
+    built(metres(), |searcher: Searcher| {
+        let (second, first) = searcher.occurrences(run.view(), 0).next();
+        let (third, last) = second.next();
+        let (stuck, nothing) = third.next();
+        let (still, same) = stuck.next();
+        let (inside, shorter) = searcher.occurrences(run.view(), 14).next();
+        let (past, none) = searcher.occurrences(run.view(), 40).next();
+        expect(is_span(first, 0, 13, 17) && second.at() == 17, "the first match, and the stream at its end")
+            .and_then(|| expect(is_span(last, 0, 24, 26) && third.at() == 26, "the second"))
+            .and_then(|| expect(
+                is_nothing(nothing) && stuck.at() == 26 && is_nothing(same) && still.at() == 26,
+                "the stream stays where it is when no match is left"
+            ))
+            .and_then(|| expect(is_span(shorter, 0, 14, 17) && inside.at() == 17, "a stream begins where it is told"))
+            .and_then(|| expect(is_nothing(none) && past.at() == 40, "a stream past the end stays there"))
+            .and_then(|| match run.view().slice_byte(4, 16) {
+                Some(part) => expect(
+                    is_nothing(searcher.find(part, 0)) && searcher.count(part, 0) == 0 && !searcher.is_match(part, 0),
+                    "no match in a view that ends before the m"
+                ),
+                None => expect(false, "a view of 12 bytes")
+            })
+            .and_then(|| match run.view().slice_byte(4, 17) {
+                Some(part) => expect(
+                    is_span(searcher.find(part, 0), 0, 9, 13) && agrees_with_trees(searcher, metres(), part),
+                    "the places of a match count from the beginning of the view"
+                ),
+                None => expect(false, "a view of 13 bytes")
+            })
+    })
+}
+
+// The fold over the matches and their count, from the beginning, from a
+// place, from a stream that has given a match, and past the end.
+fn test_fold() -> Outcome {
+    let rules = rules2(lower().plus(), digit().plus());
+    let text = Text::from_str("abc 42 de!x7");
+    built(rules, |searcher: Searcher| {
+        let rules_found = searcher.fold(text.view(), 0, 0 as u64, |rules: u64, found: Match| rules * 10 + (found.rule as u64) + 1);
+        let ends = searcher.fold(text.view(), 0, 0 as u64, |ends: u64, found: Match| ends * 100 + found.end);
+        let (rest, _) = searcher.occurrences(text.view(), 0).next();
+        should_be(rules_found, 12112)
+            .and_then(|| should_be(ends, 306091112))
+            .and_then(|| should_be(searcher.count(text.view(), 0), 5))
+            .and_then(|| should_be(rest.fold(0 as u64, |count: u64, found: Match| count + 1), 4))
+            .and_then(|| should_be(searcher.count(text.view(), 5), 4))
+            .and_then(|| should_be(searcher.fold(text.view(), 5, 0 as u64, |starts: u64, found: Match| starts * 100 + found.start), 5071011))
+            .and_then(|| should_be(searcher.count(text.view(), 12), 0))
+            .and_then(|| should_be(searcher.count(text.view(), farthest()), 0))
+            .and_then(|| should_be(searcher.fold(text.view(), 13, 7 as u64, |count: u64, found: Match| count + 1), 7))
+            .and_then(|| expect(agrees_with_trees(searcher, rules, text.view()), "from every place"))
+    })
+}
+
+// Rules whose matches begin with every byte, so that every place is tried;
+// rules that match nothing; and the searcher of an automaton that is there
+// already.
+fn test_no_seek() -> Outcome {
+    let word = Bits::range(48, 57).union(Bits::range(65, 90)).union(Bits::single(95)).union(Bits::range(97, 122));
+    let tokens = rules2(Regex::bytes(word).plus(), Regex::bytes(word.complement()).plus());
+    // Any byte but an `x` and then a `y`, or an `x`.
+    let pairs = rules1(Regex::bytes(Bits::single(120).complement()).then(Regex::byte(121)).or(Regex::byte(120)));
+    let nothing = rules1(lower().plus().and(digit().plus()));
+    let text = Text::from_str("one two, three; four_5 SIX=7.89 (a-b)");
+    built(tokens, |searcher: Searcher| {
+        let (count, reached) = searcher.automaton().fold(text.view(), 0, 0 as u64, |count: u64, found: Match| count + 1);
+        should_be(searcher.count(text.view(), 0), 18)
+            .and_then(|| expect(count == 18 && reached == 37, "every byte is in a match, as for the automaton"))
+            .and_then(|| expect(searcher.automaton().first_bytes() == Bits::full(), "every byte begins a match"))
+            .and_then(|| expect(agrees_with_trees(searcher, tokens, text.view()), "from every place"))
+    })
+        .and_then(|| built(pairs, |searcher: Searcher| {
+            let places = Text::from_str("aaxayy");
+            expect(searcher.automaton().first_bytes() == Bits::full(), "every byte begins a match")
+                .and_then(|| expect(is_span(searcher.find(places.view(), 0), 0, 2, 3), "two places give no match"))
+                .and_then(|| should_be(searcher.count(places.view(), 0), 2))
+                .and_then(|| expect(agrees_with_trees(searcher, pairs, places.view()), "from every place"))
+        }))
+        .and_then(|| built(nothing, |searcher: Searcher| {
+            expect(
+                is_nothing(searcher.find(text.view(), 0)) && !searcher.is_match(text.view(), 0)
+                    && searcher.count(text.view(), 0) == 0,
+                "rules that match nothing"
+            )
+                .and_then(|| expect(agrees_with_trees(searcher, nothing, text.view()), "from every place"))
+        }))
+        .and_then(|| match Automaton::build(metres(), 100) {
+            Ok(automaton) => {
+                let searcher = Searcher::new(automaton);
+                expect(is_span(searcher.find(Text::from_str("about 40m").view(), 0), 0, 6, 9), "the searcher of an automaton")
+                    .and_then(|| should_be(searcher.automaton().states(), automaton.states()))
+            },
+            Err(_) => expect(false, "the automaton has too many states")
+        })
+}
+
+// A `7` and then no space to forty of them, 41 times, and `!` at the end.
+fn spaced() -> Text {
+    let (_, string) = while [gap = (0 as u64), string = String::new()] (gap <= 40) {
+        let (_, string) = while [left = gap, string = string.push_char('7')] (left > 0) {
+            (left - 1, string.push_char(' '))
+        };
+        (gap + 1, string)
+    };
+    Text::from_string(string.push_char('!'))
+}
+
+// The matches of `7` in that text, as one number: the next one is one byte
+// further than the one before was.
+fn sevens() -> u64 {
+    let (_, _, sum) = while [gap = (0 as u64), at = (0 as u64), sum = (0 as u64)] (gap <= 40) {
+        (gap + 1, at + gap + 1, mixed(sum, 0, at, at + 1))
+    };
+    sum
+}
+
+// Matches that are no byte to forty bytes apart: the next place to try is
+// near, or sixteen bytes and more away. Then the same places, of which
+// only the last one gives a match.
+fn test_far() -> Outcome {
+    let text = spaced();
+    built(rules1(Regex::byte(55)), |searcher: Searcher| {
+        should_be(text.len(), 862)
+            .and_then(|| expect(gives(searcher, text.view(), 0, (sevens(), 41)), "a match at every 7"))
+            .and_then(|| expect(is_span(searcher.find(text.view(), 781), 0, 820, 821), "forty bytes on"))
+            .and_then(|| expect(is_nothing(searcher.find(text.view(), 821)), "nothing after the last one"))
+    })
+        .and_then(|| built(rules1(Regex::byte(55).then(Regex::byte(32).star()).then(Regex::byte(33))), |searcher: Searcher| {
+            expect(is_span(searcher.find(text.view(), 0), 0, 820, 862), "the last of 41 places gives the match")
+                .and_then(|| should_be(searcher.count(text.view(), 0), 1))
+                .and_then(|| expect(searcher.is_match(text.view(), 820) && !searcher.is_match(text.view(), 821), "and no place after it"))
+                .and_then(|| match text.view().slice_byte(0, 861) {
+                    Some(part) => expect(
+                        is_nothing(searcher.find(part, 0)) && searcher.count(part, 0) == 0 && !searcher.is_match(part, 0),
+                        "no place gives one without the last byte"
+                    ),
+                    None => expect(false, "a view of 861 bytes")
+                })
+        }))
+}
+
+// `count` times `a`, and then `rest`.
+fn many(count: u64, rest: str) -> Text {
+    let (_, string) = while [left = count, string = String::new()] (left > 0) {
+        (left - 1, string.push_char('a'))
+    };
+    Text::from_string(string.push_str(rest))
+}
+
+// `a*b` in a text of `a` only: every place is tried and read to the end,
+// and none gives a match. With a `b` at the end the first place does.
+fn test_worst() -> Outcome {
+    built(rules1(Regex::byte(97).star().then(Regex::byte(98))), |searcher: Searcher| {
+        let only = many(300, "");
+        let ended = many(300, "b");
+        expect(
+            is_nothing(searcher.find(only.view(), 0)) && !searcher.is_match(only.view(), 0)
+                && searcher.count(only.view(), 0) == 0,
+            "no match in three hundred times a"
+        )
+            .and_then(|| expect(is_span(searcher.find(ended.view(), 0), 0, 0, 301), "all of it with a b at the end"))
+            .and_then(|| expect(is_span(searcher.find(ended.view(), 5), 0, 5, 301), "from a place of it"))
+            .and_then(|| should_be(searcher.count(ended.view(), 0), 1))
+    })
+}
+
+// ------------------ Fuzz: a searcher against the trees ------------------
+
+fn chars_of(ranges: List<(char, char)>) -> CharSet {
+    ranges.fold_left(CharSet::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(CharSet::range(lo, hi))
+    })
+}
+
+fn bits_of(ranges: List<(u8, u8)>) -> Bits {
+    ranges.fold_left(Bits::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(Bits::range(lo as u64, hi as u64))
+    })
+}
+
+// The two regexes on top of the stack, combined into one.
+fn combine(stack: List<Regex>, both: (Regex, Regex) -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, below) => match below {
+            Cons(under, rest) => List::Cons { both(under, top), rest },
+            Nil => stack
+        },
+        Nil => stack
+    }
+}
+
+// The regex on top of the stack, changed.
+fn change(stack: List<Regex>, one: Regex -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, rest) => List::Cons { one(top), rest },
+        Nil => stack
+    }
+}
+
+// One step of a small program that builds regexes on a stack.
+fn step(stack: List<Regex>, op: u8, characters: CharSet, bytes: Bits) -> List<Regex> {
+    match op % 9 {
+        0 => List::Cons { Regex::chars(characters), stack },
+        1 => List::Cons { Regex::bytes(bytes), stack },
+        2 => List::Cons { Regex::any_char(), stack },
+        3 => List::Cons { Regex::epsilon(), stack },
+        4 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        5 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        6 => combine(stack, |first: Regex, second: Regex| first.and(second)),
+        7 => change(stack, |inner: Regex| inner.star()),
+        // 8: the complement.
+        _ => change(stack, |inner: Regex| inner.not())
+    }
+}
+
+// The regex a program builds: whatever is left on the stack, as a union.
+fn build(ops: List<u8>, characters: CharSet, bytes: Bits) -> ByteRegex {
+    let stack = ops.fold_left(List::Nil, |stack: List<Regex>, op: u8| step(stack, op, characters, bytes));
+    stack.fold_left(Regex::empty(), |all: Regex, regex: Regex| all.or(regex)).to_bytes()
+}
+
+// Three rules from three programs over the same sets.
+fn rules_of(sets: (List<(char, char)>, List<(u8, u8)>), programs: (List<u8>, List<u8>, List<u8>)) -> List<ByteRegex> {
+    let (char_ranges, byte_ranges) = sets;
+    let (first, second, third) = programs;
+    let set = chars_of(char_ranges);
+    let bytes = bits_of(byte_ranges);
+    List::Cons { build(first, set, bytes), List::Cons { build(second, set, bytes), List::Cons { build(third, set, bytes), List::Nil } } }
+}
+
+// `count` copies of `character` before `rest`.
+fn copies(character: char, count: u64, rest: List<char>) -> List<char> {
+    let (_, all) = while [left = count, all = rest] (left > 0) {
+        (left - 1, List::Cons { character, all })
+    };
+    all
+}
+
+// Every character as many times as its number says, fewer than `most`.
+fn repeated(pairs: List<(char, u8)>, most: u8) -> List<char> {
+    match pairs {
+        Nil => List::Nil,
+        Cons(pair, rest) => {
+            let (character, count) = pair;
+            copies(character, (count % most) as u64, repeated(rest, most))
+        }
+    }
+}
+
+fn text_of(characters: List<char>) -> Text {
+    Text::from_string(characters.fold_left(String::new(), |string: String, character: char| string.push_char(character)))
+}
+
+// The first characters of `characters` that are no more than twelve bytes
+// together, as a text: the trees grow with every byte that they are
+// derived by.
+fn short_text(characters: List<char>) -> Text {
+    Text::from_string(characters.fold_left(String::new(), |string: String, character: char| {
+        let longer = string.push_char(character);
+        if longer.len() <= 12 { longer } else { string }
+    }))
+}
+
+// The matches of three rules in a text of a few characters, each up to
+// three times: the stream, the fold, the count and one search, from every
+// place, against the trees.
+fn fuzz_trees(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>), List<(char, u8)>)) -> Outcome {
+    let (sets, programs, pairs) = input;
+    let rules = rules_of(sets, programs);
+    let view = short_text(repeated(pairs, 4)).view();
+    match Searcher::build(rules, 400) {
+        // Too many states for this test: nothing to compare.
+        Err(_) => expect(true, "skipped"),
+        Ok(searcher) => expect(
+            agrees_with_trees(searcher, rules, view),
+            "a searcher and the trees find different matches"
+        )
+    }
+}
+
+// ------------------ Fuzz: a searcher against the steps ------------------
+
+// Whether `searcher` gives in `view`, from `from` on, the matches that go
+// with the longest match of every place in `spans`.
+fn agrees_from(searcher: Searcher, view: TextView, spans: List<Span>, from: u64) -> bool {
+    gives(searcher, view, from, wanted(from, |at: u64| first(spans, at)))
+        && finds(searcher, view, from, first(spans, from))
+}
+
+// The matches of three rules in a text of a few characters, each up to 23
+// times, and in a view of it: from two places, from the end, and from
+// places past the end, against the steps of the automaton.
+fn fuzz_steps(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>), (List<(char, u8)>, (u8, u8), (u8, u8)))) -> Outcome {
+    let (sets, programs, probe) = input;
+    let (pairs, cut, places) = probe;
+    let (before, after) = cut;
+    let (place, other) = places;
+    let view = text_of(repeated(pairs, 24)).view();
+    let start = (before as u64) % (view.len() + 1);
+    let end = view.len() - (after as u64) % (view.len() - start + 1);
+    match Automaton::build(rules_of(sets, programs), 400) {
+        // Too many states for this test: nothing to compare.
+        Err(_) => expect(true, "skipped"),
+        Ok(automaton) => {
+            let searcher = Searcher::new(automaton);
+            let spans = of_steps(automaton, bytes_of(view));
+            expect(
+                agrees_from(searcher, view, spans, 0)
+                    && agrees_from(searcher, view, spans, (place as u64) % (view.len() + 1)),
+                "a searcher and the steps find different matches in a text"
+            )
+                .and_then(|| expect(
+                    agrees_from(searcher, view, spans, view.len())
+                        && agrees_from(searcher, view, spans, view.len() + 1 + (place as u64))
+                        && agrees_from(searcher, view, spans, farthest() - ((other as u64) % 32)),
+                    "a searcher and the steps find different matches from the end of a text or past it"
+                ))
+                .and_then(|| match view.slice_byte(start, end) {
+                    Some(part) => {
+                        let inner = of_steps(automaton, bytes_of(part));
+                        expect(
+                            agrees_from(searcher, part, inner, 0)
+                                && agrees_from(searcher, part, inner, (other as u64) % (part.len() + 1))
+                                && agrees_from(searcher, part, inner, part.len())
+                                && agrees_from(searcher, part, inner, part.len() + 1),
+                            "a searcher and the steps find different matches in a view"
+                        )
+                    },
+                    None => expect(false, "a view of a text")
+                })
+        }
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex searcher")
+        .with_case("the first match", test_find)
+        .with_case("whether there is a match", test_is_match)
+        .with_case("matches of no bytes", test_empty)
+        .with_case("the stream", test_stream)
+        .with_case("the fold and the count", test_fold)
+        .with_case("nothing to seek", test_no_seek)
+        .with_case("matches far apart", test_far)
+        .with_case("the worst case", test_worst)
+        .with_fuzz(
+            "a searcher & the trees (fuzz)",
+            tuple3(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                tuple3(
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5)
+                ),
+                tuple2(char_domain().utf8(), u8_domain()).list_with_len(0, 4)
+            ),
+            fuzz_trees
+        )
+        .with_fuzz(
+            "a searcher & the steps (fuzz)",
+            tuple3(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                tuple3(
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5)
+                ),
+                tuple3(
+                    tuple2(char_domain().utf8(), u8_domain()).list_with_len(0, 4),
+                    tuple2(u8_domain(), u8_domain()),
+                    tuple2(u8_domain(), u8_domain())
+                )
+            ),
+            fuzz_steps
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
