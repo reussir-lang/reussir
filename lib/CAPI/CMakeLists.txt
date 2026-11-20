@@ -44,6 +44,7 @@ set(REUSSIR_BACKEND_ARCHIVES
   MLIRReussirRcDecrementExpansion
   MLIRReussirTokenInstantiation
   MLIRReussirClosureOutlining
+  MLIRReussirConvertVectorToLLVM
   MLIRReussirCompilePolymorphicFFI
   MLIRReussirInstrumentNonlinearFFI
   MLIRReussirAttachNativeTarget

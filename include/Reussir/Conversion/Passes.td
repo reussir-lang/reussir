@@ -375,6 +375,29 @@ def ReussirConvertToLLVMPass
 }
 
 //===----------------------------------------------------------------------===//
+// ConvertVectorToLLVM
+//===----------------------------------------------------------------------===//
+def ReussirConvertVectorToLLVMPass
+    : Pass<"reussir-convert-vector-to-llvm", "::mlir::ModuleOp"> {
+  let summary = "lower the vector dialect to the LLVM dialect";
+  let description = [{
+    `reussir-convert-vector-to-llvm` applies the pattern sets of MLIR's
+    `convert-vector-to-llvm`, with that pass's default options, and the same
+    conversion to the LLVM dialect. MLIR's pass applies the first sets with
+    the greedy driver's default configuration, whose region simplification
+    level is `Aggressive`: after the patterns it removes unreachable blocks
+    and dead operations and arguments, and it merges the similar blocks of
+    every function, also of one without any vector. A merged block gets one
+    argument per operand that differs, and in a large function with many
+    similar arms these arguments multiply from one merge to the next. Here
+    the level is `Normal`, as in MLIR's canonicalizer: everything but the
+    block merging.
+  }];
+  let options = [Option<"armSVE", "enable-arm-sve", "bool", /*default=*/"false",
+                        "Use the ArmSVE dialect in the lowering">];
+}
+
+//===----------------------------------------------------------------------===//
 // FixVectorScale
 //===----------------------------------------------------------------------===//
 def ReussirFixVectorScalePass

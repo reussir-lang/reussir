@@ -257,9 +257,9 @@ MlirPass reussirCreateLowerAffinePass(void) {
   return wrapOwned(mlir::createLowerAffinePass());
 }
 MlirPass reussirCreateConvertVectorToLLVMPass(bool armSVE) {
-  mlir::ConvertVectorToLLVMPassOptions options;
+  reussir::ReussirConvertVectorToLLVMPassOptions options;
   options.armSVE = armSVE;
-  return wrapOwned(mlir::createConvertVectorToLLVMPass(options));
+  return wrapOwned(reussir::createReussirConvertVectorToLLVMPass(options));
 }
 MlirPass reussirCreateFixVectorScalePass(unsigned scale) {
   reussir::ReussirFixVectorScalePassOptions options;
