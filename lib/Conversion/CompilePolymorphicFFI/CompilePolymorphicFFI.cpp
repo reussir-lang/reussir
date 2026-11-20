@@ -240,10 +240,15 @@ compilePolymorphicFFI(mlir::ModuleOp moduleOp, bool optimized,
     additionalArgs.push_back(targetTriple);
   }
 
+  // One store for the module's textures: an open checks and syncs the whole
+  // database.
+  PolyffiCache cache;
+  if (!uncompiledOps.empty())
+    cache = openPolyffiCache();
   for (ReussirPolyFFIOp op : uncompiledOps) {
     std::string monomorphized = monomorphize(moduleOp, op);
     std::unique_ptr<llvm::MemoryBuffer> bitcode = compileRustSourceToBitcode(
-        context, monomorphized, additionalArgs, rustPath, libDirs);
+        context, monomorphized, additionalArgs, rustPath, libDirs, &cache);
     if (!bitcode)
       return mlir::failure();
     llvm::ArrayRef<char> buffer(bitcode->getBufferStart(),
