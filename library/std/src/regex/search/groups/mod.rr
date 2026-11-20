@@ -1,0 +1,358 @@
+//! The groups of a match: the bytes of it that each marked part of its
+//! rule took.
+//!
+//! A rule may mark parts of itself as groups, with `Regex::group`. The
+//! automaton does not know of them: it is the automaton of the same rules
+//! without the marks, and a search finds the matches that it finds
+//! without them. The groups are asked for afterwards, and found in the
+//! bytes of that one match, which are known to match the rule from the
+//! first to the last:
+//!
+//! ```text
+//! rule      ([0-9]+) "-" ([0-9]+) "-" ([0-9]+)
+//! text      on 2026-11-19 at noon
+//! match        ----------                from 3 to 13
+//! group 1      ----                      from 3 to 7
+//! group 2           --                   from 8 to 10
+//! group 3              --                from 11 to 13
+//! ```
+//!
+//! Where the bytes of a match can be shared out in more than one way,
+//! the rule is read from the outside in, and every part of it shares
+//! out its own bytes among the parts inside it:
+//!
+//! ```text
+//! one after another    an earlier part takes as many bytes as it can
+//!                      with the parts after it still matching the rest
+//! one | other          `one` when it matches the bytes, else `other`
+//! a repetition         every time takes as many bytes as it can, and
+//!                      one at least; its groups say the last time
+//! ```
+//!
+//! These are the rules of POSIX for the groups of a match, as Sulzmann
+//! and Lu's parsing with derivatives defines them, for the parts as
+//! they are counted here, and they go with a search for the longest
+//! match: what is written first takes the most. The parts that come one
+//! after another are counted as they are written, however `then` nests
+//! them. A group that the bytes did not come through is absent: one in
+//! the branch that was not taken, or in a repetition of no times.
+//!
+//! ```text
+//! rule      (a | ab) (c | bcd) (d*)
+//! text      abcd
+//! groups    ab, c and d            not a, bcd and no bytes
+//! ```
+//!
+//! In one thing the parts are not those of POSIX: neighbours without a
+//! group inside are one part, which takes the most that both can take
+//! together. So the bytes of a group can depend on whether the parts
+//! before it are groups, where in POSIX they do not:
+//!
+//! ```text
+//! rule      (a | ab) (c | bcd) (d*)    with the last part as its
+//!                                      only group
+//! text      abcd
+//! group     no bytes, at the end       the two parts before it are
+//!                                      one, and take all four bytes;
+//!                                      in POSIX the group is d
+//! ```
+//!
+//! The groups are found by reading, not by trying. Every part that has
+//! a group inside is asked one question of its bytes, and the answer is
+//! one reading of them from left to right with the automata of what is
+//! inside the part, groups left out; no byte is tried and taken back.
+//! So what is inside a group, and beside it, may be any regex, with
+//! complements and intersections, and the time and the memory of a
+//! match are bounded when the searcher is built.
+//!
+//! For `first rest`, the automaton of `first` reads on, and at every
+//! place where it accepts the automaton of `rest` begins anew. Of the
+//! beginnings that come to one state the last is kept, and the last one
+//! that accepts at the end is where `first` ends:
+//!
+//! ```text
+//! parts     [0-9]+   then   "-" [0-9]+ "-" [0-9]+
+//! bytes     2  0  2  6  -  1  1  -  1  9
+//! first      ^  ^  ^  ^  x              accepts after every digit, and
+//!                                       is dead after the dash
+//! rest       x  x  x  ^-----            begins after every digit; only
+//!                                       the beginning at 4 has a dash
+//! ```
+//!
+//! With `first` dead and one beginning left, that one is the answer, and
+//! the rest of the bytes is not read. `one | other` is the automaton of
+//! `one` over the bytes. A repetition is the automaton of what is
+//! repeated, begun anew at every place where a time can end; a
+//! beginning that comes to a state where an earlier one stands is left
+//! out, for the earlier one took more bytes in a time before.
+//!
+//! The groups of a match cost one reading of its bytes for every part
+//! with a group inside that the bytes come through, times the
+//! beginnings that are alive, which are no more than the states of an
+//! automaton. The automata of all parts together have no more states
+//! than the limit given to `Searcher::with_groups`; rules that need
+//! more are refused. That limit bounds the time of a match, and it is
+//! spent faster than the limit of the automaton of the rules: of n
+//! parts in a row, each has an automaton and so have all the parts
+//! after each, so the states grow with the square of n. Fifteen fields
+//! with a mark between them make an automaton of 22 states, and their
+//! groups need 366. Rules with a group under a complement or an
+//! intersection are refused too: the bytes that match one do not come
+//! through what is inside it.
+//!
+//! The groups of a match are written into a `Groups`, which the caller
+//! hands in and gets back. One serves all the matches of a fold, and
+//! nothing is allocated for a match:
+//!
+//! ```text
+//! let groups = Groups::of(searcher);
+//! let (sum, groups) = searcher.fold_groups(view, 0, groups, 0, step);
+//! ```
+//!
+//! A `Groups` that was made for another searcher, or that another
+//! searcher wrote into, may be handed in as well: one whose words are
+//! not laid out as this searcher lays them out is left, and a new one
+//! is made for the answer.
+//!
+//! - `program`: the questions of the rules, in the order they are asked,
+//!   and the tables of their automata.
+//! - `fill`: asking them of the bytes of a match.
+
+import core::intrinsic::array;
+import core::ptr::Generic;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::TooManyStates;
+import std::regex::search::Occurrences;
+import std::regex::search::Searcher;
+import std::regex::search::Searching;
+import std::regex::search::groups::fill::absent;
+import std::regex::tree::Regex;
+import std::result::Result;
+import std::text::TextView;
+
+mod fill;
+mod program;
+
+/// The questions that say the groups of a match, for every rule, and the
+/// tables of the automata that answer them.
+pub struct Program {
+    // The questions, six words each: `program` has their parts.
+    code: [u64; ?],
+    // Four words for each rule: where its questions begin, where they
+    // end, the number of its groups, the whole match counted, and the
+    // number of its registers.
+    rules: [u64; ?],
+    // The rows of all the automata, one after another. A cell is the
+    // place of a row in here, with the kind of its state in the three
+    // lowest bits, as in an automaton. The first 256 cells are a dead
+    // state.
+    next: [u32; ?],
+    // The column of every byte, 256 for each automaton.
+    classes: [u8; ?],
+    // What a `Groups` has room for, in this order: two places for each
+    // group, the places between the parts, two lists of beginnings, two
+    // words each, the step in which each state was last come to, the
+    // number of those, and the number of the last step.
+    slots: u64,
+    registers: u64,
+    marks: u64,
+    threads: u64
+}
+
+/// The groups of a match: for each, where it begins and where it ends, or
+/// that it is absent. Group 0 is the whole match, and the others are
+/// numbered in the order they begin in, in the rule that matched.
+///
+/// It is made once for a searcher, with `Groups::of`, handed to every
+/// question for the groups of a match, and given back with the answer
+/// written into it. Nothing is allocated for a match, as long as no other
+/// copy of the one that is handed in is kept, and it was made for the
+/// searcher that is asked; for one made for another searcher, a new one
+/// is made when that one will not do.
+pub struct [value] Groups {
+    // Two places for each group, and after them what finding them needs.
+    slots: [u64; ?],
+    // The rule of the match.
+    rule: u32,
+    // The number of groups of that rule, the whole match counted.
+    count: u32
+}
+
+/// What a group took of a match.
+pub enum [value] Taken {
+    /// The index of the first byte of the group, and the index of the
+    /// byte after it.
+    Span(u64, u64),
+    /// The bytes of the match did not come through the group, or the
+    /// rule has no such group.
+    Absent
+}
+
+/// Why rules with groups have no searcher.
+pub enum [value] Refused {
+    /// The automaton of the rules, or the automata that their groups are
+    /// found with, need more states than the limit.
+    TooManyStates(TooManyStates),
+    /// The rule with this number has a group under a complement or an
+    /// intersection.
+    Misplaced(u32)
+}
+
+impl Groups {
+    /// Room for the groups of a match of `searcher`, with no match yet:
+    /// every group is absent.
+    pub fn of(searcher: Searcher) -> Groups {
+        Groups { slots: searcher.fresh(), rule: 0, count: 0 }
+    }
+
+    /// The number of groups of the rule that matched, the whole match
+    /// counted; 0 before any match.
+    pub fn len(self: Self) -> u64 {
+        self.count as u64
+    }
+
+    /// The rule that matched.
+    pub fn rule(self: Self) -> u32 {
+        self.rule
+    }
+
+    /// The group `group` of the match.
+    pub fn get(self: Self, group: u64) -> Taken {
+        if group < (self.count as u64) {
+            let start = array::get(self.slots, (2 * group) as i64);
+            if start == absent() { Taken::Absent } else {
+                Taken::Span { start, array::get(self.slots, (2 * group + 1) as i64) }
+            }
+        } else { Taken::Absent }
+    }
+}
+
+impl Searcher {
+    /// The searcher of `rules`, which may have groups: it finds the
+    /// matches that the searcher of the rules without their groups finds,
+    /// and says the groups of a match. The search for the states of the
+    /// automaton of the rules gives up when it has found more than
+    /// `limit` of them, and so does the search for the states of the
+    /// automata that the groups are found with, all of them together.
+    /// Those are more than the states of the automaton of the rules, and
+    /// grow with the square of the number of parts in a row that have a
+    /// group between them.
+    pub fn with_groups(rules: List<Regex>, limit: u64) -> Result<Searcher, Refused> {
+        match program::misplaced(rules, 0) {
+            Some(rule) => Result::Err { Refused::Misplaced { rule } },
+            None => match Automaton::build(rules.map(|rule: Regex| rule.to_bytes()), limit) {
+                Ok(automaton) => match program::build(rules, limit) {
+                    Ok(program) => Result::Ok { Searcher::new(automaton).grouped(program) },
+                    Err(error) => Result::Err { Refused::TooManyStates { error } }
+                },
+                Err(error) => Result::Err { Refused::TooManyStates { error } }
+            }
+        }
+    }
+
+    /// The groups of the match `found` of this searcher in `input`,
+    /// written into `groups`: one that `Groups::of` made for this
+    /// searcher is written in place, and so is any other that will do;
+    /// else a new one is made.
+    /// For a `found` that this searcher did not find in `input`, the
+    /// groups say nothing that holds, and none when it is not inside the
+    /// input. To take the groups of every match, fold with `fold_groups`:
+    /// every call from another package counts a reference to the
+    /// searcher and asks the text for its bytes.
+    pub fn groups(self: Self, input: TextView, found: Match, groups: Groups) -> Groups {
+        let filled = self.filled(input.unsafe_data_ptr(), input.len(), found, groups);
+        // The length is asked for again so that the last use of `input`
+        // comes after its bytes are read through the pointer.
+        let count = if found.end <= input.len() {
+            filled.count
+        } else {
+            0
+        };
+        Groups { slots: filled.slots, rule: filled.rule, count }
+    }
+
+    /// Folds over the matches of the rules in `input` from the byte `from`
+    /// on, one after another, each with its groups. `step` is handed the
+    /// groups of the match and hands them back, and the fold gives them
+    /// back at the end, for the next text. `groups` is one of
+    /// `Groups::of` for this searcher, or one that a fold or a stream of
+    /// it gave back; any other is taken too, at the cost of a new one
+    /// when it will not do.
+    pub fn fold_groups<A>(self: Self, input: TextView, from: u64, groups: Groups, initial: A, step: (A, Groups) -> (A, Groups)) -> (A, Groups) {
+        self.occurrences(input, from).fold_groups(groups, initial, step)
+    }
+
+    // The same searcher with the questions `program` for its groups.
+    fn grouped(self: Self, program: Option<Program>) -> Searcher {
+        Searcher { automaton: self.automaton, way: self.way, finder: self.finder, literal: self.literal, program }
+    }
+
+    // The words that the groups of a match need, with nothing in them.
+    fn fresh(self: Self) -> [u64; ?] {
+        match self.program {
+            Some(program) => fill::fresh(program),
+            // The whole match.
+            None => array::splat<[u64; ?]>(2, 0)
+        }
+    }
+
+    // The groups of the match `found` in the `length` bytes at `bytes`,
+    // written into `groups`. A searcher without groups says the whole
+    // match.
+    fn filled(self: Self, bytes: ConstPtr<Generic>, length: u64, found: Match, groups: Groups) -> Groups {
+        match self.program {
+            Some(program) => fill::fill(program, bytes, length, found, groups),
+            None => fill::whole(length, found, groups)
+        }
+    }
+}
+
+impl Searching {
+    // The groups of the match `found` of the stream, written into
+    // `groups`. The stream keeps `self` across the call, so the searcher
+    // and its tables are read without counting references.
+    fn grouped(self: Self, found: Match, groups: Groups) -> Groups {
+        self.searcher.filled(self.bytes, self.input.len(), found, groups)
+    }
+}
+
+impl Occurrences {
+    /// The first match that begins where the stream stands or after, with
+    /// its groups written into `groups`, and the stream after it. After
+    /// `Nothing` the stream stays where it is and the groups are as they
+    /// were handed in. `groups` is as for `Searcher::fold_groups`.
+    pub fn next_groups(self: Self, groups: Groups) -> (Occurrences, Found, Groups) {
+        // As in `next`, taking `searching` is the last use of `self`.
+        let at = self.at;
+        let barred = self.barred;
+        let searching = self.searching;
+        match searching.next_match(at, barred == at) {
+            Matched(found) => {
+                let (at, barred) = Searching::after(found.start, found.end);
+                let groups = searching.grouped(found, groups);
+                (Occurrences { searching, at, barred }, Found::Matched { found }, groups)
+            },
+            Nothing => (Occurrences { searching, at, barred }, Found::Nothing, groups)
+        }
+    }
+
+    /// Folds over the matches left in the stream, one after another, each
+    /// with its groups, up to the end of the text. `step` is handed the
+    /// groups of the match and hands them back, and the fold gives them
+    /// back at the end. `groups` is as for `Searcher::fold_groups`.
+    pub fn fold_groups<A>(self: Self, groups: Groups, initial: A, step: (A, Groups) -> (A, Groups)) -> (A, Groups) {
+        // `step` is passed along to the fold of the rest, as in `fold`.
+        let (rest, found, groups) = self.next_groups(groups);
+        match found {
+            Matched(_) => {
+                let (value, groups) = step(initial, groups);
+                rest.fold_groups(groups, value, step)
+            },
+            Nothing => (initial, groups)
+        }
+    }
+}

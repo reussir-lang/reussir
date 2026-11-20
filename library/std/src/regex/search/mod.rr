@@ -66,6 +66,7 @@
 //! length. Nothing guards against that yet.
 //!
 //! - `bytes`: `ByteFinder`, which finds the next byte of a set.
+//! - `groups`: the bytes of a match that each group of its rule took.
 //! - `literal`: `LiteralFinder`, which finds some bytes one after another.
 //! - `rank`: how common every byte is.
 //! - `plan`: how a searcher seeks, chosen from its automaton.
@@ -78,12 +79,14 @@ import std::option::Option;
 import std::regex::automaton::Automaton;
 import std::regex::automaton::TooManyStates;
 import std::regex::search::bytes::ByteFinder;
+import std::regex::search::groups::Program;
 import std::regex::search::literal::LiteralFinder;
 import std::regex::tree::ByteRegex;
 import std::result::Result;
 import std::text::TextView;
 
 pub mod bytes;
+pub mod groups;
 pub mod literal;
 mod plan;
 pub mod rank;
@@ -100,7 +103,9 @@ pub struct Searcher {
     finder: ByteFinder,
     // The finder of the bytes that every match begins with, when those
     // are what is sought.
-    literal: Option<LiteralFinder>
+    literal: Option<LiteralFinder>,
+    // The questions that say the groups of a match, when a rule has one.
+    program: Option<Program>
 }
 
 /// How a searcher comes to the next place to try. It is chosen when the
@@ -176,7 +181,7 @@ impl Searcher {
             Literal => Option::Some { LiteralFinder::of_bytes(prefix) },
             _ => Option::None
         };
-        Searcher { automaton, way, finder: ByteFinder::new(first), literal }
+        Searcher { automaton, way, finder: ByteFinder::new(first), literal, program: Option::None }
     }
 
     /// The automaton of the rules, which matches from a given place.

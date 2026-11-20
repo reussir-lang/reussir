@@ -1,0 +1,411 @@
+//! The questions of the rules, in the order they are asked, and the
+//! tables of their automata.
+//!
+//! A question is asked of a stretch of bytes that is known to match a
+//! part of a rule, and says where the parts inside it are. The places
+//! are kept in registers: the first two are the beginning and the end of
+//! the match, and a question fills one or two more, which the questions
+//! after it read. A rule is asked all its questions, in the order they
+//! are written here. The questions of a part come one after another,
+//! the question of the part first, and only they read the registers
+//! that they fill. A question of a part that the bytes did not come
+//! through reads a register that holds no place: it is not asked, and
+//! the next one is the question after the part.
+//!
+//! ```text
+//! rule      ([0-9]+) ("-" ([a-z]+))?
+//!
+//! r2        where [0-9]+ ends in the bytes from r0 to r1, with
+//!           ("-" [a-z]+)? matching the rest
+//! group 1   from r0 to r2
+//! r3, r4    which branch the bytes from r2 to r1 are of: r3 is r2 when
+//!           they are none, and else r4 is
+//! group 2   from r4 to r1
+//! r5        where "-" ends in the bytes from r4 to r1, with [a-z]+
+//!           matching the rest
+//! group 3   from r5 to r1
+//! ```
+//!
+//! A question is six words: what it asks, and above the three lowest
+//! bits of that the place of the question after its part; the registers
+//! of the beginning and of the end of its bytes; the register that it
+//! fills or the group that it says; and two more that are automata or a
+//! second register.
+//! An automaton is a word: the cell of its start state, and above it
+//! where its columns of bytes begin. The automata are those of
+//! `Automaton::build`, one for each, with their rows copied one after
+//! another into one table.
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::TooManyStates;
+import std::regex::search::groups::Program;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import std::result::Result;
+
+/// The group `fills` is the bytes from the register `from` to the
+/// register `to`.
+pub fn says() -> u64 {
+    0
+}
+
+/// Where the first of two parts ends: the automaton `first` matches up
+/// to there and the automaton `second` from there on.
+pub fn splits() -> u64 {
+    1
+}
+
+/// Which of two branches the bytes are of: the register `fills` holds
+/// their beginning when the automaton `first` matches them, and else the
+/// register `second` does.
+pub fn chooses() -> u64 {
+    2
+}
+
+/// Where the last time of a repetition begins, with the automaton `first`
+/// of what is repeated; no place when there are no bytes.
+pub fn repeats() -> u64 {
+    3
+}
+
+/// The same for once or more: with no bytes, the one time has none.
+pub fn repeats_once() -> u64 {
+    4
+}
+
+/// The number of words of a question.
+pub fn width() -> u64 {
+    6
+}
+
+// The questions so far. The registers and the groups are those of the
+// rule in hand: a rule begins with the two registers of a match and with
+// the group of the whole match.
+struct Asked {
+    code: Vec<u64>,
+    rules: Vec<u64>,
+    registers: u64,
+    groups: u64
+}
+
+// The tables of the automata so far: their states, all together, the
+// most states of one, and whether they are more than the limit.
+struct Tables {
+    next: Vec<u32>,
+    classes: Vec<u8>,
+    states: u64,
+    threads: u64,
+    limit: u64,
+    over: bool
+}
+
+// Both, while the rules are gone through.
+struct Building {
+    asked: Asked,
+    tables: Tables
+}
+
+// The number of groups in `regex`.
+fn groups_of(regex: Regex) -> u64 {
+    match regex {
+        Group(inner) => 1 + groups_of(inner),
+        Concat(first, second) => groups_of(first) + groups_of(second),
+        Union(first, second) => groups_of(first) + groups_of(second),
+        Intersect(first, second) => groups_of(first) + groups_of(second),
+        Star(inner) => groups_of(inner),
+        Plus(inner) => groups_of(inner),
+        Not(inner) => groups_of(inner),
+        // A set, the empty string or nothing.
+        _ => 0
+    }
+}
+
+// Whether `regex` has a group under a complement or an intersection.
+fn misplaces(regex: Regex) -> bool {
+    match regex {
+        Group(inner) => misplaces(inner),
+        Concat(first, second) => misplaces(first) || misplaces(second),
+        Union(first, second) => misplaces(first) || misplaces(second),
+        Intersect(first, second) => groups_of(first) + groups_of(second) > 0,
+        Star(inner) => misplaces(inner),
+        Plus(inner) => misplaces(inner),
+        Not(inner) => groups_of(inner) > 0,
+        // A set, the empty string or nothing.
+        _ => false
+    }
+}
+
+/// The first of `rules`, numbered from `rule`, that has a group under a
+/// complement or an intersection.
+pub fn misplaced(rules: List<Regex>, rule: u32) -> Option<u32> {
+    match rules {
+        Nil => Option::None,
+        Cons(regex, _) if misplaces(regex) => Option::Some { rule },
+        Cons(_, rest) => misplaced(rest, rule + 1)
+    }
+}
+
+// The parts of `regex` that come one after another, before `after`.
+fn flat(regex: Regex, after: List<Regex>) -> List<Regex> {
+    match regex {
+        Concat(first, second) => flat(first, flat(second, after)),
+        // Anything else is one part.
+        _ => List::Cons { regex, after }
+    }
+}
+
+// The same parts, with neighbours that have no group as one part.
+fn joined(parts: List<Regex>) -> List<Regex> {
+    match parts {
+        Nil => List::Nil,
+        Cons(first, rest) => {
+            let others = joined(rest);
+            match others {
+                Cons(second, more) if groups_of(first) == 0 && groups_of(second) == 0 =>
+                    List::Cons { Regex::Concat { first, second }, more },
+                // The end, or a part with a group on one side.
+                _ => List::Cons { first, others }
+            }
+        }
+    }
+}
+
+// `parts` one after another, without their groups. There is one at least.
+fn chain(parts: List<Regex>) -> ByteRegex {
+    match parts {
+        Nil => ByteRegex::Epsilon,
+        Cons(first, rest) => match rest {
+            Nil => first.to_bytes(),
+            // More parts after it.
+            _ => ByteRegex::Concat { first.to_bytes(), chain(rest) }
+        }
+    }
+}
+
+impl Asked {
+    fn new() -> Asked {
+        Asked { code: Vec::new(), rules: Vec::new(), registers: 2, groups: 1 }
+    }
+
+    // One more question, which fills `registers` registers of the rule in
+    // hand and says `groups` of its groups.
+    fn ask(self: Self, what: u64, from: u64, to: u64, fills: u64, first: u64, second: u64, registers: u64, groups: u64) -> Asked {
+        Asked {
+            code: self.code.push(what).push(from).push(to).push(fills).push(first).push(second),
+            rules: self.rules,
+            registers: self.registers + registers,
+            groups: self.groups + groups
+        }
+    }
+
+    // The part of the question at `question` is done: the question after
+    // it is the next that is asked. It goes above the three bits of what
+    // the question asks.
+    fn skips(self: Self, question: u64) -> Asked {
+        let after = self.code.len();
+        let what = self.code.get_or(question, 0);
+        Asked { code: self.code.set(question, what + 8 * after), rules: self.rules, registers: self.registers, groups: self.groups }
+    }
+
+    // The rule in hand is done: its questions began at `began`.
+    fn close(self: Self, began: u64) -> Asked {
+        Asked {
+            rules: self.rules.push(began).push(self.code.len()).push(self.groups).push(self.registers),
+            code: self.code,
+            registers: 2,
+            groups: 1
+        }
+    }
+}
+
+impl Tables {
+    fn new(limit: u64) -> Tables {
+        // The dead state of every automaton is the cell 0, whose row is
+        // these cells, as many as an automaton has columns at most.
+        let (_, next) = while [left = (256 as u64), next = Vec::new()] (left > 0) {
+            (left - 1, next.push(0))
+        };
+        Tables { next, classes: Vec::new(), states: 0, threads: 0, limit, over: false }
+    }
+
+    // The automata have more states than the limit.
+    fn overrun(self: Self) -> Tables {
+        Tables { next: self.next, classes: self.classes, states: self.states, threads: self.threads, limit: self.limit, over: true }
+    }
+
+    // The automaton of `regex` among the tables, as the word of it: the
+    // cell of its start state, and above it where its columns begin. Its
+    // cells are the places of its rows in an array of its own; here they
+    // are the places among the rows of all automata. The dead state stays
+    // the cell 0.
+    fn add(self: Self, regex: ByteRegex) -> (Tables, u64) {
+        let left = if self.states < self.limit && !self.over {
+            self.limit - self.states
+        } else {
+            0
+        };
+        match Automaton::build(List::Cons { regex, List::Nil }, left) {
+            Err(_) => (self.overrun(), 0),
+            Ok(automaton) => {
+                let base = self.next.len();
+                let (cells, columns_of, begins) = automaton.table();
+                let count = array::dim(cells, 0);
+                let states = automaton.states();
+                // A cell is 32 bits.
+                if states > left || base + count > 0xFFFFFFFF { (self.overrun(), 0) } else {
+                    let (_, next) = while [at = (0 as u64), next = self.next] (at < count) {
+                        let cell = array::get(cells, at as i64);
+                        let moved = if cell == 0 {
+                            0
+                        } else {
+                            cell + (base as u32)
+                        };
+                        (at + 1, next.push(moved))
+                    };
+                    let columns = self.classes.len();
+                    let (_, classes) = while [byte = (0 as u64), classes = self.classes] (byte < 256) {
+                        (byte + 1, classes.push(array::get(columns_of, byte as i64)))
+                    };
+                    let tables = Tables {
+                        next,
+                        classes,
+                        states: self.states + states,
+                        threads: if states > self.threads {
+                            states
+                        } else {
+                            self.threads
+                        },
+                        limit: self.limit,
+                        over: self.over
+                    };
+                    (tables, ((begins as u64) + base) | (columns << 32))
+                }
+            }
+        }
+    }
+}
+
+impl Building {
+    // The part of the question at `question` is done.
+    fn done(self: Self, question: u64) -> Building {
+        Building { asked: self.asked.skips(question), tables: self.tables }
+    }
+
+    // The questions of `regex`, whose bytes are from the register `from`
+    // to the register `to`.
+    fn part(self: Self, regex: Regex, from: u64, to: u64) -> Building {
+        if groups_of(regex) == 0 { self } else {
+            let asked = self.asked;
+            let next = asked.registers;
+            let question = asked.code.len();
+            match regex {
+                Group(inner) => {
+                    let asked = asked.ask(says(), from, to, asked.groups, 0, 0, 0, 1);
+                    Building { asked, tables: self.tables }.part(inner, from, to).done(question)
+                },
+                Concat(_, _) => self.parts(joined(flat(regex, List::Nil)), from, to),
+                Union(one, other) => {
+                    let (tables, first) = self.tables.add(one.to_bytes());
+                    let asked = asked.ask(chooses(), from, to, next, first, next + 1, 2, 0);
+                    Building { asked, tables }.part(one, next, to).part(other, next + 1, to).done(question)
+                },
+                Star(inner) => {
+                    let (tables, first) = self.tables.add(inner.to_bytes());
+                    let asked = asked.ask(repeats(), from, to, next, first, 0, 1, 0);
+                    Building { asked, tables }.part(inner, next, to).done(question)
+                },
+                Plus(inner) => {
+                    let (tables, first) = self.tables.add(inner.to_bytes());
+                    let asked = asked.ask(repeats_once(), from, to, next, first, 0, 1, 0);
+                    Building { asked, tables }.part(inner, next, to).done(question)
+                },
+                // A complement or an intersection with a group is refused
+                // before this, and nothing else has a group inside.
+                _ => self
+            }
+        }
+    }
+
+    // The questions of `parts`, which come one after another in the bytes
+    // from the register `from` to the register `to`.
+    fn parts(self: Self, parts: List<Regex>, from: u64, to: u64) -> Building {
+        match parts {
+            Nil => self,
+            Cons(first, rest) => match rest {
+                Nil => self.part(first, from, to),
+                // The place between the first part and the others.
+                _ => {
+                    let (tables, head) = self.tables.add(first.to_bytes());
+                    let (tables, tail) = tables.add(chain(rest));
+                    let between = self.asked.registers;
+                    let question = self.asked.code.len();
+                    let asked = self.asked.ask(splits(), from, to, between, head, tail, 1, 0);
+                    Building { asked, tables }.part(first, from, between).parts(rest, between, to).done(question)
+                }
+            }
+        }
+    }
+
+    // The questions of `rules`, one rule after another.
+    fn all(self: Self, rules: List<Regex>) -> Building {
+        match rules {
+            Nil => self,
+            Cons(rule, rest) => {
+                let began = self.asked.code.len();
+                let done = self.part(rule, 0, 1);
+                Building { asked: done.asked.close(began), tables: done.tables }.all(rest)
+            }
+        }
+    }
+}
+
+// The most that a rule has of the word `which` of its four.
+fn most(rules: Vec<u64>, which: u64) -> u64 {
+    let (_, most) = while [at = which, most = (0 as u64)] (at < rules.len()) {
+        let count = rules.get_or(at, 0);
+        let most = if count > most {
+            count
+        } else {
+            most
+        };
+        (at + 4, most)
+    };
+    most
+}
+
+/// The questions that say the groups of `rules`, none of which has a
+/// group under a complement or an intersection; `None` when no rule has
+/// a group. The automata of the parts have no more than `limit` states,
+/// all of them together.
+pub fn build(rules: List<Regex>, limit: u64) -> Result<Option<Program>, TooManyStates> {
+    let built = Building { asked: Asked::new(), tables: Tables::new(limit) }.all(rules);
+    let code = built.asked.code;
+    let rules = built.asked.rules;
+    let next = built.tables.next;
+    let classes = built.tables.classes;
+    if built.tables.over { Result::Err { TooManyStates { limit } } } else {
+        if most(rules, 2) <= 1 { Result::Ok { Option::None } } else {
+            Result::Ok { Option::Some { Program {
+                code: array::tabulate<[u64; ?]>(code.len(), |at: i64| code.get_or(at as u64, 0)),
+                rules: array::tabulate<[u64; ?]>(rules.len(), |at: i64| rules.get_or(at as u64, 0)),
+                next: array::tabulate<[u32; ?]>(next.len(), |at: i64| next.get_or(at as u64, 0)),
+                classes: array::tabulate<[u8; ?]>(classes.len(), |at: i64| classes.get_or(at as u64, 0)),
+                slots: 2 * most(rules, 2),
+                registers: most(rules, 3),
+                marks: next.len() / 8,
+                threads: built.tables.threads
+            } } }
+        }
+    }
+}
+
+impl Program {
+    // The number of words that the groups of a match need.
+    fn room(self: Self) -> u64 {
+        self.slots + self.registers + 4 * self.threads + self.marks + 2
+    }
+}

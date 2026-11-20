@@ -176,6 +176,13 @@ impl Automaton {
         if chunks == 1 && count == 1 { sum } else { 256 }
     }
 
+    // The table as it is: the cells row after row, the column of every
+    // byte, and the cell of the start state. `search::groups` copies them
+    // into one table of several automata, which it steps as `scan` does.
+    fn table(self: Self) -> ([u32; ?], [u8; 256], u32) {
+        (self.next, self.classes, self.start)
+    }
+
     /// The bytes on which `state` stays in itself.
     pub fn run(self: Self, state: State) -> Run {
         let kind = encoding::kind(state.number);

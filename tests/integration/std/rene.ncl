@@ -32,6 +32,7 @@
     random = { kind = 'executable, path = "random.rr" },
     regex_alphabet = { kind = 'executable, path = "regex_alphabet.rr", fuzzer = true },
     regex_automaton = { kind = 'executable, path = "regex_automaton.rr", fuzzer = true },
+    regex_groups = { kind = 'executable, path = "regex_groups.rr", fuzzer = true },
     regex_literal = { kind = 'executable, path = "regex_literal.rr", fuzzer = true },
     regex_node = { kind = 'executable, path = "regex_node.rr", fuzzer = true },
     regex_search = { kind = 'executable, path = "regex_search.rr", fuzzer = true },

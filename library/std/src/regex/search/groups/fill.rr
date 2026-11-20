@@ -1,0 +1,345 @@
+//! Asking the questions of a rule of the bytes of a match.
+//!
+//! The answers are written into the words of a `Groups`, where the
+//! questions also keep their registers and the beginnings of their
+//! automata. `fill` sees to it that the array has one owner, and from
+//! there on its words are read and written where they are: the
+//! questions hand the place of the words from one to the next, and
+//! every loop here hands it on to its next turn and to nothing else.
+//!
+//! A question whose bytes are absent is not asked, and neither are the
+//! questions of the parts inside its part: the groups of a rule are all
+//! absent before its first question, and the next question is the one
+//! after the part.
+//!
+//! The beginnings of an automaton that are alive are a list, the one
+//! whose answer counts first. A byte moves each of them to its next
+//! state, in that order, into a second list; one that comes to the dead
+//! state is left out, and so is one that comes to a state where another
+//! stands already. A state is marked with the number of the step in
+//! which it was come to. The steps are numbered on from match to match,
+//! so the marks are never cleared:
+//!
+//! ```text
+//! groups    registers    one list    the other    marks    their number    step
+//! 2 each    1 each       2 each      2 each       1 each   1               1
+//! ```
+//!
+//! A beginning is two words: the cell of its state, and the place where
+//! it began. The last two words are where they are in every array of
+//! one length, whatever the program: the number of the marks, and the
+//! number of the last step. Arrays of one length with the same number
+//! of marks have their marks in the same words, so a `Groups` that
+//! another searcher wrote into is taken as it is when both are the
+//! same, and its marks are no greater than its step; any other is left
+//! and a new one made.
+
+import core::intrinsic::array;
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import std::regex::automaton::Match;
+import std::regex::automaton::native;
+import std::regex::search::groups::Groups;
+import std::regex::search::groups::Program;
+import std::regex::search::groups::program;
+
+/// The place of a group that is absent: no byte has this index.
+pub fn absent() -> u64 {
+    0xFFFFFFFFFFFFFFFF
+}
+
+// The word `at` of the words at `slots`, and the same words with `value`
+// written there. The array that they are in has one owner, and is kept
+// by `fill` until the last question is answered.
+fn peek(slots: Ptr<Generic>, at: u64) -> u64 {
+    ptr::load(ptr::offset(slots, (at * 8) as i64, PtrArithFlag::Inbounds))
+}
+
+fn poke(slots: Ptr<Generic>, at: u64, value: u64) -> Ptr<Generic> {
+    ptr::store(ptr::offset(slots, (at * 8) as i64, PtrArithFlag::Inbounds), value);
+    slots
+}
+
+// Whether the state of `cell` accepts: the kinds 1 to 4 of an automaton.
+fn accepts(cell: u32) -> bool {
+    let kind = cell & 7;
+    kind >= 1 && kind <= 4
+}
+
+// The cell after `cell` on `byte`, in the rows at `next`, for an
+// automaton whose columns begin at `columns` of those at `classes`. The
+// dead state leads to itself. The program that the tables are of is read
+// again by the caller after the last step, which keeps them.
+fn step(next: ConstPtr<Generic>, classes: ConstPtr<Generic>, cell: u32, columns: u64, byte: u8) -> u32 {
+    let column = native::byte_at(classes, columns + (byte as u64)) as u32;
+    ptr::load(ptr::offset(next, (((cell & 0xFFFFFFF8) + column) as i64) * 4, PtrArithFlag::Inbounds))
+}
+
+// The word `at` of the questions.
+fn word(program: Program, at: u64) -> u64 {
+    array::get(program.code, at as i64)
+}
+
+// Where the two lists of beginnings begin, and the marks of the states,
+// and where the number of the marks and of the last step are kept.
+fn list(program: Program) -> u64 {
+    program.slots + program.registers
+}
+
+fn marks(program: Program) -> u64 {
+    program.slots + program.registers + 4 * program.threads
+}
+
+fn key(program: Program) -> u64 {
+    program.slots + program.registers + 4 * program.threads + program.marks
+}
+
+fn counter(program: Program) -> u64 {
+    program.slots + program.registers + 4 * program.threads + program.marks + 1
+}
+
+/// The words of the groups of a match of `program`, with no step taken
+/// yet.
+pub fn fresh(program: Program) -> [u64; ?] {
+    array::set(array::splat<[u64; ?]>(program.room(), 0), key(program) as i64, program.marks)
+}
+
+/// The whole match `found` as the only group, for a searcher without
+/// groups: none when it is not inside the `length` bytes.
+pub fn whole(length: u64, found: Match, groups: Groups) -> Groups {
+    let given = groups.slots;
+    let slots = if array::dim(given, 0) == 2 {
+        given
+    } else {
+        array::splat<[u64; ?]>(2, 0)
+    };
+    let inside = found.start <= found.end && found.end <= length;
+    Groups {
+        slots: array::set(array::set(slots, 0, found.start), 1, found.end),
+        rule: found.rule,
+        count: if inside { 1 } else { 0 }
+    }
+}
+
+/// The groups of the match `found` in the `length` bytes at `bytes`,
+/// which the caller keeps readable for the call, written into `groups`.
+/// The match is one of a searcher with the questions `program`. No byte
+/// is read for a match that is not inside the bytes, or whose rule the
+/// program does not have, and it has no groups. A `groups` whose words
+/// are not laid out as the program lays them out is left, and a new one
+/// made.
+pub fn fill(program: Program, bytes: ConstPtr<Generic>, length: u64, found: Match, groups: Groups) -> Groups {
+    let given = groups.slots;
+    let fits = array::dim(given, 0) == program.room()
+        && array::get(given, key(program) as i64) == program.marks;
+    let work = if fits {
+        given
+    } else {
+        fresh(program)
+    };
+    let rule = (found.rule as u64) * 4;
+    let inside = found.start <= found.end && found.end <= length;
+    if !inside || rule >= array::dim(program.rules, 0) {
+        Groups { slots: work, rule: found.rule, count: 0 }
+    } else {
+        // Group 0. Writing it gives the array one owner, and from here
+        // on its words are written where they are.
+        let work = array::set(array::set(work, 0, found.start), 1, found.end);
+        let count = array::get(program.rules, (rule + 2) as i64);
+        let registers = program.slots;
+        let slots = poke(poke(ptr::as_mut(array::unsafe_data_ptr(work)), registers, found.start), registers + 1, found.end);
+        // Every other group is absent until a question says it.
+        let (_, slots) = while [slot = (2 as u64), slots = slots] (slot < 2 * count) {
+            (slot + 1, poke(slots, slot, absent()))
+        };
+        let end = array::get(program.rules, (rule + 1) as i64);
+        let (_, _) = while [at = array::get(program.rules, rule as i64), slots = slots] (at < end) {
+            // What the question asks, as `program` numbers it, and above
+            // that the question after its part.
+            let asks = word(program, at);
+            let from = peek(slots, registers + word(program, at + 1));
+            let to = peek(slots, registers + word(program, at + 2));
+            if from == absent() || to == absent() { (asks >> 3, slots) } else {
+                let slots = match asks & 7 {
+                    0 => say(program, slots, at, from, to),
+                    1 => split(program, bytes, slots, at, from, to),
+                    2 => choose(program, bytes, slots, at, from, to),
+                    // 3 and 4: a repetition.
+                    _ => repeat(program, bytes, slots, at, from, to, asks & 7)
+                };
+                (at + program::width(), slots)
+            }
+        };
+        // The array and the program are read here, after the last word
+        // is written and the last cell read through a pointer.
+        Groups { slots: work, rule: found.rule, count: array::get(program.rules, (rule + 2) as i64) as u32 }
+    }
+}
+
+// The group of the question `at` is its bytes, from `from` to `to`.
+fn say(program: Program, slots: Ptr<Generic>, at: u64, from: u64, to: u64) -> Ptr<Generic> {
+    let slot = 2 * word(program, at + 3);
+    poke(poke(slots, slot, from), slot + 1, to)
+}
+
+// Which branch the bytes of the question `at` are of, from `from` to
+// `to`: the first when its automaton matches them all.
+fn choose(program: Program, bytes: ConstPtr<Generic>, slots: Ptr<Generic>, at: u64, from: u64, to: u64) -> Ptr<Generic> {
+    let first = word(program, at + 4);
+    let next = array::unsafe_data_ptr(program.next);
+    let classes = array::unsafe_data_ptr(program.classes);
+    let (cell, _) = while [cell = (first as u32), place = from] (cell != 0 && place < to) {
+        (step(next, classes, cell, first >> 32, native::byte_at(bytes, place)), place + 1)
+    };
+    let one = program.slots + word(program, at + 3);
+    let other = program.slots + word(program, at + 5);
+    if accepts(cell) {
+        poke(poke(slots, one, from), other, absent())
+    } else {
+        poke(poke(slots, one, absent()), other, from)
+    }
+}
+
+// Where the first part of the bytes of the question `at` ends, which are
+// from `from` to `to`: the last place up to which its automaton matches,
+// with the automaton of the other parts matching from there to the end.
+// That automaton begins anew at every place where the first one accepts,
+// and a later beginning goes before an earlier one.
+fn split(program: Program, bytes: ConstPtr<Generic>, slots: Ptr<Generic>, at: u64, from: u64, to: u64) -> Ptr<Generic> {
+    let first = word(program, at + 4);
+    let rest = word(program, at + 5);
+    let begins = rest as u32;
+    let marked = marks(program);
+    let listed = list(program);
+    let next = array::unsafe_data_ptr(program.next);
+    let classes = array::unsafe_data_ptr(program.classes);
+    // The first part may have no bytes.
+    let (slots, alive) = if accepts(first as u32) {
+        (poke(poke(slots, listed, begins as u64), listed + 1, from), 1)
+    } else {
+        (slots, 0)
+    };
+    let before = peek(slots, counter(program));
+    let (slots, place, _, alive, here, _, steps, _) = while [
+        slots = slots,
+        place = from,
+        cell = (first as u32),
+        alive = alive,
+        here = listed,
+        there = listed + 2 * program.threads,
+        steps = before,
+        going = true
+    ] (going) {
+        // With the first automaton dead, one beginning that is left
+        // is the answer: the bytes are known to match.
+        if place >= to || (cell == 0 && alive <= 1) { (slots, place, cell, alive, here, there, steps, false) } else {
+            let byte = native::byte_at(bytes, place);
+            let cell = step(next, classes, cell, first >> 32, byte);
+            let steps = steps + 1;
+            let (slots, moved) = if accepts(cell) {
+                let slots = poke(slots, marked + ((begins >> 3) as u64), steps);
+                (poke(poke(slots, there, begins as u64), there + 1, place + 1), 1)
+            } else {
+                (slots, 0)
+            };
+            let (slots, moved, _) = while [slots = slots, moved = moved, index = (0 as u64)] (index < alive) {
+                let began = peek(slots, here + 2 * index + 1);
+                let cell = step(next, classes, peek(slots, here + 2 * index) as u32, rest >> 32, byte);
+                let mark = marked + ((cell >> 3) as u64);
+                if cell == 0 || peek(slots, mark) == steps { (slots, moved, index + 1) } else {
+                    let slots = poke(slots, mark, steps);
+                    let slots = poke(slots, there + 2 * moved, cell as u64);
+                    (poke(slots, there + 2 * moved + 1, began), moved + 1, index + 1)
+                }
+            };
+            (slots, place + 1, cell, moved, there, here, steps, true)
+        }
+    };
+    let slots = poke(slots, counter(program), steps);
+    let found = if place < to {
+        if alive == 1 {
+            peek(slots, here + 1)
+        } else {
+            absent()
+        }
+    } else {
+        ended(slots, here, alive)
+    };
+    poke(slots, program.slots + word(program, at + 3), found)
+}
+
+// Where the first beginning of the `alive` ones at `here` began that is
+// in a state that accepts, or no place.
+fn ended(slots: Ptr<Generic>, here: u64, alive: u64) -> u64 {
+    let (_, found) = while [index = (0 as u64), found = absent()] (index < alive && found == absent()) {
+        if accepts(peek(slots, here + 2 * index) as u32) {
+            (index + 1, peek(slots, here + 2 * index + 1))
+        } else {
+            (index + 1, found)
+        }
+    };
+    found
+}
+
+// Where the last time of the repetition of the question `at` begins,
+// whose bytes are from `from` to `to`; `what` says whether it is once
+// or more. The automaton of what is repeated begins anew at every place
+// where it accepts, after the beginning that goes on: a time takes as
+// many bytes as it can. A time has a byte at least: a beginning is moved
+// by a byte before it can end, and at the end the one that has just
+// begun comes after the one whose end it began at, which accepts.
+fn repeat(program: Program, bytes: ConstPtr<Generic>, slots: Ptr<Generic>, at: u64, from: u64, to: u64, what: u64) -> Ptr<Generic> {
+    let fills = program.slots + word(program, at + 3);
+    if from == to {
+        // No times, or one time of no bytes.
+        let last = if what == program::repeats_once() {
+            from
+        } else {
+            absent()
+        };
+        poke(slots, fills, last)
+    } else {
+        let first = word(program, at + 4);
+        let begins = first as u32;
+        let marked = marks(program);
+        let listed = list(program);
+        let next = array::unsafe_data_ptr(program.next);
+        let classes = array::unsafe_data_ptr(program.classes);
+        let slots = poke(poke(slots, listed, begins as u64), listed + 1, from);
+        let before = peek(slots, counter(program));
+        let (slots, _, alive, here, _, steps) = while [
+            slots = slots,
+            place = from,
+            alive = (1 as u64),
+            here = listed,
+            there = listed + 2 * program.threads,
+            steps = before
+        ] (place < to && alive > 0) {
+            let byte = native::byte_at(bytes, place);
+            let steps = steps + 1;
+            let (slots, moved, _) = while [slots = slots, moved = (0 as u64), index = (0 as u64)] (index < alive) {
+                let began = peek(slots, here + 2 * index + 1);
+                let cell = step(next, classes, peek(slots, here + 2 * index) as u32, first >> 32, byte);
+                let mark = marked + ((cell >> 3) as u64);
+                if cell == 0 || peek(slots, mark) == steps { (slots, moved, index + 1) } else {
+                    let slots = poke(slots, mark, steps);
+                    let slots = poke(slots, there + 2 * moved, cell as u64);
+                    let slots = poke(slots, there + 2 * moved + 1, began);
+                    // A time can end here, and the next one begin.
+                    let again = marked + ((begins >> 3) as u64);
+                    if accepts(cell) && peek(slots, again) != steps {
+                        let slots = poke(slots, again, steps);
+                        let slots = poke(slots, there + 2 * moved + 2, begins as u64);
+                        (poke(slots, there + 2 * moved + 3, place + 1), moved + 2, index + 1)
+                    } else {
+                        (slots, moved + 1, index + 1)
+                    }
+                }
+            };
+            (slots, place + 1, moved, there, here, steps)
+        };
+        let slots = poke(slots, counter(program), steps);
+        poke(slots, fills, ended(slots, here, alive))
+    }
+}
