@@ -646,6 +646,13 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
         function->removeAttr(REUSSIR_CLOSURE_DROP);
         continue;
       }
+    } else if (auto rc =
+                   llvm::dyn_cast<RcType>(function.getArgument(0).getType());
+               rc && !rc.isRegional() &&
+               isTriviallyCopyable(rc.getElementType())) {
+      // Releasing such a box only frees it: no work to enqueue, no scope.
+      function->removeAttr(REUSSIR_FOREIGN_DROP);
+      continue;
     }
     auto order = isForwardDrop(module) ? "forward" : "backward";
     auto name = std::format("{}.worklist.{}",
