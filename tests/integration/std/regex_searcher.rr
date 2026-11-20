@@ -9,9 +9,11 @@
 // there already; find matches that are no byte to forty bytes apart;
 // search the text that costs most; say how the searcher of rules seeks;
 // search with rules whose every match begins with the same bytes, where
-// few and where many places have those bytes; and with rules that match
+// few and where many places have those bytes; with rules that match
 // one literal and nothing else, also where its places follow each other
-// or share bytes.
+// or share bytes; and with rules whose matches overlap, by a searcher
+// that skips, by one whose second automaton has too many states, and by
+// one without.
 // The first fuzz target builds the searcher of three random rules and
 // compares its matches in a short random text, by the stream, the fold,
 // the count, and one search from every place, with a small matcher on the
@@ -23,7 +25,13 @@
 // of those bytes, so that many places have the literal or a part of it,
 // compares the way that the searcher seeks with what the automaton says
 // of its matches, and compares the matches in the first bytes of the text
-// with the trees.
+// with the trees. The second also searches with a second automaton. The
+// fourth builds two rules of three letters, whose matches begin at many
+// places of a longer text of those letters in runs and often fail, more
+// often than a stream has credit for, and compares the
+// searcher that skips, the one whose second automaton has too many states
+// and the one without with the steps of the automaton, and the way of
+// the first with what the automaton says of its matches.
 // The matches are the same whichever finder a searcher asks and however
 // near a place must be to be tried without one, so no case here sees
 // whether the finder of the literal is asked for a prefix: that is in
@@ -46,9 +54,11 @@
 // CHECK-NEXT: regex searcher/the way: unit
 // CHECK-NEXT: regex searcher/a prefix: unit
 // CHECK-NEXT: regex searcher/a literal alone: unit
+// CHECK-NEXT: regex searcher/skipping: unit
 // CHECK-NEXT: regex searcher/a searcher & the trees (fuzz):
 // CHECK-NEXT: regex searcher/a searcher & the steps (fuzz):
 // CHECK-NEXT: regex searcher/a literal before the rules & the steps (fuzz):
+// CHECK-NEXT: regex searcher/a searcher that skips & the steps (fuzz):
 
 import core::intrinsic::array;
 import std::collections::pure::list::List;
@@ -693,7 +703,8 @@ fn way_number(searcher: Searcher) -> u64 {
         EveryPlace => 0,
         FirstBytes => 1,
         Prefix => 2,
-        Literal => 3
+        Literal => 3,
+        Skip => 4
     }
 }
 
@@ -715,7 +726,9 @@ fn kilometres() -> List<ByteRegex> {
 // rule matches no bytes or every byte begins a match, a literal when all
 // matches begin with the same two bytes or more, alone when the rules
 // match nothing else and the first rule matches it, and else the first
-// bytes.
+// bytes. A searcher with room for a second automaton skips where it would
+// try every place or seek the first bytes, matches overlap, and the
+// shortest match from a place can have five bytes.
 fn test_way() -> Outcome {
     let anything = Regex::bytes(Bits::full()).star();
     let no_x = anything.then(Regex::byte(120)).then(anything).not();
@@ -727,7 +740,7 @@ fn test_way() -> Outcome {
             0,
             "every byte begins a match: every place"
         ))
-        .and_then(|| seeks(metres(), 1, "digits: the first bytes"))
+        .and_then(|| seeks(rules1(digit().then(lower().star())), 1, "a digit and letters: the first bytes"))
         .and_then(|| seeks(rules1(Regex::byte(55)), 1, "a literal of one byte: the first bytes"))
         .and_then(|| seeks(rules1(Regex::byte(101).then(lower())), 1, "one byte that all matches share: the first bytes"))
         .and_then(|| seeks(rules1(Regex::byte(32).then(lower().plus())), 1, "a blank that all matches share: the first bytes"))
@@ -747,6 +760,177 @@ fn test_way() -> Outcome {
             "a literal that a complement leaves: alone"
         ))
         .and_then(|| seeks(rules1(Regex::char('é')), 3, "a character of two bytes: alone"))
+        .and_then(|| seeks(metres(), 4, "digits and an m, where every digit begins a match: skipping"))
+        .and_then(|| seeks(assignment(), 4, "letters, = and digits: skipping"))
+        .and_then(|| seeks(
+            rules1(any_byte().then(any_byte()).then(any_byte()).then(any_byte()).then(Regex::byte(120))),
+            4,
+            "every byte begins a match of five: skipping, where every place was tried"
+        ))
+        .and_then(|| seeks(
+            rules1(any_byte().then(any_byte()).then(Regex::byte(120))),
+            0,
+            "every byte begins a match of three: a place that fails has read too little to skip"
+        ))
+        .and_then(|| seeks(
+            rules1(lower().then(lower()).then(lower()).then(lower())),
+            1,
+            "four letters: still the first bytes"
+        ))
+        .and_then(|| seeks(five_letters(), 4, "five letters: skipping"))
+        .and_then(|| seeks(
+            rules1(word("ab").then(lower().star()).then(Regex::byte(61))),
+            2,
+            "matches that overlap after two bytes that all of them share: still a prefix"
+        ))
+        .and_then(|| match Automaton::build(metres(), 200) {
+            Ok(automaton) => should_be(way_number(Searcher::new(automaton)), 1)
+                .and_then(|| should_be(way_number(Searcher::skipping(automaton, 200)), 4))
+                .and_then(|| should_be(way_number(Searcher::skipping(automaton, 1)), 1)),
+            Err(_) => expect(false, "the automaton has too many states")
+        })
+}
+
+// Any byte.
+fn any_byte() -> Regex {
+    Regex::bytes(Bits::full())
+}
+
+// Five lower-case letters.
+fn five_letters() -> List<ByteRegex> {
+    rules1(lower().then(lower()).then(lower()).then(lower()).then(lower()))
+}
+
+// Lower-case letters, `=`, and digits.
+fn assignment() -> List<ByteRegex> {
+    rules1(lower().plus().then(Regex::byte(61)).then(digit().plus()))
+}
+
+// Whether `searcher` finds in `string`, from `from` on, the match of the
+// first rule from `start` to `end`, says that there is a match, and counts
+// `count` matches from there on.
+fn found_in(searcher: Searcher, string: str, from: u64, start: u64, end: u64, count: u64) -> bool {
+    let view = Text::from_str(string).view();
+    is_span(searcher.find(view, from), 0, start, end) && searcher.is_match(view, from)
+        && searcher.count(view, from) == count
+}
+
+// Whether `searcher` finds nothing in `string` from `from` on.
+fn nothing_in(searcher: Searcher, string: str, from: u64) -> bool {
+    let view = Text::from_str(string).view();
+    is_nothing(searcher.find(view, from)) && !searcher.is_match(view, from) && searcher.count(view, from) == 0
+}
+
+// Whether `searcher` finds nothing in `view`.
+fn nothing_in_view(searcher: Searcher, view: TextView) -> bool {
+    is_nothing(searcher.find(view, 0)) && !searcher.is_match(view, 0) && searcher.count(view, 0) == 0
+}
+
+// The outcome of `check` on the searcher of `rules` that skips, and on the
+// one that was given no room for a second automaton: they find the same.
+fn both(rules: List<ByteRegex>, check: Searcher -> Outcome) -> Outcome {
+    match Automaton::build(rules, 200) {
+        Ok(automaton) => should_be(way_number(Searcher::skipping(automaton, 200)), 4)
+            .and_then(|| check(Searcher::skipping(automaton, 200)))
+            .and_then(|| check(Searcher::skipping(automaton, 0)))
+            .and_then(|| check(Searcher::new(automaton))),
+        Err(_) => expect(false, "the automaton has too many states")
+    }
+}
+
+// Thirty-six letters, a word with `=` and no digit, and two with digits.
+// The places of the long word cost more than a stream has to its credit,
+// so the automaton of the ends reads on from its fifth letter, over a
+// run of more than sixteen bytes.
+fn long_word() -> str {
+    "abcdefghijklmnopqrstuvwxyzabcdefghij klmno=pq rate=12 tail=7"
+}
+
+// Eighty times `ab ` and then `abcde bc`: more places that fail than a
+// stream has credit for.
+fn many_words() -> Text {
+    let (_, string) = while [left = (80 as u64), string = String::new()] (left > 0) {
+        (left - 1, string.push_str("ab "))
+    };
+    Text::from_string(string.push_str("abcde bc"))
+}
+
+// A searcher that skips finds the match that begins first and the longest
+// from there, whichever match ends first; the text before a match that
+// holds none is passed over, also a text with no match at all; and it
+// finds the same while the places that fail are few and when they are
+// more than its credit pays for.
+fn test_skip() -> Outcome {
+    both(rules1(word("abcde").or(word("bc"))), |searcher: Searcher| {
+        let many = many_words();
+        expect(found_in(searcher, "abcde", 0, 0, 5, 1), "abcde or bc in abcde: all five bytes, at the first place tried")
+            .and_then(|| expect(found_in(searcher, "aabcde", 0, 1, 6, 1), "after an a that fails: abcde, though bc ends first"))
+            .and_then(|| expect(found_in(searcher, "aabcde", 2, 2, 4, 1), "from the b on: bc"))
+            .and_then(|| expect(found_in(searcher, "ab ab abc bcd", 0, 7, 9, 2), "two places that fail, then bc twice"))
+            .and_then(|| expect(nothing_in(searcher, "ab ab ab", 0), "no match: the text is passed over"))
+            .and_then(|| expect(nothing_in(searcher, "abcde", 3) && nothing_in(searcher, "abcde", 5) && nothing_in(searcher, "abcde", 6), "near the end, at it and past it"))
+            .and_then(|| expect(
+                is_span(searcher.find(many.view(), 0), 0, 240, 245) && searcher.count(many.view(), 0) == 2
+                    && searcher.is_match(many.view(), 0),
+                "eighty places that fail: abcde, though bc ends first, and then bc"
+            ))
+            .and_then(|| expect(
+                is_span(searcher.find(many.view(), 100), 0, 240, 245) && searcher.count(many.view(), 241) == 2,
+                "from a place among them, and from the b"
+            ))
+            .and_then(|| match many.view().slice_byte(0, 244) {
+                Some(part) => expect(
+                    is_span(searcher.find(part, 0), 0, 241, 243) && searcher.count(part, 0) == 1,
+                    "in a view that ends before the e: bc"
+                ),
+                None => expect(false, "a view of 244 bytes")
+            })
+            .and_then(|| match many.view().slice_byte(0, 240) {
+                Some(part) => expect(nothing_in_view(searcher, part), "in a view that ends before them: nothing"),
+                None => expect(false, "a view of 240 bytes")
+            })
+    })
+        .and_then(|| both(five_letters(), |searcher: Searcher| {
+            expect(found_in(searcher, "ab abcdefg", 0, 3, 8, 1), "five letters: the first end less five is the place")
+                .and_then(|| expect(found_in(searcher, "abcd abcdefghijkl", 6, 6, 11, 2), "from a place inside the word"))
+                .and_then(|| expect(nothing_in(searcher, "abcd efgh ij", 0), "words of four letters"))
+                .and_then(|| expect(
+                    found_in(searcher, "ab cd ef gh ij kl mn op qr st uv wx yz ab cd ef gh ij kl mn op abcdefgh", 0, 63, 68, 1),
+                    "after more words of two letters than the credit pays for"
+                ))
+        }))
+        .and_then(|| both(assignment(), |searcher: Searcher| {
+            expect(found_in(searcher, long_word(), 0, 46, 53, 2), "a long word and one with no digit: the two after them")
+                .and_then(|| expect(found_in(searcher, long_word(), 3, 46, 53, 2) && found_in(searcher, long_word(), 47, 47, 53, 2), "from places of it"))
+                .and_then(|| expect(found_in(searcher, long_word(), 53, 54, 60, 1), "the last one"))
+                .and_then(|| {
+                    let stream = searcher.occurrences(Text::from_str(long_word()).view(), 0);
+                    let (first, one) = stream.next();
+                    let (second, two) = first.next();
+                    let (third, three) = second.next();
+                    expect(
+                        is_span(one, 0, 46, 53) && is_span(two, 0, 54, 60) && is_nothing(three) && third.at() == 60,
+                        "pulled from a stream"
+                    )
+                })
+        }))
+        .and_then(|| both(assignment(), |searcher: Searcher| {
+            expect(
+                found_in(searcher, "let total = base; rate=12", 0, 18, 25, 1),
+                "letters, = and digits: the words before are passed over"
+            )
+                .and_then(|| expect(found_in(searcher, "x=1 yy=22 zzz=333", 1, 4, 9, 2), "one match after another"))
+                .and_then(|| expect(found_in(searcher, "aaaa=b=c=7", 0, 7, 10, 1), "the last of three words"))
+                .and_then(|| expect(nothing_in(searcher, "let total = base; rate=", 0), "no digit at the end"))
+        }))
+        .and_then(|| both(metres(), |searcher: Searcher| {
+            let stream = searcher.occurrences(Text::from_str("run 12 km or 300m and 7m today").view(), 0);
+            let (first, one) = stream.next();
+            let (second, two) = first.next();
+            let (third, three) = second.next();
+            expect(is_span(one, 0, 13, 17) && is_span(two, 0, 22, 24), "digits and an m: the two matches of a stream")
+                .and_then(|| expect(is_nothing(three) && third.at() == 24 && stays(third), "and the stream stays after the last"))
+        }))
 }
 
 // `7`, a space, and then no space to thirty-nine of them, 40 times: the
@@ -1094,6 +1278,16 @@ fn fuzz_steps(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>,
                     },
                     None => expect(false, "a view of a text")
                 })
+                .and_then(|| {
+                    let skipping = Searcher::skipping(automaton, 400);
+                    expect(
+                        agrees_from(skipping, view, spans, 0)
+                            && agrees_from(skipping, view, spans, (place as u64) % (view.len() + 1))
+                            && agrees_from(skipping, view, spans, view.len())
+                            && agrees_from(skipping, view, spans, view.len() + 1 + (other as u64)),
+                        "a searcher with a second automaton and the steps find different matches"
+                    )
+                })
         }
     }
 }
@@ -1126,6 +1320,22 @@ fn listed(bytes: [u8; ?]) -> List<u8> {
         (left - 1, List::Cons { array::get(bytes, (left - 1) as i64), all })
     };
     all
+}
+
+// A text of `a`, `b`, `c`, blanks and `é`: each as many times in a row
+// as its second number says, fewer than twelve.
+fn lettered_runs(pairs: List<(u8, u8)>) -> Text {
+    text_of(repeated(pairs.map(|pair: (u8, u8)| {
+        let (number, count) = pair;
+        let character = match number % 5 {
+            0 => 'a',
+            1 => 'b',
+            2 => 'c',
+            3 => ' ',
+            _ => 'é'
+        };
+        (character, count)
+    }), 12))
 }
 
 // The way that goes with what an automaton says of its matches, as a
@@ -1211,6 +1421,94 @@ fn fuzz_literal(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8
     }
 }
 
+// ------------- Fuzz: a searcher that skips, against the steps -------------
+
+// One step of a small program that builds regexes of the letters `a`, `b`
+// and `c` on a stack.
+fn lettered_step(stack: List<Regex>, op: u8) -> List<Regex> {
+    match op % 8 {
+        0 => List::Cons { Regex::byte(97), stack },
+        1 => List::Cons { Regex::byte(98), stack },
+        2 => List::Cons { Regex::byte(99), stack },
+        3 => List::Cons { Regex::range(97, 99), stack },
+        4 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        5 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        6 => change(stack, |inner: Regex| inner.plus()),
+        // 7: or nothing.
+        _ => change(stack, |inner: Regex| inner.optional())
+    }
+}
+
+// The regex that such a program builds: whatever is left on the stack, one
+// after another.
+fn lettered_rule(ops: List<u8>) -> Regex {
+    let stack = ops.fold_left(List::Nil, |stack: List<Regex>, op: u8| lettered_step(stack, op));
+    stack.fold_left(Regex::epsilon(), |all: Regex, regex: Regex| regex.then(all))
+}
+
+// Whether `searcher` gives in `view`, from two places of it, from its end
+// and past it, the matches that go with the longest match of every place
+// in `spans`.
+fn agrees_at(searcher: Searcher, view: TextView, spans: List<Span>, place: u64, other: u64) -> bool {
+    agrees_from(searcher, view, spans, 0) && agrees_from(searcher, view, spans, place % (view.len() + 1))
+        && agrees_from(searcher, view, spans, view.len())
+        && agrees_from(searcher, view, spans, view.len() + 1 + other)
+}
+
+// The matches of two rules of three letters in a text of those letters,
+// blanks and `é`, each up to eleven times in a row and thirty such runs,
+// where matches begin at many places and many of them fail, more than a
+// stream has credit for: the searcher with a second automaton, the one whose second
+// automaton has too many states, and the one without, against the steps of
+// the automaton, in the text and in a view of it; and the way of the first
+// against what the automaton says of its matches.
+fn fuzz_skip(input: ((List<u8>, List<u8>), (List<(u8, u8)>, (u8, u8), (u8, u8)))) -> Outcome {
+    let (programs, probe) = input;
+    let (first, second) = programs;
+    let (text, cut, places) = probe;
+    let (before, after) = cut;
+    let (place, other) = places;
+    let view = lettered_runs(text).view();
+    let start = (before as u64) % (view.len() + 1);
+    let end = view.len() - (after as u64) % (view.len() - start + 1);
+    match Automaton::build(rules2(lettered_rule(first), lettered_rule(second)), 400) {
+        // Too many states for this test: nothing to compare.
+        Err(_) => expect(true, "skipped"),
+        Ok(automaton) => {
+            let skipping = Searcher::skipping(automaton, 400);
+            let short = Searcher::skipping(automaton, 3);
+            let spans = of_steps(automaton, bytes_of(view));
+            let plain = way_of(automaton);
+            let room = match automaton.ends(400) {
+                Ok(_) => true,
+                Err(_) => false
+            };
+            let far = match automaton.shortest_lengths() {
+                Nothing => false,
+                Within(_, greatest) => greatest >= 5,
+                From(_) => true
+            };
+            should_be(way_number(skipping), if plain <= 1 && automaton.overlaps() && far && room { 4 } else { plain })
+                .and_then(|| expect(
+                    agrees_at(skipping, view, spans, place as u64, other as u64),
+                    "a searcher that skips and the steps find different matches in a text"
+                ))
+                .and_then(|| expect(
+                    agrees_at(short, view, spans, place as u64, other as u64)
+                        && agrees_at(Searcher::new(automaton), view, spans, place as u64, other as u64),
+                    "a searcher without a second automaton and the steps find different matches in a text"
+                ))
+                .and_then(|| match view.slice_byte(start, end) {
+                    Some(part) => expect(
+                        agrees_at(skipping, part, of_steps(automaton, bytes_of(part)), other as u64, place as u64),
+                        "a searcher that skips and the steps find different matches in a view"
+                    ),
+                    None => expect(false, "a view of a text")
+                })
+        }
+    }
+}
+
 fn suite() -> TestTree {
     TestTree::group("regex searcher")
         .with_case("the first match", test_find)
@@ -1224,6 +1522,7 @@ fn suite() -> TestTree {
         .with_case("the way", test_way)
         .with_case("a prefix", test_prefix)
         .with_case("a literal alone", test_literal)
+        .with_case("skipping", test_skip)
         .with_fuzz(
             "a searcher & the trees (fuzz)",
             tuple3(
@@ -1279,6 +1578,18 @@ fn suite() -> TestTree {
                 )
             ),
             fuzz_literal
+        )
+        .with_fuzz(
+            "a searcher that skips & the steps (fuzz)",
+            tuple2(
+                tuple2(u8_domain().list_with_len(0, 9), u8_domain().list_with_len(0, 9)),
+                tuple3(
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 30),
+                    tuple2(u8_domain(), u8_domain()),
+                    tuple2(u8_domain(), u8_domain())
+                )
+            ),
+            fuzz_skip
         )
 }
 

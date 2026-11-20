@@ -5,6 +5,7 @@ import std::regex::automaton::Match;
 import std::regex::search::Occurrences;
 import std::regex::search::Searcher;
 import std::regex::search::Searching;
+import std::regex::search::skip;
 import std::text::TextView;
 
 impl Occurrences {
@@ -19,12 +20,22 @@ impl Occurrences {
         let at = self.at;
         let barred = self.barred;
         let searching = self.searching;
-        match searching.next_match(at, barred == at) {
-            Matched(found) => {
-                let (at, barred) = Searching::after(found.start, found.end);
-                (Occurrences { searching, at, barred }, Found::Matched { found })
+        match searching.searcher.way {
+            // The third word of such a stream is its credit.
+            Skip => {
+                let (last, start, end, credit) = searching.next_skipped(at, barred);
+                if last == 0 { (Occurrences { searching, at, barred: credit }, Found::Nothing) } else {
+                    let found = Match { rule: searching.searcher.rule(last), start, end };
+                    (Occurrences { searching, at: end, barred: credit }, Found::Matched { found })
+                }
             },
-            Nothing => (Occurrences { searching, at, barred }, Found::Nothing)
+            _ => match searching.next_match(at, barred == at) {
+                Matched(found) => {
+                    let (at, barred) = Searching::after(found.start, found.end);
+                    (Occurrences { searching, at, barred }, Found::Matched { found })
+                },
+                Nothing => (Occurrences { searching, at, barred }, Found::Nothing)
+            }
         }
     }
 
@@ -92,6 +103,21 @@ impl Searching {
     }
 
     // The next match of a stream that stands at the byte `at` when the
+    // searcher skips, as `next_span` gives it, and what is left of the
+    // `credit` of the stream. No match of such a searcher is one of no
+    // bytes. As in `next_span`, no reference is counted.
+    fn next_skipped(self: Self, at: u64, credit: u64) -> (u32, u64, u64, u64) {
+        let length = self.input.len();
+        let (last, start, end, more, credit) = self.searcher.skipped(self.bytes, length, at, credit);
+        if more {
+            let (last, start, end) = self.searcher.sought(self.bytes, length, start);
+            (last, start, end, credit)
+        } else {
+            (last, start, end, credit)
+        }
+    }
+
+    // The next match of a stream that stands at the byte `at` when the
     // rules match one literal and nothing else, as `Searcher::spotted`
     // gives it: where it begins and where it ends, which is the same
     // place when there is none. A literal has bytes, so no match of none
@@ -100,8 +126,10 @@ impl Searching {
         self.searcher.spotted(self.bytes, self.input.len(), at)
     }
 
-    // The same as a match with its rule. A literal that is all the rules
-    // match is found without the automaton, and its rule is the first.
+    // The same as a match with its rule, for a searcher that does not
+    // skip: the stream of one that skips asks `next_skipped`, which
+    // keeps its credit. A literal that is all the rules match is found
+    // without the automaton, and its rule is the first.
     fn next_match(self: Self, at: u64, ended: bool) -> Found {
         match self.searcher.way {
             Literal => {
@@ -122,33 +150,51 @@ impl Searching {
     }
 
     // The number of matches of a stream that stands at the byte `at`,
-    // after a match that ended at `barred`. The way is asked once.
+    // after a match that ended at `barred`, which is the credit of the
+    // stream when the searcher skips. The way is asked once, and each
+    // way has its loop to itself.
     fn count(self: Self, at: u64, barred: u64) -> u64 {
         match self.searcher.way {
-            // The next place of the literal is sought from the end of
-            // the one before.
-            Literal => {
-                let (_, count, _) = while [at = at, count = (0 as u64), going = true] (going) {
-                    let (start, end) = self.next_place(at);
-                    if start < end {
-                        (end, count + 1, true)
-                    } else {
-                        (at, count, false)
-                    }
-                };
-                count
-            },
-            _ => {
-                let (_, _, count, _) = while [at = at, barred = barred, count = (0 as u64), going = true] (going) {
-                    let (last, start, end) = self.next_span(at, barred == at);
-                    if last == 0 { (at, barred, count, false) } else {
-                        let (at, barred) = Searching::after(start, end);
-                        (at, barred, count + 1, true)
-                    }
-                };
-                count
-            }
+            Literal => self.count_places(at),
+            Skip => self.count_skipped(at, barred),
+            _ => self.count_spans(at, barred)
         }
+    }
+
+    // The same when the rules match one literal and nothing else: the
+    // next place of the literal is sought from the end of the one before.
+    fn count_places(self: Self, at: u64) -> u64 {
+        let (_, count, _) = while [at = at, count = (0 as u64), going = true] (going) {
+            let (start, end) = self.next_place(at);
+            if start < end {
+                (end, count + 1, true)
+            } else {
+                (at, count, false)
+            }
+        };
+        count
+    }
+
+    // The same when the searcher skips, with `credit` for the places that
+    // fail: the next search begins at the end of the match before.
+    fn count_skipped(self: Self, at: u64, credit: u64) -> u64 {
+        let (_, _, count, _) = while [at = at, credit = credit, count = (0 as u64), going = true] (going) {
+            let (last, _, end, credit) = self.next_skipped(at, credit);
+            if last == 0 { (at, credit, count, false) } else { (end, credit, count + 1, true) }
+        };
+        count
+    }
+
+    // The same when the automaton matches at every place that is tried.
+    fn count_spans(self: Self, at: u64, barred: u64) -> u64 {
+        let (_, _, count, _) = while [at = at, barred = barred, count = (0 as u64), going = true] (going) {
+            let (last, start, end) = self.next_span(at, barred == at);
+            if last == 0 { (at, barred, count, false) } else {
+                let (at, barred) = Searching::after(start, end);
+                (at, barred, count + 1, true)
+            }
+        };
+        count
     }
 }
 
@@ -158,11 +204,15 @@ impl Searcher {
     /// it or count: that asks for the searcher once for the whole text.
     pub fn occurrences(self: Self, input: TextView, from: u64) -> Occurrences {
         let searching = Searching { searcher: self, bytes: input.unsafe_data_ptr(), input };
-        // No match ended at `from` yet: any other place says so.
-        let barred = if from == 0 {
-            1
-        } else {
-            0
+        // No match ended at `from` yet: any other place says so. A
+        // searcher that skips has its credit there.
+        let barred = match self.way {
+            Skip => skip::allowance(),
+            _ => if from == 0 {
+                1
+            } else {
+                0
+            }
         };
         Occurrences { searching, at: from, barred }
     }

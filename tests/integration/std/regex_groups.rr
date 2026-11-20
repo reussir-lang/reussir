@@ -11,7 +11,8 @@
 // different numbers of groups; of long matches, where many beginnings
 // are alive; by the stream, by one search and by the fold, with one
 // `Groups` for all matches, from a place inside a view of a part of a
-// text, and with a `Groups` that another searcher wrote into; and say
+// text, and with a `Groups` that another searcher wrote into; by the
+// stream of a searcher that skips; and say
 // what is refused: a group under a complement or an intersection, and
 // rules whose groups need more states than the limit. One case compares
 // the automaton of rules with groups, state by state, with the automaton
@@ -44,6 +45,7 @@
 // CHECK-NEXT: regex groups/several rules: unit
 // CHECK-NEXT: regex groups/long matches: unit
 // CHECK-NEXT: regex groups/the stream, one search and the fold: unit
+// CHECK-NEXT: regex groups/a searcher that skips: unit
 // CHECK-NEXT: regex groups/what is refused: unit
 // CHECK-NEXT: regex groups/the automaton without the groups: unit
 // CHECK-NEXT: regex groups/groups & the trees (fuzz):
@@ -894,6 +896,35 @@ fn test_handed() -> Outcome {
         .and_then(|| handed(rules1(b().group().then(a().star().group())), rules1(a().group().then(b().star().group())), "baaa abbb"))
 }
 
+// A searcher that skips gives the groups of the same matches: in a text
+// whose places fail more often than a stream has credit for, the second
+// automaton reads on, and the stream with groups goes on from the bound
+// as the stream without them does.
+fn test_skipping() -> Outcome {
+    let rules = rules1(letters().group().then(Regex::byte(61)).then(digits().group()));
+    let text = Text::from_str("abcdefghijklmnopqrstuvwxyzabcdefghij klmno=pq rate=12 tail=7");
+    built(rules, |searcher: Searcher| {
+        let (second, one, first) = searcher.occurrences(text.view(), 0).next_groups(Groups::of(searcher));
+        let (third, two, next) = second.next_groups(Groups::of(searcher));
+        let (last, three, _) = third.next_groups(Groups::of(searcher));
+        should_be(way_number(searcher), 4)
+            .and_then(|| expect(
+                has(first, 0, 46, 53) && has(first, 1, 46, 50) && has(first, 2, 51, 53),
+                "the first match after a long word and one with no digit"
+            ))
+            .and_then(|| expect(has(next, 0, 54, 60) && has(next, 1, 54, 58) && has(next, 2, 59, 60), "the one after it"))
+            .and_then(|| expect(
+                match (one, two, three) {
+                    (Matched(_), Matched(_), Nothing) => second.at() == 53 && third.at() == 60 && last.at() == 60,
+                    _ => false
+                },
+                "two matches and no third, and the stream stands at their ends"
+            ))
+            .and_then(|| expect(agrees(searcher, rules, text.view(), 2), "as the trees have them"))
+            .and_then(|| expect(agrees_from(searcher, rules, text.view(), 47, 2), "from a place inside the first"))
+    })
+}
+
 // 0 for a searcher, 1 for too many states with this limit, and 2 with the
 // rule added for a group that is misplaced.
 fn refusal(rules: List<Regex>, limit: u64) -> u64 {
@@ -966,7 +997,8 @@ fn way_number(searcher: Searcher) -> u64 {
         EveryPlace => 0,
         FirstBytes => 1,
         Prefix => 2,
-        Literal => 3
+        Literal => 3,
+        Skip => 4
     }
 }
 
@@ -1237,6 +1269,7 @@ fn suite() -> TestTree {
         .with_case("several rules", test_rules)
         .with_case("long matches", test_long)
         .with_case("the stream, one search and the fold", test_ways)
+        .with_case("a searcher that skips", test_skipping)
         .with_case("what is refused", test_refused)
         .with_case("the automaton without the groups", test_automaton)
         .with_fuzz(

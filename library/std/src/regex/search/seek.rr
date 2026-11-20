@@ -21,7 +21,20 @@ impl Searcher {
         match self.way {
             Literal => self.found_alone(input, from),
             _ => {
-                let (last, start, end) = self.sought(input.unsafe_data_ptr(), input.len(), from);
+                // A searcher that skips has the match by now, or the
+                // place to seek on from.
+                let (last, start, end, more) = match self.way {
+                    Skip => {
+                        let (last, start, end, more, _) = self.skipped(input.unsafe_data_ptr(), input.len(), from, 0);
+                        (last, start, end, more)
+                    },
+                    _ => (0, from, from, true)
+                };
+                let (last, start, end) = if more {
+                    self.sought(input.unsafe_data_ptr(), input.len(), start)
+                } else {
+                    (last, start, end)
+                };
                 // The length is asked for again so that the last use of
                 // `input` comes after its bytes are read through the
                 // pointer.
@@ -47,12 +60,18 @@ impl Searcher {
     /// Whether a rule matches somewhere in `input` from the byte `from`
     /// on. The search ends at the first state that accepts: at the first
     /// place that has a match, it does not wait for the end of the longest
-    /// one. The places that have none cost what they cost `find`.
+    /// one. The places that have none cost what they cost `find`. A
+    /// searcher that skips reads up to the first place where a match ends,
+    /// every byte once, and tries no place.
     pub fn is_match(self: Self, input: TextView, from: u64) -> bool {
         let found = match self.way {
             Literal => {
                 let (start, _) = self.spotted(input.unsafe_data_ptr(), input.len(), from);
                 start < input.len()
+            },
+            Skip => {
+                let (found, _, _) = self.ending(input.unsafe_data_ptr(), input.len(), from);
+                found
             },
             _ => self.any(input.unsafe_data_ptr(), input.len(), from)
         };
@@ -114,7 +133,9 @@ impl Searcher {
     // at `bytes` or after it: the cell of the state that accepts it, where
     // it begins and where it ends; the cell 0 when there is none. Past the
     // end there is none. The automaton matches from every place that is
-    // tried, whichever way they are come to.
+    // tried, whichever way they are come to. A searcher that skips asks
+    // `skipped` first, which may leave the places from a later one on to
+    // this.
     fn sought(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64, u64) {
         // The automaton is taken once, and every place reads it without
         // counting a reference.

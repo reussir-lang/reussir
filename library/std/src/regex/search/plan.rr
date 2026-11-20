@@ -28,6 +28,12 @@
 //! every match begins with is within four places of every place, the
 //! finder of those bytes is never asked, and every such place is tried
 //! with the automaton, as it was without them.
+//!
+//! A searcher that may build a second automaton, `Searcher::skipping`,
+//! skips where it would seek the first bytes or try every place, a match
+//! can begin while another is on its way, and the shortest match from a
+//! place can have five bytes or more: `skip` says what that does and why
+//! the literals are sought as they are.
 
 import core::intrinsic::array;
 import std::regex::alphabet::bits::Bits;
@@ -52,6 +58,24 @@ impl Way {
                 } else {
                     Way::Prefix
                 }
+            }
+        }
+    }
+
+    // Whether a searcher that would seek this way skips instead, with
+    // the automaton of the ends of `automaton`: no literal is sought, a
+    // match can begin while another is on its way, and a place that
+    // fails can have read four bytes or more, which it has when the
+    // shortest match from a place can have five. A place that reads
+    // fewer is passed as fast by trying the next one.
+    fn gains(self: Self, automaton: Automaton) -> bool {
+        match self {
+            Literal => false,
+            Prefix => false,
+            _ => automaton.overlaps() && match automaton.shortest_lengths() {
+                Nothing => false,
+                Within(_, greatest) => greatest >= 5,
+                From(_) => true
             }
         }
     }

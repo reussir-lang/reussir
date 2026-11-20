@@ -1,0 +1,219 @@
+//! Skipping the text that holds no match.
+//!
+//! A place that gives no match costs the bytes that were read from it, and
+//! the next place reads them again. The automaton of the ends reads every
+//! byte once, for the matches from every place, and stops at the first
+//! place where a match ends. The text before that place is passed over in
+//! one reading, and a state of it that stays in itself has its run, so the
+//! bytes are skipped sixteen at a time in every such state and not only
+//! before a first byte:
+//!
+//! ```text
+//! rule      [a-z]+ = [0-9]+
+//! text      let total = base; rate=12
+//! ends      ------------------------^      a match ends at 24: rate=1
+//! idle                        ^            no match is begun at 18
+//! match                       -------      the match, from 18 to 25
+//! ```
+//!
+//! The automaton of the ends does not say which match ends there, and it
+//! need not be the one that the search is for: `abcd|c` in `abcd` ends
+//! first at 3, with the `c`, and the match is all four bytes. So the end
+//! is only a bound. With `e` the first place where a match ends, the match
+//! that begins first begins at a place `s` with
+//!
+//! ```text
+//! max(idle, e - k) <= s <= e - m
+//! ```
+//!
+//! where `m` and `k` are the least and the greatest length that the
+//! shortest match from a place can have, as `Automaton::shortest_lengths`
+//! gives them, and `idle` is the last place before `e` where the
+//! automaton of the ends was in its start state: no match was begun
+//! there, either because the search began there or because every match
+//! begun before had failed.
+//!
+//! - `s <= e - m`: a match ends at `e`. It has `m` bytes or more, and it
+//!   begins at `s` or after, the first place where a match begins.
+//! - `e - k <= s`: the shortest match from `s` ends at `e` or after, since
+//!   no match ends before `e`, and it has `k` bytes at most.
+//! - `idle <= s`: a match that begins before `idle` ends after it, since
+//!   no match ends before `e`. So at `idle` it is begun and has not
+//!   failed, and the automaton of the ends is not in its start state.
+//!
+//! From the lower bound the searcher seeks the next first byte and matches
+//! there, as it does without skipping, and what it finds is the match at
+//! `s`: the first one from the bound on. When the lengths have no greatest
+//! one, `idle` alone is the bound. When `m` is `k`, as for `[a-z]{8,13}`,
+//! whose shortest match has eight bytes wherever it begins, `s` is `e - k`
+//! and no place is tried in vain.
+//!
+//! The automaton of the ends is not asked at once. A place is tried as it
+//! is, and where it has a match, as in a text that is one match after
+//! another, nothing is in the way. A place that fails is not yet a reason
+//! either: where the first bytes are few and far between, as for
+//! `q[a-z]*[0-9]`, seeking the next one passes over the text sixteen bytes
+//! at a time and a place costs a few bytes, while the automaton of the
+//! ends steps through every word that a first byte begins. So a search
+//! keeps an account, in bytes:
+//!
+//! ```text
+//! a byte passed on the way to the next place     earns 1
+//! a place that failed after reading n bytes      costs 4 + n / 2
+//! ```
+//!
+//! While the credit pays for the places that fail, the next first byte is
+//! sought and tried. At the first place that it does not pay for, the
+//! automaton of the ends reads on from the byte after that place, up to
+//! the first place where a match ends; the bound holds for the places
+//! from there on, and the credit is spent. A stream begins with 64 to its
+//! credit and keeps what is left from one match to the next, so a text
+//! of words spends it once, and from then on the automaton of the ends is
+//! asked at the first place that fails, unless the place was far. `find`
+//! begins with none: it is one search.
+//!
+//! The 4 is what a place that fails was measured to cost, in bytes of
+//! the automaton of the ends, where it reads a few bytes; a place that
+//! reads far reads most of it sixteen bytes at a time.
+//!
+//! The bytes that places read in vain before the automaton of the ends is
+//! asked are at most twice the credit: twice the bytes passed and the 64.
+//! `a*b` in a text of `a` only is two readings, one of the first place
+//! and one of the automaton of the ends. The bytes from the bound to the
+//! end of the match are read once more, and more often where places from
+//! the bound on fail, which rules can still make as many as the square
+//! of the length: `a*bq|ba*c` in `aaa...baaa...c` is tried from every `a`
+//! before the `b`.
+//!
+//! Once asked, the automaton of the ends reads up to the next end of a
+//! match, however far that is and whatever the text is like on the way:
+//! there it steps through the words that the first bytes begin, where
+//! seeking would have passed over the text between them.
+//!
+//! A searcher is built to skip when a match can begin while one that
+//! began before is still on its way, as `Automaton::overlaps` says, and
+//! the shortest match from a place can have five bytes or more. Only
+//! with the first are bytes read from several places: for
+//! `[a-z]+ = [0-9]+` every letter of a word is tried and reads the rest
+//! of the word. Without the second, as for `[a-z]{3}`, a place that
+//! fails has two bytes of a match at most, and the automaton of the ends
+//! would be asked for every such place to say what the next place says
+//! as fast. The literal that every match begins with is sought as before,
+//! whatever follows it.
+
+import core::ptr::Generic;
+import std::option::Option;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::scan;
+import std::regex::search::Searcher;
+import std::regex::search::Way;
+
+// What a stream has to its credit when it begins, in bytes: enough for
+// the places of a few words, so that a text whose first bytes are far
+// apart on the whole is not given up for the first few that are near.
+pub fn allowance() -> u64 {
+    64
+}
+
+impl Searcher {
+    /// The searcher of the rules of `automaton` that skips with the
+    /// automaton of the ends when that serves its rules, as `Way::Skip`
+    /// says. The search for the states of the automaton of the ends gives
+    /// up when it has found more than `limit` of them, and the searcher
+    /// then seeks as that of `new` does.
+    pub fn skipping(automaton: Automaton, limit: u64) -> Searcher {
+        let plain = Searcher::new(automaton);
+        if plain.way.gains(automaton) {
+            match automaton.ends(limit) {
+                Ok(ends) => Searcher {
+                    automaton,
+                    way: Way::Skip,
+                    finder: plain.finder,
+                    literal: plain.literal,
+                    program: plain.program,
+                    ends: Option::Some { ends },
+                    reach: match automaton.shortest_lengths() {
+                        Within(_, greatest) => greatest,
+                        _ => 18446744073709551615
+                    }
+                },
+                Err(_) => plain
+            }
+        } else {
+            plain
+        }
+    }
+
+    // What a searcher that skips does before `sought`, for the first
+    // match that begins at the byte `from` of the `length` bytes at
+    // `bytes` or after it, with `credit` for the places that fail. The
+    // next first byte is sought and tried for as long as the credit pays
+    // for the places that have no match. With a match, or at the end of
+    // the bytes, the answer is that of `sought` and the fourth is false.
+    // At the first place that the credit does not pay for, the automaton
+    // of the ends reads on from the byte after it. When a match ends in
+    // the bytes, the fourth is true and the place is the bound for where
+    // the match begins: `sought` from there finds it, since no place
+    // before the bound has a match. When none ends, there is no match,
+    // and the fourth is false. The last is the credit that is left.
+    fn skipped(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64, credit: u64) -> (u32, u64, u64, bool, u64) {
+        // The automaton is taken once, as in `sought`.
+        let automaton = self.automaton;
+        let (at, credit, last, start, end, _, paid) = while [
+            at = from,
+            credit = credit,
+            last = 0,
+            start = from,
+            end = from,
+            going = true,
+            paid = true
+        ] (going) {
+            let place = self.place(bytes, length, at);
+            let (last, end, read) = scan::tried(automaton, bytes, length, place);
+            if last != 0 || place >= length {
+                // The bytes up to the place are passed.
+                (at, credit + (place - at), last, place, end, false, true)
+            } else {
+                let earned = credit + (place + 1 - at);
+                let cost = 4 + (read - place) / 2;
+                if earned >= cost {
+                    (place + 1, earned - cost, last, place, end, true, true)
+                } else {
+                    (place + 1, 0, last, place, end, false, false)
+                }
+            }
+        };
+        if paid { (last, start, end, false, credit) } else {
+            let (found, low) = self.bound(bytes, length, at);
+            if found { (0, low, low, true, 0) } else { (0, from, from, false, 0) }
+        }
+    }
+
+    // Whether a match begins at the byte `from` of the `length` bytes at
+    // `bytes` or after it, and the earliest place where the first one can
+    // begin: the automaton of the ends reads up to the first place where
+    // a match ends, and the place is the bound that this place gives.
+    // `sought` finds the match from there.
+    fn bound(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (bool, u64) {
+        let (found, end, idle) = self.ending(bytes, length, from);
+        // The shortest match from the place where the match begins ends
+        // at `end` or after.
+        let far = if end > self.reach {
+            end - self.reach
+        } else {
+            0
+        };
+        (found, if far > idle { far } else { idle })
+    }
+
+    // Whether a match ends in the `length` bytes at `bytes` that begins at
+    // the byte `from` or after it, the first place where one does, and
+    // the last place before it where none was begun.
+    fn ending(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (bool, u64, u64) {
+        match self.ends {
+            Some(ends) => scan::first_end(ends, bytes, length, from),
+            // No searcher skips without one.
+            None => (false, from, from)
+        }
+    }
+}

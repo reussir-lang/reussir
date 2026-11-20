@@ -240,13 +240,14 @@ impl Searcher {
     /// automata that the groups are found with, all of them together.
     /// Those are more than the states of the automaton of the rules, and
     /// grow with the square of the number of parts in a row that have a
-    /// group between them.
+    /// group between them. The second automaton of a searcher that skips
+    /// has the limit for itself, as in `Searcher::build`.
     pub fn with_groups(rules: List<Regex>, limit: u64) -> Result<Searcher, Refused> {
         match program::misplaced(rules, 0) {
             Some(rule) => Result::Err { Refused::Misplaced { rule } },
             None => match Automaton::build(rules.map(|rule: Regex| rule.to_bytes()), limit) {
                 Ok(automaton) => match program::build(rules, limit) {
-                    Ok(program) => Result::Ok { Searcher::new(automaton).grouped(program) },
+                    Ok(program) => Result::Ok { Searcher::skipping(automaton, limit).grouped(program) },
                     Err(error) => Result::Err { Refused::TooManyStates { error } }
                 },
                 Err(error) => Result::Err { Refused::TooManyStates { error } }
@@ -288,7 +289,15 @@ impl Searcher {
 
     // The same searcher with the questions `program` for its groups.
     fn grouped(self: Self, program: Option<Program>) -> Searcher {
-        Searcher { automaton: self.automaton, way: self.way, finder: self.finder, literal: self.literal, program }
+        Searcher {
+            automaton: self.automaton,
+            way: self.way,
+            finder: self.finder,
+            literal: self.literal,
+            program,
+            ends: self.ends,
+            reach: self.reach
+        }
     }
 
     // The words that the groups of a match need, with nothing in them.
@@ -330,13 +339,24 @@ impl Occurrences {
         let at = self.at;
         let barred = self.barred;
         let searching = self.searching;
-        match searching.next_match(at, barred == at) {
-            Matched(found) => {
-                let (at, barred) = Searching::after(found.start, found.end);
-                let groups = searching.grouped(found, groups);
-                (Occurrences { searching, at, barred }, Found::Matched { found }, groups)
+        match searching.searcher.way {
+            // As in `next`, the third word of such a stream is its credit.
+            Skip => {
+                let (last, start, end, credit) = searching.next_skipped(at, barred);
+                if last == 0 { (Occurrences { searching, at, barred: credit }, Found::Nothing, groups) } else {
+                    let found = Match { rule: searching.searcher.rule(last), start, end };
+                    let groups = searching.grouped(found, groups);
+                    (Occurrences { searching, at: end, barred: credit }, Found::Matched { found }, groups)
+                }
             },
-            Nothing => (Occurrences { searching, at, barred }, Found::Nothing, groups)
+            _ => match searching.next_match(at, barred == at) {
+                Matched(found) => {
+                    let (at, barred) = Searching::after(found.start, found.end);
+                    let groups = searching.grouped(found, groups);
+                    (Occurrences { searching, at, barred }, Found::Matched { found }, groups)
+                },
+                Nothing => (Occurrences { searching, at, barred }, Found::Nothing, groups)
+            }
         }
     }
 

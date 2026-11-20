@@ -1,0 +1,235 @@
+//! How long the shortest match from a place can be, and whether a match
+//! can begin while another is on its way.
+//!
+//! From a place of a text several matches may begin, each longer than the
+//! one before. The shortest of them ends at the first state that accepts
+//! on the way from the start state, so its length is the length of a way
+//! that passes no state that accepts before its end:
+//!
+//! ```text
+//! rule      [a-z][a-z][a-z]+ | [0-9]
+//!
+//! ways      start - letter - letter - letter      accepts after 3
+//!           start - digit                         accepts after 1
+//! ```
+//!
+//! Here the shortest match from a place has one byte to three, however
+//! long the longest is. With a state on such a way twice, a way is as long
+//! as one likes and the lengths have no greatest one: `a*b`, `[a-z]+ =`.
+//!
+//! The states that do not accept are walked twice from the start state.
+//! The first walk is breadth first: it gives the least length, and counts
+//! for every state the transitions that enter it. The second takes a state
+//! when all the transitions into it are walked, which gives the greatest
+//! length; a state that is on a way twice is never taken, and that is how
+//! such a way is seen.
+
+import core::intrinsic::array;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Lengths;
+import std::regex::automaton::encoding;
+
+// The states that do not accept, as a walk from the start state finds
+// them: `found` of them in `order`, by place; the number of transitions
+// that enter each; and the least number of steps to a state that accepts.
+struct Walked {
+    order: [u32; ?],
+    found: u64,
+    entered: [u32; ?],
+    least: u64
+}
+
+impl Automaton {
+    /// The lengths that the shortest match from a place can have: the
+    /// least and the greatest number of bytes up to the first state that
+    /// accepts.
+    pub fn shortest_lengths(self: Self) -> Lengths {
+        match encoding::kind(self.start) {
+            0 => Lengths::Nothing,
+            5 => self.measured(),
+            6 => self.measured(),
+            // 1 to 4: the start state accepts.
+            _ => Lengths::Within { 0, 0 }
+        }
+    }
+
+    /// Whether a match can begin while one that began before is still on
+    /// its way: there is a byte after which neither of the two has failed
+    /// and neither is accepted. Without that, the bytes that a match was
+    /// begun with and failed on hold the beginning of no other match that
+    /// goes on; with it, as for `[a-z]+ =`, a text can have its bytes
+    /// read from many places before one of them gives a match.
+    pub fn overlaps(self: Self) -> bool {
+        match encoding::kind(self.start) {
+            5 => self.met(),
+            6 => self.met(),
+            // The start state accepts or is dead: no match is on its way.
+            _ => false
+        }
+    }
+
+    // The same when the start state neither accepts nor is dead: whether
+    // a state that does not accept, on a way from the start state of one
+    // byte or more, goes on with a byte to a state that does not accept,
+    // and so does the start state with that byte.
+    fn met(self: Self) -> bool {
+        let walked = self.walked();
+        let start = encoding::place(self.start, self.shift) as u64;
+        // The start state is on such a way when a transition enters it.
+        let first = if array::get(walked.entered, start as i64) == 0 {
+            1
+        } else {
+            0
+        };
+        let (_, any) = while [at = (first as u64), any = false] (!any && at < walked.found) {
+            let place = array::get(walked.order, at as i64) as u64;
+            let (_, any) = while [column = (0 as u64), any = false] (!any && column < self.columns) {
+                let both = encoding::kind(self.cell_after(place, column)) >= 5
+                    && encoding::kind(self.cell_after(start, column)) >= 5;
+                (column + 1, both)
+            };
+            (at + 1, any)
+        };
+        any
+    }
+
+    // The same when the start state neither accepts nor is dead.
+    fn measured(self: Self) -> Lengths {
+        let walked = self.walked();
+        let (greatest, all) = self.farthest(walked);
+        if all {
+            Lengths::Within { walked.least, greatest }
+        } else {
+            Lengths::From { walked.least }
+        }
+    }
+
+    // The cell that the state at `place` goes to on `column`.
+    fn cell_after(self: Self, place: u64, column: u64) -> u32 {
+        array::get(self.next, ((place << (self.shift as u64)) + column) as i64)
+    }
+
+    // The walk breadth first: a state is found once, and every transition
+    // into a state that does not accept is counted.
+    fn walked(self: Self) -> Walked {
+        let states = self.states();
+        let start = encoding::place(self.start, self.shift);
+        let none = array::splat<[u32; ?]>(states, 0);
+        let first = array::set(array::splat<[u32; ?]>(states, 0), 0, start);
+        let unseen = array::set(array::splat<[bool; ?]>(states, false), start as i64, true);
+        // The steps to every state that was found.
+        let depths = array::splat<[u64; ?]>(states, 0);
+        let (_, found, order, entered, _, _, least) = while [
+            head = (0 as u64),
+            found = (1 as u64),
+            order = first,
+            entered = none,
+            seen = unseen,
+            depths = depths,
+            least = (18446744073709551615 as u64)
+        ] (head < found) {
+            let place = array::get(order, head as i64) as u64;
+            let depth = array::get(depths, place as i64) + 1;
+            let (_, found, order, entered, seen, depths, least) = while [
+                column = (0 as u64),
+                found = found,
+                order = order,
+                entered = entered,
+                seen = seen,
+                depths = depths,
+                least = least
+            ] (column < self.columns) {
+                let cell = self.cell_after(place, column);
+                let kind = encoding::kind(cell);
+                if kind == 0 { (column + 1, found, order, entered, seen, depths, least) } else {
+                    if kind <= 4 {
+                        // The first one that is found is the nearest.
+                        let least = if depth < least { depth } else { least };
+                        (column + 1, found, order, entered, seen, depths, least)
+                    } else {
+                        let to = encoding::place(cell, self.shift) as i64;
+                        let entered = array::set(entered, to, array::get(entered, to) + 1);
+                        if array::get(seen, to) {
+                            (column + 1, found, order, entered, seen, depths, least)
+                        } else {
+                            (
+                                column + 1,
+                                found + 1,
+                                array::set(order, found as i64, to as u32),
+                                entered,
+                                array::set(seen, to, true),
+                                array::set(depths, to, depth),
+                                least
+                            )
+                        }
+                    }
+                }
+            };
+            (head + 1, found, order, entered, seen, depths, least)
+        };
+        Walked { order, found, entered, least }
+    }
+
+    // The greatest number of steps to a state that accepts, and whether
+    // every state of the walk was taken: a state is taken when all the
+    // transitions into it are walked, so one that is on a way twice never
+    // is, and then the steps have no greatest number.
+    fn farthest(self: Self, walked: Walked) -> (u64, bool) {
+        let states = self.states();
+        let start = encoding::place(self.start, self.shift);
+        let ready = array::set(array::splat<[u32; ?]>(states, 0), 0, start);
+        // The start state is entered by none of them, or it is on a way
+        // twice.
+        let begins = if array::get(walked.entered, start as i64) == 0 {
+            1
+        } else {
+            0
+        };
+        // The most steps to every state.
+        let far = array::splat<[u64; ?]>(states, 0);
+        let (_, taken, _, _, _, greatest) = while [
+            head = (0 as u64),
+            taken = (begins as u64),
+            ready = ready,
+            left = walked.entered,
+            far = far,
+            greatest = (0 as u64)
+        ] (head < taken) {
+            let place = array::get(ready, head as i64) as u64;
+            let steps = array::get(far, place as i64) + 1;
+            let (_, taken, ready, left, far, greatest) = while [
+                column = (0 as u64),
+                taken = taken,
+                ready = ready,
+                left = left,
+                far = far,
+                greatest = greatest
+            ] (column < self.columns) {
+                let cell = self.cell_after(place, column);
+                let kind = encoding::kind(cell);
+                if kind == 0 { (column + 1, taken, ready, left, far, greatest) } else {
+                    if kind <= 4 {
+                        let greatest = if steps > greatest { steps } else { greatest };
+                        (column + 1, taken, ready, left, far, greatest)
+                    } else {
+                        let to = encoding::place(cell, self.shift) as i64;
+                        let far = if steps > array::get(far, to) {
+                            array::set(far, to, steps)
+                        } else {
+                            far
+                        };
+                        let waiting = array::get(left, to) - 1;
+                        let left = array::set(left, to, waiting);
+                        if waiting == 0 {
+                            (column + 1, taken + 1, array::set(ready, taken as i64, to as u32), left, far, greatest)
+                        } else {
+                            (column + 1, taken, ready, left, far, greatest)
+                        }
+                    }
+                }
+            };
+            (head + 1, taken, ready, left, far, greatest)
+        };
+        (greatest, taken == walked.found)
+    }
+}
