@@ -1,0 +1,497 @@
+// Unit suite and coverage-guided fuzz driver for `std::regex::search`:
+// finding in a text, from any place of it.
+// Unit cases find the bytes of sets that are compared in every form, a few
+// bytes and stretches, all but a few, shuffle tables for the set or for the
+// other bytes where the target has them, and the lookup table, from every
+// place of every view of a text; the set of no bytes and the set of every
+// byte; a view whose text goes on with bytes of the set, from its end and
+// from places past it; bytes that are no text, every byte among them; and
+// the form of the run that a finder is.
+// The fuzz targets build the finder of a random set and compare what it
+// finds with reading the bytes one by one: from every place of a random
+// text and of a view of it, through the view and through its bytes, and
+// from every place of random bytes and of a part of them.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_search %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_search
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_search%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_search%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex search/the bytes of a set: unit
+// CHECK-NEXT: regex search/no byte and every byte: unit
+// CHECK-NEXT: regex search/the end of a view: unit
+// CHECK-NEXT: regex search/bytes that are no text: unit
+// CHECK-NEXT: regex search/the form of a finder: unit
+// CHECK-NEXT: regex search/a finder of bytes & one by one (fuzz):
+// CHECK-NEXT: regex search/a finder of bytes & one by one in any bytes (fuzz):
+
+import core::intrinsic::array;
+import core::ptr;
+import core::ptr::PtrArithFlag;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::lookahead::LoopOptimizer;
+import std::regex::search::bytes::ByteFinder;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::domain::char_domain;
+import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ------------------------------ The oracle ------------------------------
+
+// The index of the first byte of `set` at the byte `from` of `view` or
+// after it, or the length of `view`: every byte is asked for by its index.
+fn sought(view: TextView, set: Bits, from: u64) -> u64 {
+    let length = view.len();
+    if from >= length { length } else {
+        while [at = from] (at < length && !set.contains(view.byte_at(at).unwrap_or(0) as u64)) {
+            at + 1
+        }
+    }
+}
+
+// What `finder` finds from `from` in the bytes of `view`; a place past the
+// length is one more than the length, which is never what is wanted. The
+// view is asked for its length afterwards, so that its last use comes
+// after its bytes are read through the pointer.
+fn by_bytes(finder: ByteFinder, view: TextView, from: u64) -> u64 {
+    let found = finder.unsafe_find(view.unsafe_data_ptr(), view.len(), from);
+    if view.len() < found {
+        view.len() + 1
+    } else {
+        found
+    }
+}
+
+// Whether `finder` finds from `from` in `view`, through the view and
+// through its bytes, what reading one by one finds.
+fn agrees(finder: ByteFinder, view: TextView, from: u64) -> bool {
+    let wanted = sought(view, finder.set(), from);
+    finder.find(view, from) == wanted && by_bytes(finder, view, from) == wanted
+}
+
+// The same from every place of `view`, its end and the place past it.
+fn agrees_all(finder: ByteFinder, view: TextView) -> bool {
+    let (_, same) = while [from = (0 as u64), same = true] (same && from <= view.len() + 1) {
+        (from + 1, agrees(finder, view, from))
+    };
+    same
+}
+
+// The same in every view of `view` that begins at `start`.
+fn agrees_from(finder: ByteFinder, view: TextView, start: u64) -> bool {
+    let (_, same) = while [end = start, same = true] (same && end <= view.len()) {
+        let same = match view.slice_byte(start, end) {
+            Some(part) => agrees_all(finder, part),
+            None => false
+        };
+        (end + 1, same)
+    };
+    same
+}
+
+// The same in every view of `view`.
+fn agrees_within(finder: ByteFinder, view: TextView) -> bool {
+    let (_, same) = while [start = (0 as u64), same = true] (same && start <= view.len()) {
+        (start + 1, agrees_from(finder, view, start))
+    };
+    same
+}
+
+// The largest place there is.
+fn farthest() -> u64 {
+    18446744073709551615
+}
+
+// Whether `finder` finds nothing in `view` from its end and from the places
+// past it: the first one, and the ones where sixteen or eight more wrap
+// around.
+fn nothing_past(finder: ByteFinder, view: TextView) -> bool {
+    let length = view.len();
+    agrees(finder, view, length) && finder.find(view, length) == length
+        && agrees(finder, view, length + 1) && agrees(finder, view, length + 40)
+        && agrees(finder, view, farthest()) && agrees(finder, view, farthest() - 3)
+        && agrees(finder, view, farthest() - 7) && agrees(finder, view, farthest() - 8)
+        && agrees(finder, view, farthest() - 15) && agrees(finder, view, farthest() - 16)
+}
+
+// The same for bytes that need be no text. The index of the first byte of
+// `set` among the `length` bytes of `bytes` from `start` on, at the byte
+// `from` of them or after it, or `length`: every byte is asked for by its
+// index.
+fn sought_in(bytes: [u8; ?], set: Bits, start: u64, length: u64, from: u64) -> u64 {
+    if from >= length { length } else {
+        while [at = from] (at < length && !set.contains(array::get(bytes, (start + at) as i64) as u64)) {
+            at + 1
+        }
+    }
+}
+
+// Whether `finder` finds from `from` in those bytes what reading one by
+// one finds. The bytes are asked for by index afterwards, so the array is
+// there while they are read through the pointer.
+fn agrees_in(finder: ByteFinder, bytes: [u8; ?], start: u64, length: u64, from: u64) -> bool {
+    let first = ptr::offset(array::unsafe_data_ptr(bytes), start as i64, PtrArithFlag::Inbounds);
+    let found = finder.unsafe_find(first, length, from);
+    found == sought_in(bytes, finder.set(), start, length, from)
+}
+
+// The same from every place of those bytes, their end, the place past it
+// and the places where sixteen or eight more wrap around.
+fn agrees_part(finder: ByteFinder, bytes: [u8; ?], start: u64, length: u64) -> bool {
+    let (_, same) = while [from = (0 as u64), same = true] (same && from <= length + 1) {
+        (from + 1, agrees_in(finder, bytes, start, length, from))
+    };
+    same && agrees_in(finder, bytes, start, length, farthest())
+        && agrees_in(finder, bytes, start, length, farthest() - 7)
+        && agrees_in(finder, bytes, start, length, farthest() - 8)
+        && agrees_in(finder, bytes, start, length, farthest() - 15)
+        && agrees_in(finder, bytes, start, length, farthest() - 16)
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+// For each high half from 1 to `count` the bytes with the low halves 0 and
+// that high half: as many different rows. With ten rows the set is neither
+// a few stretches nor a few rectangles, nor all but a few; with eight it is
+// eight rectangles, and the other bytes are nine.
+fn scattered(count: u64) -> Bits {
+    let (_, rows) = while [row = (1 as u64), rows = Bits::empty()] (row <= count) {
+        (row + 1, rows.insert(row * 16).insert(row * 16 + row))
+    };
+    rows
+}
+
+// A finder of `set` finds what reading one by one finds, from every place
+// of every view of a text of 64 bytes.
+fn found_within(set: Bits, message: str) -> Outcome {
+    let text = Text::from_str("one two, three; four_5 SIX=7.89 (a-b) \"q\" x+y*z ~ end of it. 0@`P");
+    let finder = ByteFinder::new(set);
+    expect(finder.set() == set, "a finder does not say its set")
+        .and_then(|| expect(agrees_within(finder, text.view()), message))
+}
+
+fn test_bytes() -> Outcome {
+    let text = Text::from_str("one two, three; four");
+    let marks = ByteFinder::new(Bits::single(44).union(Bits::single(59)));
+    let comma = Bits::single(44);
+    let lower = Bits::range(97, 122);
+    let digit = Bits::range(48, 57);
+    let name = lower.union(Bits::range(65, 90)).union(digit).union(Bits::single(95));
+    should_be(marks.find(text.view(), 0), 7)
+        .and_then(|| should_be(marks.find(text.view(), 7), 7))
+        .and_then(|| should_be(marks.find(text.view(), 8), 14))
+        .and_then(|| should_be(marks.find(text.view(), 15), 20))
+        .and_then(|| should_be(by_bytes(marks, text.view(), 3), 7))
+        // A finder that is asked once is given up to the call: it is there
+        // until its vectors are read, in the last sixteen bytes as well.
+        .and_then(|| should_be(ByteFinder::new(Bits::single(44)).find(text.view(), 0), 7))
+        .and_then(|| should_be(ByteFinder::new(Bits::single(59)).find(text.view(), 2), 14))
+        .and_then(|| should_be(ByteFinder::new(Bits::single(117)).find(text.view(), 0), 18))
+        .and_then(|| should_be(ByteFinder::new(Bits::single(117)).find(text.view(), 9), 18))
+        .and_then(|| should_be(ByteFinder::new(Bits::single(46)).find(text.view(), 1), 20))
+        .and_then(|| should_be(by_bytes(ByteFinder::new(Bits::range(48, 57)), text.view(), 0), 20))
+        // One to four bytes.
+        .and_then(|| found_within(comma, "one byte"))
+        .and_then(|| found_within(comma.insert(59), "two bytes"))
+        .and_then(|| found_within(comma.insert(59).insert(46), "three bytes"))
+        .and_then(|| found_within(comma.insert(59).insert(46).insert(61), "four bytes"))
+        // One stretch, alone and with one or two bytes, and two stretches.
+        .and_then(|| found_within(digit, "a stretch"))
+        .and_then(|| found_within(digit.insert(95), "a stretch and a byte"))
+        .and_then(|| found_within(digit.insert(95).insert(43), "a stretch and two bytes"))
+        .and_then(|| found_within(digit.union(Bits::range(65, 90)), "two stretches"))
+        // All but a few: the vectors are those of the other bytes.
+        .and_then(|| found_within(Bits::single(32).complement(), "all but one byte"))
+        .and_then(|| found_within(lower.insert(32).insert(44).complement(), "all but a stretch and two bytes"))
+        .and_then(|| found_within(lower.union(Bits::range(32, 47)).complement(), "all but two stretches"))
+        // Neither: shuffle tables for the set or for the other bytes, or
+        // the lookup table.
+        .and_then(|| found_within(name, "the bytes of a name"))
+        .and_then(|| found_within(name.complement(), "the bytes of no name"))
+        .and_then(|| found_within(scattered(8), "eight rectangles"))
+        .and_then(|| found_within(scattered(8).complement(), "all but eight rectangles"))
+        .and_then(|| found_within(scattered(10), "a scattered set"))
+        .and_then(|| found_within(scattered(10).complement(), "all but a scattered set"))
+}
+
+// The set of no bytes finds nothing, and the set of every byte finds the
+// place it is asked from.
+fn test_none_and_all() -> Outcome {
+    let text = Text::from_str("forty bytes of text, more than two vectors");
+    let nothing = ByteFinder::new(Bits::empty());
+    let all = ByteFinder::new(Bits::full());
+    should_be(nothing.find(text.view(), 0), 42)
+        .and_then(|| should_be(nothing.find(text.view(), 30), 42))
+        .and_then(|| should_be(all.find(text.view(), 0), 0))
+        .and_then(|| should_be(all.find(text.view(), 17), 17))
+        .and_then(|| should_be(all.find(text.view(), 41), 41))
+        .and_then(|| should_be(all.find(text.view(), 42), 42))
+        .and_then(|| expect(agrees_within(nothing, text.view()), "the set of no bytes"))
+        .and_then(|| expect(agrees_within(all, text.view()), "the set of every byte"))
+        .and_then(|| expect(nothing_past(nothing, text.view()) && nothing_past(all, text.view()), "past the end"))
+}
+
+// Whether `finder` finds nothing in the views of `text` that end before
+// its last `after` bytes, from their end and from the places past it.
+fn ends(finder: ByteFinder, text: Text, after: u64) -> bool {
+    let whole = text.view();
+    let most = whole.len() - after;
+    let (_, same) = while [start = (0 as u64), same = true] (same && start <= most) {
+        let same = match whole.slice_byte(start, most) {
+            Some(part) => nothing_past(finder, part) && agrees_all(finder, part),
+            None => false
+        };
+        (start + 1, same)
+    };
+    same
+}
+
+// A view ends where it says, whatever its text goes on with: the bytes
+// after it are bytes of the set, sixteen and more of them, and so are the
+// bytes before it. No byte is read from a place past the end.
+fn test_end() -> Outcome {
+    let dots = Text::from_str("................a quiet stretch of 35 bytes, no dot................");
+    let view = dots.view().drop_byte(16);
+    let dot = ByteFinder::new(Bits::single(46));
+    let lower = Bits::range(97, 122);
+    let name = lower.union(Bits::range(65, 90)).union(Bits::range(48, 57)).union(Bits::single(95));
+    let words = Text::from_str("a_Long_name_of_29_bytes_01234 + - * / ( ) = . , ; : ! ? a_Name_after_it_all");
+    match view.slice_byte(0, 35) {
+        Some(quiet) => should_be(dot.find(quiet, 0), 35)
+            .and_then(|| should_be(dot.find(quiet, 20), 35))
+            .and_then(|| should_be(dot.find(quiet, 35), 35))
+            .and_then(|| should_be(dot.find(quiet, 36), 35))
+            .and_then(|| should_be(dot.find(quiet, farthest()), 35))
+            .and_then(|| should_be(by_bytes(dot, quiet, farthest() - 15), 35))
+            // One byte more is the first byte of the set.
+            .and_then(|| should_be(dot.find(view, 0), 35))
+            .and_then(|| expect(ends(dot, dots, 16), "one byte, and the text goes on with it")),
+        None => expect(false, "a view of 35 bytes")
+    }
+        .and_then(|| expect(ends(ByteFinder::new(Bits::range(40, 47)), dots, 16), "a stretch"))
+        .and_then(|| expect(ends(ByteFinder::new(lower.insert(32).insert(45).complement()), dots, 16), "all but a few"))
+        .and_then(|| expect(ends(ByteFinder::new(name), words, 19), "the bytes of a name"))
+        .and_then(|| expect(ends(ByteFinder::new(scattered(10).insert(95)), words, 19), "a scattered set"))
+}
+
+// The same in the parts of `bytes` of up to 40 bytes that begin at every
+// thirteenth place: every byte of `bytes` is in one of them.
+fn agrees_parts(finder: ByteFinder, bytes: [u8; ?]) -> bool {
+    let all = array::dim(bytes, 0);
+    let (_, same) = while [start = (0 as u64), same = true] (same && start <= all) {
+        let most = if all - start < 40 {
+            all - start
+        } else {
+            40
+        };
+        let (_, same) = while [length = (0 as u64), same = true] (same && length <= most) {
+            (length + 1, agrees_part(finder, bytes, start, length))
+        };
+        (start + 13, same)
+    };
+    same
+}
+
+fn found_in(bytes: [u8; ?], set: Bits, message: str) -> Outcome {
+    expect(agrees_parts(ByteFinder::new(set), bytes), message)
+}
+
+// A finder reads bytes, not text: 299 bytes with every byte among them, in
+// an order that no text has, and sets with the bytes that no text has (192,
+// 193, and 245 to 255).
+fn test_any_bytes() -> Outcome {
+    let bytes = array::tabulate<[u8; ?]>(299, |at: i64| ((at * 37 + 11) % 256) as u8);
+    let never = Bits::range(192, 193).union(Bits::range(245, 255));
+    let name = Bits::range(97, 122).union(Bits::range(65, 90)).union(Bits::range(48, 57)).union(Bits::single(95));
+    found_in(bytes, Bits::single(255), "the last byte")
+        .and_then(|| found_in(bytes, Bits::single(192).insert(0), "two bytes"))
+        .and_then(|| found_in(bytes, Bits::single(193).insert(128).insert(127), "three bytes"))
+        .and_then(|| found_in(bytes, Bits::single(245).insert(254).insert(1).insert(200), "four bytes"))
+        .and_then(|| found_in(bytes, Bits::range(245, 255), "the last stretch"))
+        .and_then(|| found_in(bytes, Bits::range(128, 255), "the upper half"))
+        .and_then(|| found_in(bytes, Bits::range(120, 135).insert(255), "a stretch across the halves and a byte"))
+        .and_then(|| found_in(bytes, Bits::range(192, 193).insert(0).insert(255), "a stretch and two bytes"))
+        .and_then(|| found_in(bytes, never, "two stretches"))
+        .and_then(|| found_in(bytes, never.complement(), "all but two stretches"))
+        .and_then(|| found_in(bytes, Bits::range(128, 191).complement(), "all but a stretch"))
+        .and_then(|| found_in(bytes, name.union(never), "the bytes of a name and of no text"))
+        .and_then(|| found_in(bytes, name.union(never).complement(), "the others"))
+        .and_then(|| found_in(bytes, scattered(15), "a scattered set"))
+        .and_then(|| found_in(bytes, scattered(15).complement(), "all but a scattered set"))
+        .and_then(|| found_in(bytes, Bits::empty(), "no byte"))
+        .and_then(|| found_in(bytes, Bits::full(), "every byte"))
+}
+
+// The word of the run that reads up to the first byte of `set`.
+fn word_up_to(set: Bits) -> u64 {
+    LoopOptimizer::new().add_up_to(set).words().get_or(0, 99)
+}
+
+// The run of a finder is compared with the vectors of its set when they
+// are no more than those of the other bytes: the low four bits of its word
+// are the form, and the fifth is unset for a run that stays on the bytes
+// that the vectors do not match.
+fn test_form() -> Outcome {
+    let digit = Bits::range(48, 57);
+    should_be(word_up_to(Bits::single(44)), 0)
+        .and_then(|| should_be(word_up_to(Bits::single(44).insert(59)), 1))
+        .and_then(|| should_be(word_up_to(Bits::single(44).insert(59).insert(46)), 2))
+        .and_then(|| should_be(word_up_to(Bits::single(44).insert(59).insert(46).insert(61)), 3))
+        .and_then(|| should_be(word_up_to(digit), 4))
+        .and_then(|| should_be(word_up_to(digit.insert(95)), 5))
+        .and_then(|| should_be(word_up_to(digit.insert(95).insert(43)), 6))
+        .and_then(|| should_be(word_up_to(digit.union(Bits::range(65, 90))), 7))
+        // All but a few: the vectors of the other bytes, on which it stays.
+        .and_then(|| should_be(word_up_to(Bits::single(32).complement()), 16))
+        .and_then(|| should_be(word_up_to(digit.complement()), 20))
+        // No byte: it stays on the stretch of every byte. Every byte: it
+        // stays outside that stretch.
+        .and_then(|| should_be(word_up_to(Bits::empty()), 20))
+        .and_then(|| should_be(word_up_to(Bits::full()), 4))
+        // A run of a state stays on its set.
+        .and_then(|| should_be(LoopOptimizer::new().add(Bits::single(44)).words().get_or(0, 99), 16))
+}
+
+// ------------------ Fuzz: a finder against one by one ------------------
+
+fn bits_of(ranges: List<(u8, u8)>) -> Bits {
+    ranges.fold_left(Bits::empty(), |set, range| {
+        let (lo, hi) = range;
+        set.union(Bits::range(lo as u64, hi as u64))
+    })
+}
+
+// `count` copies of `character` before `rest`.
+fn copies(character: char, count: u64, rest: List<char>) -> List<char> {
+    let (_, all) = while [left = count, all = rest] (left > 0) {
+        (left - 1, List::Cons { character, all })
+    };
+    all
+}
+
+// Every character as many times as its number says, up to 23.
+fn repeated(pairs: List<(char, u8)>) -> List<char> {
+    match pairs {
+        Nil => List::Nil,
+        Cons(pair, rest) => {
+            let (character, count) = pair;
+            copies(character, (count % 24) as u64, repeated(rest))
+        }
+    }
+}
+
+fn text_of(characters: List<char>) -> Text {
+    Text::from_string(characters.fold_left(String::new(), |string: String, character: char| string.push_char(character)))
+}
+
+// The set of some stretches and some bytes, or the bytes outside them, in
+// a text of repeated characters and in a view of it: from every place,
+// from the end and from past it.
+fn fuzz_finder(input: ((List<(u8, u8)>, List<u8>, u8), List<(char, u8)>, (u8, u8))) -> Outcome {
+    let (sets, pairs, cut) = input;
+    let (ranges, single, turn) = sets;
+    let (before, after) = cut;
+    let some = single.fold_left(bits_of(ranges), |set: Bits, byte: u8| set.insert(byte as u64));
+    let set = if turn % 2 == 1 {
+        some.complement()
+    } else {
+        some
+    };
+    let finder = ByteFinder::new(set);
+    let view = text_of(repeated(pairs)).view();
+    let start = (before as u64) % (view.len() + 1);
+    let end = view.len() - (after as u64) % (view.len() - start + 1);
+    expect(finder.set() == set, "a finder does not say its set")
+        .and_then(|| expect(agrees_all(finder, view), "a finder and one by one find different bytes in a text"))
+        .and_then(|| expect(nothing_past(finder, view), "a finder finds a byte past the end of a text"))
+        .and_then(|| match view.slice_byte(start, end) {
+            Some(part) => expect(agrees_all(finder, part), "a finder and one by one find different bytes in a view")
+                .and_then(|| expect(nothing_past(finder, part), "a finder finds a byte past the end of a view")),
+            None => expect(false, "a view of a text")
+        })
+}
+
+// Every byte as many times as its number says, up to 23.
+fn spread(pairs: List<(u8, u8)>) -> Vec<u8> {
+    pairs.fold_left(Vec::new(), |bytes: Vec<u8>, pair: (u8, u8)| {
+        let (byte, count) = pair;
+        let (_, bytes) = while [left = (count % 24) as u64, bytes = bytes] (left > 0) {
+            (left - 1, bytes.push(byte))
+        };
+        bytes
+    })
+}
+
+// The same sets in bytes that need be no text, and in a part of them.
+fn fuzz_bytes(input: ((List<(u8, u8)>, List<u8>, u8), List<(u8, u8)>, (u8, u8))) -> Outcome {
+    let (sets, pairs, cut) = input;
+    let (ranges, single, turn) = sets;
+    let (before, after) = cut;
+    let some = single.fold_left(bits_of(ranges), |set: Bits, byte: u8| set.insert(byte as u64));
+    let set = if turn % 2 == 1 {
+        some.complement()
+    } else {
+        some
+    };
+    let finder = ByteFinder::new(set);
+    let listed = spread(pairs);
+    let all = listed.len();
+    let bytes = array::tabulate<[u8; ?]>(all, |at: i64| listed.get_or(at as u64, 0));
+    let start = (before as u64) % (all + 1);
+    let length = all - start - (after as u64) % (all - start + 1);
+    expect(agrees_part(finder, bytes, 0, all), "a finder and one by one find different bytes")
+        .and_then(|| expect(agrees_part(finder, bytes, start, length), "a finder and one by one find different bytes in a part"))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex search")
+        .with_case("the bytes of a set", test_bytes)
+        .with_case("no byte and every byte", test_none_and_all)
+        .with_case("the end of a view", test_end)
+        .with_case("bytes that are no text", test_any_bytes)
+        .with_case("the form of a finder", test_form)
+        .with_fuzz(
+            "a finder of bytes & one by one (fuzz)",
+            tuple3(
+                tuple3(
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain()
+                ),
+                tuple2(char_domain().utf8(), u8_domain()).list_with_len(0, 6),
+                tuple2(u8_domain(), u8_domain())
+            ),
+            fuzz_finder
+        )
+        .with_fuzz(
+            "a finder of bytes & one by one in any bytes (fuzz)",
+            tuple3(
+                tuple3(
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain()
+                ),
+                tuple2(u8_domain(), u8_domain()).list_with_len(0, 6),
+                tuple2(u8_domain(), u8_domain())
+            ),
+            fuzz_bytes
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

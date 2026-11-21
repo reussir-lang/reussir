@@ -1,0 +1,211 @@
+//! One search: the first match from a place, and whether there is one.
+
+import core::ptr::Generic;
+import std::option::Option;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::native;
+import std::regex::automaton::scan;
+import std::regex::search::Searcher;
+import std::text::TextView;
+
+impl Searcher {
+    /// The first match in `input` that begins at the byte `from` or after
+    /// it: the one that begins first, and of those the longest. It may
+    /// have no bytes. To go on after a match, pull from `occurrences`: a
+    /// search from the end of a match of no bytes finds it again, and
+    /// every call from another package counts a reference to the searcher
+    /// and asks the text for its bytes, which the stream, `fold` and
+    /// `count` do once for a text.
+    pub fn find(self: Self, input: TextView, from: u64) -> Found {
+        match self.way {
+            Literal => self.found_alone(input, from),
+            Sets => self.found_fitting(input, from),
+            _ => {
+                // A searcher that skips has the match by now, or the
+                // place to seek on from.
+                let (last, start, end, more) = match self.way {
+                    Skip => {
+                        let (last, start, end, more, _) = self.skipped(input.unsafe_data_ptr(), input.len(), from, 0);
+                        (last, start, end, more)
+                    },
+                    _ => (0, from, from, true)
+                };
+                let (last, start, end) = if more {
+                    self.sought(input.unsafe_data_ptr(), input.len(), start)
+                } else {
+                    (last, start, end)
+                };
+                // The length is asked for again so that the last use of
+                // `input` comes after its bytes are read through the
+                // pointer.
+                if last == 0 || end > input.len() { Found::Nothing } else {
+                    Found::Matched { Match { rule: self.rule(last), start, end } }
+                }
+            }
+        }
+    }
+
+    // The same when the rules match one literal and nothing else: its
+    // first place from `from` on, as a match of the rule 0.
+    fn found_alone(self: Self, input: TextView, from: u64) -> Found {
+        let (start, end) = self.spotted(input.unsafe_data_ptr(), input.len(), from);
+        // As in `find`, the length is asked for again.
+        if start < input.len() {
+            Found::Matched { Match { rule: 0, start, end } }
+        } else {
+            Found::Nothing
+        }
+    }
+
+    /// Whether a rule matches somewhere in `input` from the byte `from`
+    /// on. The search ends at the first state that accepts: at the first
+    /// place that has a match, it does not wait for the end of the longest
+    /// one. The places that have none cost what they cost `find`. A
+    /// searcher that skips reads up to the first place where a match ends,
+    /// every byte once, and tries no place. One that seeks the sets finds
+    /// the first match as `find` does.
+    pub fn is_match(self: Self, input: TextView, from: u64) -> bool {
+        let found = match self.way {
+            Literal => {
+                let (start, _) = self.spotted(input.unsafe_data_ptr(), input.len(), from);
+                start < input.len()
+            },
+            Skip => {
+                let (found, _, _) = self.ending(input.unsafe_data_ptr(), input.len(), from);
+                found
+            },
+            Sets => {
+                let (last, _, _) = self.fitted(input.unsafe_data_ptr(), input.len(), from);
+                last != 0
+            },
+            _ => self.any(input.unsafe_data_ptr(), input.len(), from)
+        };
+        // As in `find`, the last use of `input` comes after the search.
+        // Past the end the search has said that there is none.
+        if from <= input.len() {
+            found
+        } else {
+            false
+        }
+    }
+
+    // The earliest rule that accepts in the state of `cell`, the cell of a
+    // match.
+    fn rule(self: Self, cell: u32) -> u32 {
+        scan::rule(self.automaton, cell)
+    }
+
+    // The next place to try from `at`: where a first byte is, or where
+    // the bytes are that every match begins with; the end of the bytes
+    // when there is none. Four bytes are tested one by one before a
+    // finder is asked, which costs more than they do when a first byte is
+    // that near.
+    fn place(self: Self, bytes: ConstPtr<Generic>, length: u64, at: u64) -> u64 {
+        match self.way {
+            EveryPlace => at,
+            _ => {
+                let (near, left) = self.near(bytes, length, at);
+                if left == 0 {
+                    self.far(bytes, length, near)
+                } else {
+                    near
+                }
+            }
+        }
+    }
+
+    // The next place to try from `at` as a finder gives it: the one of
+    // the bytes that every match begins with when there is one, else the
+    // one of the first bytes.
+    fn far(self: Self, bytes: ConstPtr<Generic>, length: u64, at: u64) -> u64 {
+        match self.literal {
+            Some(finder) => finder.unsafe_find(bytes, length, at),
+            None => self.finder.unsafe_find(bytes, length, at)
+        }
+    }
+
+    // The first of the four places from `at` on whose byte can begin a
+    // match, and how many of the four are left after the places before it:
+    // none when no byte of the four can. The place is not past the end,
+    // unless `at` is.
+    fn near(self: Self, bytes: ConstPtr<Generic>, length: u64, at: u64) -> (u64, u64) {
+        while [near = at, left = (4 as u64)] (left > 0 && near < length && !scan::opens(self.automaton, native::byte_at(bytes, near))) {
+            (near + 1, left - 1)
+        }
+    }
+
+    // The first match that begins at the byte `from` of the `length` bytes
+    // at `bytes` or after it: the cell of the state that accepts it, where
+    // it begins and where it ends; the cell 0 when there is none. Past the
+    // end there is none. The automaton matches from every place that is
+    // tried, whichever way they are come to. A searcher that skips asks
+    // `skipped` first, which may leave the places from a later one on to
+    // this.
+    fn sought(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64, u64) {
+        // The automaton is taken once, and every place reads it without
+        // counting a reference.
+        let automaton = self.automaton;
+        let (_, last, start, end, _) = while [at = from, last = 0, start = from, end = from, going = true] (going) {
+            let place = self.place(bytes, length, at);
+            let (last, end) = scan::scan(automaton, bytes, length, place);
+            // Without a match the search goes on from the next byte.
+            if last == 0 && place < length {
+                (place + 1, last, place, end, true)
+            } else {
+                (place, last, place, end, false)
+            }
+        };
+        (last, start, end)
+    }
+
+    // Whether a match begins at the byte `from` of those bytes or after
+    // it.
+    fn any(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> bool {
+        let automaton = self.automaton;
+        let (_, found, _) = while [at = from, found = false, going = true] (going) {
+            let place = self.place(bytes, length, at);
+            let found = scan::begins(automaton, bytes, length, place);
+            if !found && place < length {
+                (place + 1, found, true)
+            } else {
+                (place, found, false)
+            }
+        };
+        found
+    }
+
+    // The first match that begins at the byte `from` of those bytes or
+    // after it, where it begins and where it ends, when the rules match
+    // one literal and nothing else: the first place of the literal, for
+    // which the automaton is not asked. Only at a first byte within four
+    // places is it asked, before the finder is, as in `place`. Without a
+    // match, the place is the length, and its end as well.
+    fn spotted(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u64, u64) {
+        let (near, left) = self.near(bytes, length, from);
+        let tried = left != 0 && near < length;
+        let (last, end) = if tried {
+            scan::scan(self.automaton, bytes, length, near)
+        } else {
+            (0, near)
+        };
+        if last != 0 { (near, end) } else {
+            let start = self.far(bytes, length, if tried { near + 1 } else { near });
+            // The literal has bytes, so it is nowhere when the answer is
+            // the length.
+            if start < length {
+                (start, start + self.size())
+            } else {
+                (length, length)
+            }
+        }
+    }
+
+    // The number of bytes of the literal that is sought.
+    fn size(self: Self) -> u64 {
+        match self.literal {
+            Some(finder) => finder.len(),
+            None => 0
+        }
+    }
+}

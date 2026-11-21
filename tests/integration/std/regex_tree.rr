@@ -3,8 +3,9 @@
 // The tests match byte strings against a translated regex with a small
 // matcher that takes derivatives of the tree as it stands; it is slow and
 // only for strings of a few bytes.
-// Unit cases cover the builder, sets of characters beyond ASCII, any
-// character, and complement over text and over bytes.
+// Unit cases cover the builder, groups, which match what is inside them,
+// sets of characters beyond ASCII, any character, and complement over
+// text and over bytes.
 // Fuzz targets compare every operator, over random sets of characters and
 // over random sets of bytes, with what membership in the sets says.
 
@@ -167,6 +168,19 @@ fn test_builder() -> Outcome {
             matches(digit.and(Regex::range(53, 100)).to_bytes(), bytes1(55))
                 && !matches(digit.and(Regex::range(53, 100)).to_bytes(), bytes1(50)),
             "both of two sets"
+        ))
+        // A group matches what is inside it, and is left out over bytes.
+        .and_then(|| {
+            let marked = Regex::byte(45).group().optional().then(digit.plus().group()).group().to_bytes();
+            expect(
+                matches(marked, bytes2(45, 55)) && matches(marked, bytes1(55)) && !matches(marked, bytes1(45))
+                    && !matches(marked, List::Nil),
+                "an optional sign and digits, as groups"
+            )
+        })
+        .and_then(|| expect(
+            matches(digit.group().not().to_bytes(), bytes2(52, 50)) && !matches(digit.group().not().to_bytes(), bytes1(52)),
+            "the complement of a group"
         ))
 }
 
@@ -352,6 +366,7 @@ fn fuzz_text(input: (List<(char, char)>, List<(char, char)>, List<char>)) -> Out
                     && !matches(in_a.star().and(in_b.star()).not().to_bytes(), half)
                     && !matches(in_a.optional().not().to_bytes(), half)
                     && !matches(in_a.not().not().to_bytes(), half)
+                    && !matches(in_a.group().not().to_bytes(), half)
                     && !matches(Regex::any_char().star().to_bytes(), half)),
             "half a character matched as text"
         ))
@@ -409,6 +424,12 @@ fn fuzz_bytes(input: (List<(u8, u8)>, List<(u8, u8)>, List<u8>)) -> Outcome {
         .and_then(|| expect(
             matches(in_a.star().not().to_bytes(), bytes) == !all_a,
             "the complement of a repetition"
+        ))
+        // A group is what is inside it.
+        .and_then(|| expect(
+            matches(in_a.group().then(in_b.group()).group().to_bytes(), bytes) == pair_of_bytes(bytes, a, b)
+                && matches(in_a.group().star().not().to_bytes(), bytes) == !all_a,
+            "groups of bytes"
         ))
 }
 

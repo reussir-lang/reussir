@@ -1,21 +1,23 @@
 //! The loops of a match that read the bytes of the input through a pointer.
 //!
-//! A run of an automaton is skipped here, sixteen bytes at a time against
-//! vectors or shuffle tables, or eight at a time through the lookup table.
-//! The automaton decides which and holds the tables; this module only
-//! reads.
+//! A run is skipped here, sixteen bytes at a time against vectors or
+//! shuffle tables, or eight at a time through the lookup table. The word
+//! of the run says which, and whoever has the run holds the tables: an
+//! automaton for the runs of its states, a finder of bytes for its one.
+//! This module only reads.
 
 import core::intrinsic::array;
 import core::ptr;
 import core::ptr::Generic;
 import core::ptr::PtrArithFlag;
 import core::simd;
+import std::regex::automaton::encoding;
 
 pub fn byte_at(bytes: ConstPtr<Generic>, at: u64) -> u8 {
     ptr::load(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds))
 }
 
-fn chunk_at(bytes: ConstPtr<Generic>, at: u64) -> Simd<[u8; 16]> {
+pub fn chunk_at(bytes: ConstPtr<Generic>, at: u64) -> Simd<[u8; 16]> {
     ptr::load_extended<Simd<[u8; 16]>>(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), false, false, false, false, 1)
 }
 
@@ -55,7 +57,10 @@ fn among(chunk: Simd<[u8; 16]>, first: Simd<[u8; 16]>, span: Simd<[u8; 16]>) -> 
 
 // The loops below, one for each form, read on sixteen bytes at a time
 // while every byte is matched (`inside`) or none is, and leave fewer than
-// sixteen bytes at the end unread.
+// sixteen bytes at the end unread. They are given an `at` that is at most
+// `length`, the number of bytes that are there to read, and the caller
+// sees to it, as `scan` does once for every match: from an `at` near the
+// largest number, `at + 16` wraps and the bytes before the input are read.
 
 pub fn equal(vectors: ConstPtr<Generic>, inside: bool, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
     let stays = staying(inside);
@@ -168,31 +173,58 @@ pub fn shuffled(tables: ConstPtr<Generic>, mask: u8, inside: bool, bytes: ConstP
     reached
 }
 
-// The mark of the byte at `at` in the table that begins at `first`.
-fn mark_at(lookup: [u8; ?], first: u64, bytes: ConstPtr<Generic>, at: u64) -> u8 {
-    array::get(lookup, (first + (byte_at(bytes, at) as u64)) as i64)
+// The mark of the byte at `at` in the table of 256 bytes at `table`.
+fn mark_at(table: ConstPtr<Generic>, bytes: ConstPtr<Generic>, at: u64) -> u8 {
+    ptr::load(ptr::offset(table, byte_at(bytes, at) as i64, PtrArithFlag::Inbounds))
 }
 
 // The marks of the bytes at `at` and at the seven places after it.
-fn marks(lookup: [u8; ?], first: u64, bytes: ConstPtr<Generic>, at: u64) -> u8 {
-    mark_at(lookup, first, bytes, at) | mark_at(lookup, first, bytes, at + 1)
-        | mark_at(lookup, first, bytes, at + 2) | mark_at(lookup, first, bytes, at + 3)
-        | mark_at(lookup, first, bytes, at + 4) | mark_at(lookup, first, bytes, at + 5)
-        | mark_at(lookup, first, bytes, at + 6) | mark_at(lookup, first, bytes, at + 7)
+fn marks(table: ConstPtr<Generic>, bytes: ConstPtr<Generic>, at: u64) -> u8 {
+    mark_at(table, bytes, at) | mark_at(table, bytes, at + 1)
+        | mark_at(table, bytes, at + 2) | mark_at(table, bytes, at + 3)
+        | mark_at(table, bytes, at + 4) | mark_at(table, bytes, at + 5)
+        | mark_at(table, bytes, at + 6) | mark_at(table, bytes, at + 7)
 }
 
-// Reads on while no byte is marked with `bit` in the table that begins at
-// `first`, eight bytes at a time while none of the eight is, then byte by
-// byte.
-pub fn marked(lookup: [u8; ?], first: u64, bit: u8, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+// Form 8: reads on while no byte is marked with `bit` in the table of 256
+// bytes at `table`, eight bytes at a time while none of the eight is, then
+// byte by byte.
+pub fn marked(table: ConstPtr<Generic>, bit: u8, bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
     let (near, _) = while [at = at, going = true] (going && at + 8 <= length) {
-        if (marks(lookup, first, bytes, at) & bit) == 0 {
+        if (marks(table, bytes, at) & bit) == 0 {
             (at + 8, true)
         } else {
             (at, false)
         }
     };
-    while [at = near] (at < length && (mark_at(lookup, first, bytes, at) & bit) == 0) {
+    while [at = near] (at < length && (mark_at(table, bytes, at) & bit) == 0) {
         at + 1
+    }
+}
+
+/// Reads on from `at` through the run of `word`: to the first place whose
+/// byte the run does not stay on, or to within sixteen bytes of the end,
+/// which the vectors leave unread. The four vectors of the run are at
+/// `vectors`; `lookup` and `nibbles` are the tables that the word counts
+/// in to its lookup table or to its pair of shuffle tables. The tables are
+/// read through pointers, as the vectors are: the caller holds all three
+/// until the call is over. As the loops above, it is given an `at` that is
+/// at most `length`.
+pub fn run(word: u64, vectors: ConstPtr<Generic>, lookup: [u8; ?], nibbles: [u8; ?], bytes: ConstPtr<Generic>, at: u64, length: u64) -> u64 {
+    let inside = encoding::stays_inside(word);
+    match encoding::form(word) {
+        0 => equal(vectors, inside, bytes, at, length),
+        1 => equal_two(vectors, inside, bytes, at, length),
+        2 => equal_three(vectors, inside, bytes, at, length),
+        3 => equal_four(vectors, inside, bytes, at, length),
+        4 => stretched(vectors, inside, bytes, at, length),
+        5 => stretched_or_equal(vectors, inside, bytes, at, length),
+        6 => stretched_or_equal_two(vectors, inside, bytes, at, length),
+        7 => stretched_twice(vectors, inside, bytes, at, length),
+        // The lookup table is read with no test of the index, which is a
+        // byte, and the shuffle tables are read whole; an array has no way
+        // to do either.
+        8 => marked(ptr::offset(array::unsafe_data_ptr(lookup), encoding::first(word) as i64, PtrArithFlag::Inbounds), encoding::bits(word) as u8, bytes, at, length),
+        _ => shuffled(ptr::offset(array::unsafe_data_ptr(nibbles), encoding::first(word) as i64, PtrArithFlag::Inbounds), encoding::bits(word) as u8, inside, bytes, at, length)
     }
 }

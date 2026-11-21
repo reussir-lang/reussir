@@ -44,8 +44,18 @@
 //! - `scan`: matching.
 //! - `stream`: the matches of a text, pulled one after another.
 //! - `inspect`: an automaton one step at a time.
+//! - `lengths`: how long the shortest match from a place can be, and
+//!   whether a match can begin while another is on its way.
+//! - `places`: the bytes that a match can have at each of its first
+//!   places.
+//! - `ends`: the automaton that accepts where the first match ends,
+//!   wherever it began, made from a finished automaton.
 //! - `native`: the loops that read the bytes of the input through a
 //!   pointer, sixteen or eight at a time.
+//!
+//! `lookahead` and `native` are also what `search::bytes` finds a byte
+//! with: a finder is one run that belongs to no state. `scan` is also what
+//! `search` matches with, from the places that it finds.
 
 import core::intrinsic::array;
 import core::ptr::Generic;
@@ -55,6 +65,7 @@ import std::regex::automaton::arrange;
 import std::regex::automaton::classify;
 import std::regex::automaton::columns;
 import std::regex::automaton::explore;
+import std::regex::automaton::explore::Explored;
 import std::regex::automaton::lookahead;
 import std::regex::automaton::pack;
 import std::regex::node::refine;
@@ -66,12 +77,15 @@ mod arrange;
 mod classify;
 mod columns;
 mod encoding;
+mod ends;
 mod explore;
 mod inspect;
-mod lookahead;
-mod native;
+mod lengths;
+pub mod lookahead;
+pub mod native;
 mod pack;
-mod scan;
+mod places;
+pub mod scan;
 mod shuffle;
 mod stream;
 mod vectors;
@@ -109,6 +123,16 @@ pub enum [value] Found {
     Matched(Match),
     /// No rule matches from there.
     Nothing
+}
+
+/// The lengths that the shortest match from a place can have, in bytes.
+pub enum [value] Lengths {
+    /// The rules match nothing.
+    Nothing,
+    /// From the first number to the second, both included.
+    Within(u64, u64),
+    /// From this number on: there is no greatest one.
+    From(u64)
 }
 
 /// What a stream of matches reads: an automaton, a text, and where the
@@ -191,15 +215,19 @@ impl Automaton {
     pub fn build(rules: List<ByteRegex>, limit: u64) -> Result<Automaton, TooManyStates> {
         let sets = rules.fold_left(ByteClasses::whole(), |classes: ByteClasses, rule: ByteRegex| refine(classes, rule));
         match explore::explore(rules, sets, limit) {
-            Ok(found) => {
-                let cells = found.next;
-                // The steps from here on read the transitions cell by cell.
-                let next = array::tabulate<[u32; ?]>(cells.len(), |at: i64| cells.get_or(at as u64, 0));
-                let arranged = arrange::arrange(found, next, classify::kinds(found, next));
-                let shared = columns::share(arranged.next, arranged.states, arranged.classes);
-                Result::Ok { pack::pack(arranged, shared, lookahead::runs(arranged, sets), sets) }
-            },
+            Ok(found) => Result::Ok { Automaton::of_states(found, sets) },
             Err(error) => Result::Err { error }
         }
+    }
+
+    // The automaton of the states `found`, over the classes of bytes
+    // `sets`.
+    fn of_states(found: Explored, sets: ByteClasses) -> Automaton {
+        let cells = found.next;
+        // The steps from here on read the transitions cell by cell.
+        let next = array::tabulate<[u32; ?]>(cells.len(), |at: i64| cells.get_or(at as u64, 0));
+        let arranged = arrange::arrange(found, next, classify::kinds(found, next));
+        let shared = columns::share(arranged.next, arranged.states, arranged.classes);
+        pack::pack(arranged, shared, lookahead::runs(arranged, sets), sets)
     }
 }

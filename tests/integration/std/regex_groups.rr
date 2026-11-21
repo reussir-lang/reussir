@@ -1,0 +1,1291 @@
+// Unit suite and coverage-guided fuzz driver for the groups of
+// `std::regex::search::groups`: the bytes of a match that each marked part
+// of its rule took.
+// Unit cases take the groups of parts one after another, where an earlier
+// part takes the most bytes it can, however `then` nests them and with
+// neighbours that have no group as one part; of branches, where the
+// first that matches the bytes is taken and the groups of the other are
+// absent; of repetitions, whose groups say the last time; of groups
+// inside groups; of parts with complements and intersections inside a
+// group and beside it; of characters of several bytes; of rules with
+// different numbers of groups; of long matches, where many beginnings
+// are alive; by the stream, by one search and by the fold, with one
+// `Groups` for all matches, from a place inside a view of a part of a
+// text, and with a `Groups` that another searcher wrote into; by the
+// stream of a searcher that skips; and say
+// what is refused: a group under a complement or an intersection, and
+// rules whose groups need more states than the limit. One case compares
+// the automaton of rules with groups, state by state, with the automaton
+// of the same rules written without them.
+// The fuzz target builds two random rules with groups over `a`, `b` and
+// a character of two bytes, and compares the groups of every match in a
+// text of up to ten characters, which is a view of a part of a longer
+// one and is searched from one of its first places or from its
+// beginning, with a matcher on the trees: it tries every place where a
+// part can end, from the last one down, and asks the trees of the parts
+// whether they match the bytes on both sides.
+// Rules with repetitions more than two deep are left out of that, since
+// their trees grow too fast. It also compares the matches with those of
+// the searcher of the rules without groups, the stream with one search,
+// and what is refused with the trees.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_groups %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}regex_groups
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_groups%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/regex_groups%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex groups/parts one after another: unit
+// CHECK-NEXT: regex groups/the earlier part takes the most: unit
+// CHECK-NEXT: regex groups/one or the other: unit
+// CHECK-NEXT: regex groups/repetitions: unit
+// CHECK-NEXT: regex groups/groups inside groups: unit
+// CHECK-NEXT: regex groups/complements and intersections: unit
+// CHECK-NEXT: regex groups/characters: unit
+// CHECK-NEXT: regex groups/several rules: unit
+// CHECK-NEXT: regex groups/long matches: unit
+// CHECK-NEXT: regex groups/the stream, one search and the fold: unit
+// CHECK-NEXT: regex groups/a searcher that skips: unit
+// CHECK-NEXT: regex groups/what is refused: unit
+// CHECK-NEXT: regex groups/the automaton without the groups: unit
+// CHECK-NEXT: regex groups/groups & the trees (fuzz):
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::char_set::CharSet;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::State;
+import std::regex::search::Searcher;
+import std::regex::search::Way;
+import std::regex::search::groups::Taken;
+import std::regex::search::groups::Groups;
+import std::regex::search::groups::Refused;
+import std::regex::tree::ByteRegex;
+import std::regex::tree::Regex;
+import std::result::Result;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::domain::tuple3;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ----------------------- A matcher for the tests -----------------------
+
+// Whether `regex` matches the empty string.
+fn nullable(regex: ByteRegex) -> bool {
+    match regex {
+        Empty => false,
+        Epsilon => true,
+        Set(_) => false,
+        Concat(a, b) => nullable(a) && nullable(b),
+        Union(a, b) => nullable(a) || nullable(b),
+        Intersect(a, b) => nullable(a) && nullable(b),
+        Star(_) => true,
+        Not(a) => !nullable(a)
+    }
+}
+
+// `first`, then `rest`, without the parts that match nothing or add
+// nothing: the trees stay small enough to derive by twenty bytes.
+fn follow(first: ByteRegex, rest: ByteRegex) -> ByteRegex {
+    match first {
+        Empty => ByteRegex::Empty,
+        Epsilon => rest,
+        // Anything that takes bytes.
+        _ => ByteRegex::Concat { first, rest }
+    }
+}
+
+// `one` or `other`, likewise.
+fn either(one: ByteRegex, other: ByteRegex) -> ByteRegex {
+    match one {
+        Empty => other,
+        // Anything that matches something.
+        _ => match other {
+            Empty => one,
+            _ => ByteRegex::Union { one, other }
+        }
+    }
+}
+
+// What may follow `byte` for `regex` to match.
+fn derive(regex: ByteRegex, byte: u64) -> ByteRegex {
+    match regex {
+        Empty => ByteRegex::Empty,
+        Epsilon => ByteRegex::Empty,
+        Set(set) if set.contains(byte) => ByteRegex::Epsilon,
+        Set(_) => ByteRegex::Empty,
+        Concat(a, b) => {
+            let after = follow(derive(a, byte), b);
+            if nullable(a) {
+                either(after, derive(b, byte))
+            } else {
+                after
+            }
+        },
+        Union(a, b) => either(derive(a, byte), derive(b, byte)),
+        Intersect(a, b) => ByteRegex::Intersect { derive(a, byte), derive(b, byte) },
+        Star(a) => follow(derive(a, byte), ByteRegex::Star { a }),
+        Not(a) => ByteRegex::Not { derive(a, byte) }
+    }
+}
+
+// Whether `regex` matches the bytes from the place `from` up to the place
+// `to` of `bytes`, which begin at the place `at`.
+fn within(regex: ByteRegex, bytes: List<u8>, at: u64, from: u64, to: u64) -> bool {
+    if at >= to { nullable(regex) } else {
+        match bytes {
+            Nil => false,
+            Cons(byte, rest) => if at < from {
+                within(regex, rest, at + 1, from, to)
+            } else {
+                within(derive(regex, byte as u64), rest, at + 1, from, to)
+            }
+        }
+    }
+}
+
+// ------------------------------ The oracle ------------------------------
+
+// The place of a group that is absent.
+fn nowhere() -> u64 {
+    18446744073709551615
+}
+
+// The number of groups in `regex`.
+fn marks(regex: Regex) -> u64 {
+    match regex {
+        Group(inner) => 1 + marks(inner),
+        Concat(a, b) => marks(a) + marks(b),
+        Union(a, b) => marks(a) + marks(b),
+        Intersect(a, b) => marks(a) + marks(b),
+        Star(inner) => marks(inner),
+        Plus(inner) => marks(inner),
+        Not(inner) => marks(inner),
+        // A set, the empty string or nothing.
+        _ => 0
+    }
+}
+
+// Whether `regex` has a group under a complement or an intersection.
+fn hidden(regex: Regex, under: bool) -> bool {
+    match regex {
+        Group(inner) => under || hidden(inner, under),
+        Concat(a, b) => hidden(a, under) || hidden(b, under),
+        Union(a, b) => hidden(a, under) || hidden(b, under),
+        Intersect(a, b) => hidden(a, true) || hidden(b, true),
+        Star(inner) => hidden(inner, under),
+        Plus(inner) => hidden(inner, under),
+        Not(inner) => hidden(inner, true),
+        // A set, the empty string or nothing.
+        _ => false
+    }
+}
+
+// `count` groups that are absent, before `after`.
+fn blank(count: u64, after: List<(u64, u64)>) -> List<(u64, u64)> {
+    if count == 0 { after } else {
+        List::Cons { (nowhere(), nowhere()), blank(count - 1, after) }
+    }
+}
+
+// The parts of `regex` that come one after another, before `after`:
+// what `then` puts together, however it is nested. A part without a
+// group goes into the part after it when that has none either.
+fn parts(regex: Regex, after: List<Regex>) -> List<Regex> {
+    match regex {
+        Concat(a, b) => parts(a, parts(b, after)),
+        // Anything else is one part.
+        _ => match after {
+            Cons(next, more) if marks(regex) == 0 && marks(next) == 0 =>
+                List::Cons { Regex::Concat { regex, next }, more },
+            // The last part, or a group on one side.
+            _ => List::Cons { regex, after }
+        }
+    }
+}
+
+// `parts` one after another, over bytes.
+fn chained(parts: List<Regex>) -> ByteRegex {
+    match parts {
+        Nil => ByteRegex::Epsilon,
+        Cons(first, rest) => ByteRegex::Concat { first.to_bytes(), chained(rest) }
+    }
+}
+
+// The last place from `cut` down to `least` where the bytes from `from`
+// to `to` can be cut so that `first` matches up to it and `rest` after
+// it; `from` when there is none.
+fn cut_at(first: ByteRegex, rest: ByteRegex, bytes: List<u8>, from: u64, to: u64, cut: u64, least: u64) -> u64 {
+    if within(first, bytes, 0, from, cut) && within(rest, bytes, 0, cut, to) { cut } else {
+        if cut <= least {
+            from
+        } else {
+            cut_at(first, rest, bytes, from, to, cut - 1, least)
+        }
+    }
+}
+
+// Where the last time of a repetition of `inner` begins in the bytes
+// from `from` to `to`, which are some: every time takes as many bytes as
+// it can, and one at least, with more times matching the rest.
+fn last_time(inner: ByteRegex, bytes: List<u8>, from: u64, to: u64) -> u64 {
+    let cut = cut_at(inner, ByteRegex::Star { inner }, bytes, from, to, to, from + 1);
+    if cut == to || cut == from {
+        from
+    } else {
+        last_time(inner, bytes, cut, to)
+    }
+}
+
+// The groups of `regex` in the bytes from `from` to `to` of `bytes`, which
+// it matches, in the order they begin in, before `after`.
+fn spans(regex: Regex, bytes: List<u8>, from: u64, to: u64, after: List<(u64, u64)>) -> List<(u64, u64)> {
+    match regex {
+        Group(inner) => List::Cons { (from, to), spans(inner, bytes, from, to, after) },
+        // Parts without a group are one part, with nothing to say.
+        Concat(_, _) if marks(regex) == 0 => after,
+        Concat(_, _) => spans_of_parts(parts(regex, List::Nil), bytes, from, to, after),
+        Union(one, other) => if within(one.to_bytes(), bytes, 0, from, to) {
+            spans(one, bytes, from, to, blank(marks(other), after))
+        } else {
+            blank(marks(one), spans(other, bytes, from, to, after))
+        },
+        Star(inner) => if from == to {
+            blank(marks(inner), after)
+        } else {
+            spans(inner, bytes, last_time(inner.to_bytes(), bytes, from, to), to, after)
+        },
+        Plus(inner) => if from == to {
+            spans(inner, bytes, from, to, after)
+        } else {
+            spans(inner, bytes, last_time(inner.to_bytes(), bytes, from, to), to, after)
+        },
+        // A set, the empty string or nothing.
+        _ => blank(marks(regex), after)
+    }
+}
+
+// The same for parts that come one after another: the first takes as
+// many bytes as it can with the others matching the rest.
+fn spans_of_parts(parts: List<Regex>, bytes: List<u8>, from: u64, to: u64, after: List<(u64, u64)>) -> List<(u64, u64)> {
+    match parts {
+        Nil => after,
+        Cons(first, rest) => match rest {
+            Nil => spans(first, bytes, from, to, after),
+            // More parts after it.
+            _ => {
+                let cut = cut_at(first.to_bytes(), chained(rest), bytes, from, to, to, from);
+                spans(first, bytes, from, cut, spans_of_parts(rest, bytes, cut, to, after))
+            }
+        }
+    }
+}
+
+// --------------------------- What groups say ---------------------------
+
+// Where a group begins and ends; nowhere when it is absent.
+fn span_of(group: Taken) -> (u64, u64) {
+    match group {
+        Span(start, end) => (start, end),
+        Absent => (nowhere(), nowhere())
+    }
+}
+
+// Whether the group `group` is the bytes from `start` to `end`.
+fn has(groups: Groups, group: u64, start: u64, end: u64) -> bool {
+    let (from, to) = span_of(groups.get(group));
+    from == start && to == end
+}
+
+fn lacks(groups: Groups, group: u64) -> bool {
+    has(groups, group, nowhere(), nowhere())
+}
+
+// Whether the groups from `group` on are `wanted`, and no more.
+fn same(groups: Groups, wanted: List<(u64, u64)>, group: u64) -> bool {
+    match wanted {
+        Nil => groups.len() == group,
+        Cons(span, rest) => {
+            let (start, end) = span;
+            has(groups, group, start, end) && same(groups, rest, group + 1)
+        }
+    }
+}
+
+// Whether two `Groups` say the same.
+fn alike(first: Groups, second: Groups) -> bool {
+    let (_, alike) = while [group = (0 as u64), alike = first.len() == second.len() && first.rule() == second.rule()] (alike && group < first.len()) {
+        let (start, end) = span_of(second.get(group));
+        (group + 1, has(first, group, start, end))
+    };
+    alike
+}
+
+// The bytes of `view`, each asked for by its index.
+fn bytes_of(view: TextView) -> List<u8> {
+    let (_, bytes) = while [left = view.len(), bytes = List::Nil] (left > 0) {
+        (left - 1, List::Cons { view.byte_at(left - 1).unwrap_or(0), bytes })
+    };
+    bytes
+}
+
+// The rule `rule` of `rules`.
+fn rule_at(rules: List<Regex>, rule: u32) -> Regex {
+    match rules {
+        Nil => Regex::empty(),
+        Cons(first, _) if rule == 0 => first,
+        Cons(_, rest) => rule_at(rest, rule - 1)
+    }
+}
+
+// Whether `groups` are those of a match of `rules` in `bytes` as the
+// trees have them.
+fn right(rules: List<Regex>, bytes: List<u8>, groups: Groups) -> bool {
+    match groups.get(0) {
+        Span(start, end) => same(groups, spans(rule_at(rules, groups.rule()), bytes, start, end, List::Nil), 1),
+        Absent => false
+    }
+}
+
+// The groups of the first match of `searcher` in `text`.
+fn taken(searcher: Searcher, text: str) -> Groups {
+    let (_, _, groups) = searcher.occurrences(Text::from_str(text).view(), 0).next_groups(Groups::of(searcher));
+    groups
+}
+
+// Whether the groups of every match of `searcher` in `view` are those of
+// the trees of `rules`, and there are `count` matches.
+fn agrees(searcher: Searcher, rules: List<Regex>, view: TextView, count: u64) -> bool {
+    agrees_from(searcher, rules, view, 0, count)
+}
+
+// The same for the matches from the byte `from` on.
+fn agrees_from(searcher: Searcher, rules: List<Regex>, view: TextView, from: u64, count: u64) -> bool {
+    let bytes = bytes_of(view);
+    let (sound, _) = searcher.fold_groups(view, from, Groups::of(searcher), (true, 0 as u64), |sound: (bool, u64), groups: Groups| {
+        let (all, matches) = sound;
+        ((all && right(rules, bytes, groups), matches + 1), groups)
+    });
+    let (all, matches) = sound;
+    all && matches == count
+}
+
+fn rules1(a: Regex) -> List<Regex> {
+    List::Cons { a, List::Nil }
+}
+
+fn rules2(a: Regex, b: Regex) -> List<Regex> {
+    List::Cons { a, rules1(b) }
+}
+
+// The outcome of `check` on the searcher of `rules` with their groups,
+// or a failure when it is refused.
+fn built(rules: List<Regex>, check: Searcher -> Outcome) -> Outcome {
+    match Searcher::with_groups(rules, 400) {
+        Ok(searcher) => check(searcher),
+        Err(_) => expect(false, "the rules are refused")
+    }
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+fn digits() -> Regex {
+    Regex::range(48, 57).plus()
+}
+
+fn letters() -> Regex {
+    Regex::range(97, 122).plus()
+}
+
+fn a() -> Regex {
+    Regex::byte(97)
+}
+
+fn b() -> Regex {
+    Regex::byte(98)
+}
+
+fn word(string: str) -> Regex {
+    Regex::literal(Text::from_str(string))
+}
+
+// Three numbers with a dash between them.
+fn date() -> Regex {
+    digits().group().then(Regex::byte(45)).then(digits().group()).then(Regex::byte(45)).then(digits().group())
+}
+
+// The same without the groups.
+fn plain_date() -> Regex {
+    digits().then(Regex::byte(45)).then(digits()).then(Regex::byte(45)).then(digits())
+}
+
+// Groups one after another with something between them: each says its
+// bytes, group 0 the whole match, and a group that the rule has not is
+// absent.
+fn test_parts() -> Outcome {
+    let text = Text::from_str("on 2026-11-19 at noon, 1-22-333");
+    built(rules1(date()), |searcher: Searcher| {
+        let none = Groups::of(searcher);
+        let (rest, found, groups) = searcher.occurrences(text.view(), 0).next_groups(none);
+        let (_, _, second) = rest.next_groups(Groups::of(searcher));
+        expect(none.len() == 0 && lacks(none, 0) && lacks(none, 1), "no group before a match")
+            .and_then(|| should_be(groups.len(), 4))
+            .and_then(|| should_be(groups.rule(), 0))
+            .and_then(|| expect(has(groups, 0, 3, 13), "group 0 is the whole match"))
+            .and_then(|| expect(has(groups, 1, 3, 7), "the year"))
+            .and_then(|| expect(has(groups, 2, 8, 10), "the month"))
+            .and_then(|| expect(has(groups, 3, 11, 13), "the day"))
+            .and_then(|| expect(lacks(groups, 4) && lacks(groups, nowhere()), "no fourth group"))
+            .and_then(|| expect(
+                has(second, 0, 23, 31) && has(second, 1, 23, 24) && has(second, 2, 25, 27) && has(second, 3, 28, 31),
+                "the groups of the second match"
+            ))
+            .and_then(|| expect(agrees(searcher, rules1(date()), text.view(), 2), "as the trees have them"))
+    })
+        // A group of no bytes is there, where it is.
+        .and_then(|| built(rules1(a().star().group().then(b()).then(a().star().group())), |searcher: Searcher| {
+            let groups = taken(searcher, "xb");
+            expect(has(groups, 0, 1, 2) && has(groups, 1, 1, 1) && has(groups, 2, 2, 2), "two groups of no bytes")
+        }))
+        // The whole rule as a group, and a rule that is one group twice.
+        .and_then(|| built(rules1(letters().group().group()), |searcher: Searcher| {
+            let groups = taken(searcher, "12 ab");
+            expect(groups.len() == 3 && has(groups, 0, 3, 5) && has(groups, 1, 3, 5) && has(groups, 2, 3, 5), "a group around a group")
+        }))
+}
+
+// `a | ab`, `c | bcd` and `d*`, the first two as groups when asked.
+fn shared(marked: bool) -> Regex {
+    let first = a().or(word("ab"));
+    let second = Regex::byte(99).or(word("bcd"));
+    let third = Regex::byte(100).star().group();
+    if marked {
+        first.group().then(second.group()).then(third)
+    } else {
+        first.then(second).then(third)
+    }
+}
+
+// The three parts of the same rule, put together from the left or from
+// the right.
+fn nested(left: bool) -> Regex {
+    let first = a().or(word("ab")).group();
+    let second = word("baa").or(a()).group();
+    let third = word("ac").or(Regex::byte(99)).group();
+    if left {
+        first.then(second).then(third)
+    } else {
+        first.then(second.then(third))
+    }
+}
+
+// Where the bytes can be shared out in more than one way, an earlier
+// part takes as many as it can; the parts are counted as they are
+// written, and neighbours without a group are one part.
+fn test_most() -> Outcome {
+    built(rules1(shared(true)), |searcher: Searcher| {
+        let groups = taken(searcher, "abcd");
+        expect(has(groups, 0, 0, 4), "the whole text")
+            .and_then(|| expect(has(groups, 1, 0, 2), "the first part takes ab, not a"))
+            .and_then(|| expect(has(groups, 2, 2, 3), "which leaves c to the second"))
+            .and_then(|| expect(has(groups, 3, 3, 4), "and d to the third"))
+            .and_then(|| expect(agrees(searcher, rules1(shared(true)), Text::from_str("abcd abcdd acd").view(), 3), "as the trees have them"))
+    })
+        // Without groups the first two are one part, which takes all it
+        // can: a and bcd.
+        .and_then(|| built(rules1(shared(false)), |searcher: Searcher| {
+            let groups = taken(searcher, "abcd");
+            expect(groups.len() == 2 && has(groups, 1, 4, 4), "two parts without a group take the most together")
+        }))
+        .and_then(|| built(rules1(nested(true)), |searcher: Searcher| {
+            let groups = taken(searcher, "abaac");
+            expect(has(groups, 1, 0, 2) && has(groups, 2, 2, 3) && has(groups, 3, 3, 5), "ab, a and ac")
+        }))
+        .and_then(|| built(rules1(nested(false)), |searcher: Searcher| {
+            let groups = taken(searcher, "abaac");
+            expect(has(groups, 1, 0, 2) && has(groups, 2, 2, 3) && has(groups, 3, 3, 5), "the same, however the parts are nested")
+        }))
+        // The first part takes the most, and the second what it can of
+        // the rest.
+        .and_then(|| built(rules1(a().star().group().then(a().star().group()).then(a().optional().group())), |searcher: Searcher| {
+            let groups = taken(searcher, "aaa");
+            expect(has(groups, 1, 0, 3) && has(groups, 2, 3, 3) && has(groups, 3, 3, 3), "all to the first")
+        }))
+        // A part ends only where it matches: in `(aab | a) ([ab]*)` on
+        // `aaa` the first part is `a`, and `aa` is no end of it.
+        .and_then(|| built(rules1(word("aab").or(a()).group().then(a().or(b()).star().group())), |searcher: Searcher| {
+            let groups = taken(searcher, "aaa");
+            expect(has(groups, 1, 0, 1) && has(groups, 2, 1, 3), "a, and the rest to the second part")
+        }))
+        // The first part cannot take all: the last needs a byte.
+        .and_then(|| built(rules1(a().star().group().then(a().group())), |searcher: Searcher| {
+            let groups = taken(searcher, "aaaa");
+            expect(has(groups, 1, 0, 3) && has(groups, 2, 3, 4), "all but the byte that the last part needs")
+        }))
+}
+
+// Of two branches the first that matches the bytes is taken, and the
+// groups of the other are absent.
+fn test_branches() -> Outcome {
+    let either = rules1(a().plus().group().or(a().or(b()).plus().group()));
+    built(either, |searcher: Searcher| {
+        let one = taken(searcher, "aa");
+        let other = taken(searcher, "ab");
+        expect(one.len() == 3 && has(one, 1, 0, 2) && lacks(one, 2), "both match: the first is taken")
+            .and_then(|| expect(lacks(other, 1) && has(other, 2, 0, 2), "the second, where the first does not match"))
+            .and_then(|| expect(agrees(searcher, either, Text::from_str("aa ab ba a").view(), 4), "as the trees have them"))
+    })
+        // `optional` is the empty string first: a group that may be left
+        // out is absent where it has no bytes.
+        .and_then(|| built(rules1(a().star().group().optional().then(b())), |searcher: Searcher| {
+            let with = taken(searcher, "ab");
+            let without = taken(searcher, "b");
+            expect(has(with, 1, 0, 1), "the group, where it has a byte")
+                .and_then(|| expect(has(without, 0, 0, 1) && lacks(without, 1), "absent where it has none"))
+        }))
+        // The other way round, the group comes first.
+        .and_then(|| built(rules1(a().star().group().or(Regex::epsilon()).then(b())), |searcher: Searcher| {
+            let without = taken(searcher, "b");
+            expect(has(without, 1, 0, 0), "a group of no bytes, as the first branch")
+        }))
+        // The first branch does not match bytes that it could go on
+        // from.
+        .and_then(|| built(rules1(word("ab").group().or(a().group())), |searcher: Searcher| {
+            let groups = taken(searcher, "a");
+            expect(has(groups, 0, 0, 1) && lacks(groups, 1) && has(groups, 2, 0, 1), "half of the first branch is the second")
+        }))
+        // Three branches, and a group in the middle one only.
+        .and_then(|| built(rules1(word("x").or(letters().group().then(digits())).or(digits())), |searcher: Searcher| {
+            let middle = taken(searcher, "ab12");
+            let last = taken(searcher, "12");
+            expect(has(middle, 0, 0, 4) && has(middle, 1, 0, 2), "the middle branch")
+                .and_then(|| expect(has(last, 0, 0, 2) && lacks(last, 1), "the last branch has no group"))
+        }))
+}
+
+// The groups of a repetition say the last time. Every time takes as many
+// bytes as it can, and one at least; a repetition of no times leaves
+// its groups absent.
+fn test_repetitions() -> Outcome {
+    let pairs = rules1(a().then(b()).group().star().then(Regex::byte(99)));
+    built(pairs, |searcher: Searcher| {
+        let three = taken(searcher, "abababc");
+        let none = taken(searcher, "c");
+        expect(has(three, 0, 0, 7) && has(three, 1, 4, 6), "the last of three times")
+            .and_then(|| expect(has(none, 0, 0, 1) && lacks(none, 1), "absent with no times"))
+            .and_then(|| expect(agrees(searcher, pairs, Text::from_str("abc c ababc abab").view(), 3), "as the trees have them"))
+    })
+        // `(a | aa)*` on `aa`: one time of two bytes.
+        .and_then(|| built(rules1(a().or(word("aa")).group().star()), |searcher: Searcher| {
+            let groups = taken(searcher, "aa");
+            expect(has(groups, 0, 0, 2) && has(groups, 1, 0, 2), "the first time takes both bytes")
+        }))
+        // `(aa | a)*` on five: two, two and one.
+        .and_then(|| built(rules1(word("aa").or(a()).group().star()), |searcher: Searcher| {
+            let groups = taken(searcher, "aaaaa");
+            expect(has(groups, 0, 0, 5) && has(groups, 1, 4, 5), "the last time is the fifth byte")
+        }))
+        // `(((a*) | b) | b)+` on `ab`: the second time is the `b` of the
+        // first branch inside, which the group of `a*` is not in.
+        .and_then(|| built(rules1(a().star().group().or(b()).group().or(b()).group().plus()), |searcher: Searcher| {
+            let groups = taken(searcher, "ab");
+            expect(has(groups, 0, 0, 2) && has(groups, 1, 1, 2) && has(groups, 2, 1, 2) && lacks(groups, 3), "the last time and its branch")
+        }))
+        // `((a?) (())* | a)+` on `aa`: the repetition inside has no times.
+        .and_then(|| {
+            let inside = a().optional().group().then(Regex::epsilon().group().group().star());
+            built(rules1(inside.or(a()).group().plus()), |searcher: Searcher| {
+                let groups = taken(searcher, "aa");
+                expect(
+                    has(groups, 0, 0, 2) && has(groups, 1, 1, 2) && has(groups, 2, 1, 2) && lacks(groups, 3) && lacks(groups, 4),
+                    "the last time, and no time inside it"
+                )
+            })
+        })
+        // A time ends only where what is repeated matches: in
+        // `(aaaa | a | aab | ab)*` on `aaab` the times are `a` and `aab`,
+        // and `aa` is no time for `ab` to come after.
+        .and_then(|| {
+            let times = word("aaaa").or(a()).or(word("aab")).or(word("ab")).group().star();
+            built(rules1(times), |searcher: Searcher| {
+                let groups = taken(searcher, "aaab");
+                expect(has(groups, 0, 0, 4) && has(groups, 1, 1, 4), "a and aab")
+            })
+        })
+        // A group that the last time did not come through is absent,
+        // whatever an earlier time said.
+        .and_then(|| built(rules1(a().group().or(b().group()).star()), |searcher: Searcher| {
+            let groups = taken(searcher, "ab");
+            expect(lacks(groups, 1) && has(groups, 2, 1, 2), "only the group of the last time")
+        }))
+        // Once or more, with no bytes: the one time has none.
+        .and_then(|| built(rules1(a().star().group().plus()), |searcher: Searcher| {
+            let empty = taken(searcher, "");
+            let some = taken(searcher, "aaa");
+            expect(has(empty, 0, 0, 0) && has(empty, 1, 0, 0), "one time of no bytes")
+                .and_then(|| expect(has(some, 1, 0, 3), "one time of all the bytes"))
+        }))
+        // Any number of times, with no bytes: no time.
+        .and_then(|| built(rules1(a().star().group().star()), |searcher: Searcher| {
+            let empty = taken(searcher, "");
+            expect(has(empty, 0, 0, 0) && lacks(empty, 1), "no time")
+        }))
+        // The times do not end where the bytes repeat: `(ab | a | ba)*`.
+        .and_then(|| {
+            let mixed = rules1(word("ab").or(a()).or(word("ba")).group().star());
+            built(mixed, |searcher: Searcher| {
+                let groups = taken(searcher, "aba");
+                expect(has(groups, 0, 0, 3) && has(groups, 1, 2, 3), "ab and a, not a and ba")
+                    .and_then(|| expect(agrees(searcher, mixed, Text::from_str("abaab baab").view(), 2), "as the trees have them"))
+            })
+        })
+}
+
+// A group inside a group has its bytes among those of the outer one,
+// which are shared out after the outer ones are.
+fn test_inside() -> Outcome {
+    // `((a*) (a*)) (a*)`: the outer group takes all, and of that the
+    // first inside it.
+    let outer = a().star().group().then(a().star().group()).group().then(a().star().group());
+    built(rules1(outer), |searcher: Searcher| {
+        let groups = taken(searcher, "aaa");
+        expect(groups.len() == 5 && has(groups, 1, 0, 3) && has(groups, 2, 0, 3) && has(groups, 3, 3, 3) && has(groups, 4, 3, 3), "outside first")
+    })
+        // `(k = (v)) ;` in a repetition: the groups of the last pair.
+        .and_then(|| {
+            let pair = letters().group().then(Regex::byte(61)).then(digits().group()).group().then(Regex::byte(59));
+            built(rules1(pair.plus()), |searcher: Searcher| {
+                let groups = taken(searcher, "a=1;bc=23;");
+                expect(
+                    has(groups, 0, 0, 10) && has(groups, 1, 4, 9) && has(groups, 2, 4, 6) && has(groups, 3, 7, 9),
+                    "the pair, its name and its number"
+                )
+                    .and_then(|| expect(agrees(searcher, rules1(pair.plus()), Text::from_str("a=1;bc=23; x=0;").view(), 2), "as the trees have them"))
+            })
+        })
+        // The outer group ends where the part after it lets it: the
+        // inner ones are asked of those bytes only.
+        .and_then(|| {
+            let outer = a().or(b()).star().group().then(b().optional().group()).group().then(b());
+            built(rules1(outer), |searcher: Searcher| {
+                let groups = taken(searcher, "abb");
+                expect(has(groups, 1, 0, 2) && has(groups, 2, 0, 2) && has(groups, 3, 2, 2), "ab to the outer group, all of it to the first inside")
+            })
+        })
+}
+
+// Inside a group and beside it, a part may be any regex: the groups are
+// asked of automata.
+fn test_complements() -> Outcome {
+    // `<`, then anything without a `>`, then `>`.
+    let tag = word("<").then(word(">").not().and(Regex::any_char().star()).group()).then(word(">"));
+    // A word that is not `if`, then digits.
+    let name = letters().and(word("if").not()).group().then(digits().group());
+    // What is no digit, then digits: the complement is beside the group.
+    let after = digits().not().and(letters()).then(digits().group());
+    built(rules1(tag), |searcher: Searcher| {
+        let groups = taken(searcher, "a <b c> d");
+        expect(has(groups, 0, 2, 7) && has(groups, 1, 3, 6), "what is between the brackets")
+    })
+        .and_then(|| built(rules1(name), |searcher: Searcher| {
+            let groups = taken(searcher, "if7 iff42");
+            expect(has(groups, 0, 1, 3) && has(groups, 1, 1, 2) && has(groups, 2, 2, 3), "not the word that the group leaves out")
+                .and_then(|| expect(agrees(searcher, rules1(name), Text::from_str("if7 iff4").view(), 2), "as the trees have them"))
+        }))
+        .and_then(|| built(rules1(after), |searcher: Searcher| {
+            let groups = taken(searcher, "ab12");
+            expect(has(groups, 0, 0, 4) && has(groups, 1, 2, 4), "the digits after a complement")
+        }))
+}
+
+// The places of a group are bytes: a character of several bytes is
+// taken whole.
+fn test_characters() -> Outcome {
+    let greek = Regex::chars(CharSet::range('α', 'ω')).plus();
+    built(rules1(greek.group().then(Regex::any_char().group()).then(Regex::any_char().star().group())), |searcher: Searcher| {
+        let groups = taken(searcher, "αβγ€!");
+        expect(has(groups, 0, 0, 10), "ten bytes")
+            .and_then(|| expect(has(groups, 1, 0, 6), "three letters of two bytes"))
+            .and_then(|| expect(has(groups, 2, 6, 9), "one character of three"))
+            .and_then(|| expect(has(groups, 3, 9, 10), "and the rest"))
+    })
+}
+
+// Every rule has its own groups, numbered from 1; the groups of a match
+// are those of the rule that matched.
+fn test_rules() -> Outcome {
+    let rules = List::Cons { date(), rules2(letters(), letters().group().then(Regex::byte(61)).then(digits().group())) };
+    let text = Text::from_str("x=12 on 2026-11-19");
+    built(rules, |searcher: Searcher| {
+        let (second, _, pair) = searcher.occurrences(text.view(), 0).next_groups(Groups::of(searcher));
+        let (third, _, plain) = second.next_groups(pair);
+        let (_, _, full) = third.next_groups(plain);
+        expect(pair.rule() == 2 && pair.len() == 3 && has(pair, 1, 0, 1) && has(pair, 2, 2, 4), "the third rule has two groups")
+            .and_then(|| expect(lacks(pair, 3), "and not the third group of the first rule"))
+            .and_then(|| expect(plain.rule() == 1 && plain.len() == 1 && has(plain, 0, 5, 7) && lacks(plain, 1), "the second rule has none"))
+            .and_then(|| expect(full.rule() == 0 && full.len() == 4 && has(full, 1, 8, 12) && has(full, 3, 16, 18), "the first rule has three"))
+            .and_then(|| expect(agrees(searcher, rules, text.view(), 3), "as the trees have them"))
+    })
+}
+
+// `count` copies of `piece`, then `rest`.
+fn many(count: u64, piece: str, rest: str) -> Text {
+    let (_, string) = while [left = count, string = String::new()] (left > 0) {
+        (left - 1, string.push_str(piece))
+    };
+    Text::from_string(string.push_str(rest))
+}
+
+// Matches of hundreds of bytes: a part that ends far on, a repetition of
+// many times, and a part after which many beginnings stay alive.
+fn test_long() -> Outcome {
+    built(rules1(a().star().group().then(b().group())), |searcher: Searcher| {
+        let (_, _, groups) = searcher.occurrences(many(1000, "a", "b").view(), 0).next_groups(Groups::of(searcher));
+        expect(has(groups, 0, 0, 1001) && has(groups, 1, 0, 1000) && has(groups, 2, 1000, 1001), "a thousand bytes and one")
+    })
+        .and_then(|| built(rules1(a().then(b()).group().star()), |searcher: Searcher| {
+            let (_, _, groups) = searcher.occurrences(many(500, "ab", "").view(), 0).next_groups(Groups::of(searcher));
+            expect(has(groups, 0, 0, 1000) && has(groups, 1, 998, 1000), "the last of five hundred times")
+        }))
+        // `([ab]*) (a [ab] [ab] [ab])`: the second part may begin at
+        // every `a`, and which beginning holds is known at the end.
+        .and_then(|| {
+            let any = a().or(b());
+            let rule = any.star().group().then(a().then(any).then(any).then(any).group());
+            built(rules1(rule), |searcher: Searcher| {
+                let text = many(100, "aab", "abab");
+                let (_, _, groups) = searcher.occurrences(text.view(), 0).next_groups(Groups::of(searcher));
+                expect(has(groups, 0, 0, 304) && has(groups, 1, 0, 300) && has(groups, 2, 300, 304), "the last beginning that reaches the end")
+                    .and_then(|| expect(agrees(searcher, rules1(rule), Text::from_str("aababbab abaa").view(), 2), "as the trees have them"))
+            })
+        })
+        // `((a | b)* b)* a`: a repetition whose times can end at every
+        // `b`.
+        .and_then(|| {
+            let rule = a().or(b()).star().then(b()).group().star().then(a());
+            built(rules1(rule), |searcher: Searcher| {
+                let (_, _, groups) = searcher.occurrences(many(100, "abb", "a").view(), 0).next_groups(Groups::of(searcher));
+                expect(has(groups, 0, 0, 301) && has(groups, 1, 0, 300), "one time takes all it can")
+            })
+        })
+}
+
+// The groups by the stream, by one search and by the fold are the same.
+// One `Groups` serves every match; one that another searcher made or
+// wrote into gives the same groups as a new one, whether its words are
+// laid out as this searcher lays them out or not; a match that is not
+// inside the text has no groups; a searcher of rules without groups says
+// the whole match.
+fn test_ways() -> Outcome {
+    let text = Text::from_str("on 2026-11-19 at noon, 1-22-333");
+    built(rules1(date()), |searcher: Searcher| {
+        let (rest, found, pulled) = searcher.occurrences(text.view(), 0).next_groups(Groups::of(searcher));
+        let (after, _, again) = rest.next_groups(pulled);
+        let (still, nothing, kept) = after.next_groups(again);
+        let (ends, folded) = searcher.fold_groups(text.view(), 0, Groups::of(searcher), 0 as u64, |ends: u64, groups: Groups| {
+            let (_, end) = span_of(groups.get(2));
+            (ends * 100 + end, groups)
+        });
+        let (from_stream, _) = rest.fold_groups(Groups::of(searcher), 0 as u64, |starts: u64, groups: Groups| {
+            let (start, _) = span_of(groups.get(3));
+            (starts * 100 + start, groups)
+        });
+        should_be(ends, 1027)
+            .and_then(|| should_be(from_stream, 28))
+            .and_then(|| expect(has(folded, 0, 23, 31) && has(folded, 3, 28, 31), "the fold gives back the groups of the last match"))
+            .and_then(|| expect(alike(again, folded) && rest.at() == 13 && after.at() == 31, "the stream moves on as without groups"))
+            .and_then(|| match nothing {
+                Matched(_) => expect(false, "no third match"),
+                Nothing => expect(alike(kept, folded) && still.at() == 31, "after the last match the groups are as they were")
+            })
+            .and_then(|| match found {
+                Matched(found) => {
+                    let one = searcher.groups(text.view(), found, Groups::of(searcher));
+                    let outside = Match { rule: 0, start: 23, end: 32 };
+                    let backwards = Match { rule: 0, start: 13, end: 3 };
+                    let no_rule = Match { rule: 7, start: 3, end: 13 };
+                    expect(alike(one, pulled), "one search says what the stream says")
+                        .and_then(|| should_be(searcher.groups(text.view(), outside, one).len(), 0))
+                        .and_then(|| should_be(searcher.groups(text.view(), backwards, one).len(), 0))
+                        .and_then(|| should_be(searcher.groups(text.view(), no_rule, one).len(), 0))
+                        .and_then(|| should_be(searcher.groups(text.view(), Match { rule: 0, start: nowhere(), end: nowhere() }, one).len(), 0))
+                        // Asked of a view, the places count from its
+                        // beginning.
+                        .and_then(|| match text.view().slice_byte(3, 13) {
+                            Some(part) => {
+                                let inner = searcher.groups(part, Match { rule: 0, start: 0, end: 10 }, one);
+                                expect(has(inner, 1, 0, 4) && has(inner, 2, 5, 7) && has(inner, 3, 8, 10), "in a view")
+                            },
+                            None => expect(false, "a view of ten bytes")
+                        })
+                        // From a place inside a view of a part of the
+                        // text: what is left of the first date, and the
+                        // second, with their places counted from the
+                        // beginning of the view.
+                        .and_then(|| match text.view().slice_byte(1, 31) {
+                            Some(part) => {
+                                let (starts, last) = searcher.fold_groups(part, 3, one, 0 as u64, |starts: u64, groups: Groups| {
+                                    let (start, _) = span_of(groups.get(0));
+                                    (starts * 100 + start, groups)
+                                });
+                                should_be(starts, 322)
+                                    .and_then(|| expect(has(last, 1, 22, 23) && has(last, 2, 24, 26) && has(last, 3, 27, 30), "from a place inside a view"))
+                            },
+                            None => expect(false, "a view of thirty bytes")
+                        })
+                        // A `Groups` of another searcher.
+                        .and_then(|| built(rules1(letters().group()), |other: Searcher| {
+                            let foreign = Groups::of(other);
+                            let given = searcher.groups(text.view(), found, foreign);
+                            expect(alike(given, pulled) && foreign.len() == 0, "a new one for a searcher that it was not made for")
+                        }))
+                },
+                Nothing => expect(false, "a first match")
+            })
+    })
+        .and_then(|| test_handed())
+        // Rules without a group, with `with_groups` and with `build`.
+        .and_then(|| built(rules1(digits()), |searcher: Searcher| {
+            let groups = taken(searcher, "ab 123");
+            expect(groups.len() == 1 && has(groups, 0, 3, 6) && lacks(groups, 1), "the whole match is the only group")
+        }))
+        .and_then(|| match Searcher::build(List::Cons { digits().to_bytes(), List::Nil }, 400) {
+            Ok(searcher) => {
+                let view = Text::from_str("ab 123 4").view();
+                let groups = taken(searcher, "ab 123 4");
+                let (count, last) = searcher.fold_groups(view, 0, groups, 0 as u64, |count: u64, groups: Groups| (count + 1, groups));
+                let outside = searcher.groups(view, Match { rule: 0, start: 7, end: 9 }, last);
+                expect(groups.len() == 1 && has(groups, 0, 3, 6), "a searcher that was built without groups")
+                    .and_then(|| expect(count == 2 && has(last, 0, 7, 8), "and its fold"))
+                    .and_then(|| should_be(outside.len(), 0))
+            },
+            Err(_) => expect(false, "the automaton has too many states")
+        })
+}
+
+// The groups of the first match of `second` in `text`, written into the
+// `Groups` that `first` wrote those of its first match into, are those
+// that a new `Groups` has.
+fn handed(first: List<Regex>, second: List<Regex>, text: str) -> Outcome {
+    built(first, |one: Searcher| built(second, |other: Searcher| {
+        let used = taken(one, text);
+        let (_, _, given) = other.occurrences(Text::from_str(text).view(), 0).next_groups(used);
+        let anew = taken(other, text);
+        expect(anew.len() > 1 && alike(given, anew), "the groups of another searcher are in the way")
+    }))
+}
+
+// A `Groups` that another searcher wrote into. The words of the first
+// two pairs of rules are as many but laid out differently: a searcher
+// that took them as its own would count its steps in a word where the
+// other kept a mark. The words of the last pair are laid out alike.
+fn test_handed() -> Outcome {
+    let twice = rules2(a().then(b()), a().star().group().group().then(a()));
+    let apart = rules2(word("cc"), b().star().group().then(a().star().group()).then(Regex::epsilon()));
+    handed(twice, apart, "a")
+        .and_then(|| handed(apart, twice, "aaa"))
+        .and_then(|| handed(rules1(a().group().then(b().star().group())), rules1(b().group().then(a().star().group())), "abbb baaa"))
+        .and_then(|| handed(rules1(b().group().then(a().star().group())), rules1(a().group().then(b().star().group())), "baaa abbb"))
+}
+
+// A searcher that skips gives the groups of the same matches: in a text
+// whose places fail more often than a stream has credit for, the second
+// automaton reads on, and the stream with groups goes on from the bound
+// as the stream without them does.
+fn test_skipping() -> Outcome {
+    let rules = rules1(letters().group().then(Regex::byte(61)).then(digits().group()));
+    let text = Text::from_str("abcdefghijklmnopqrstuvwxyzabcdefghij klmno=pq rate=12 tail=7");
+    built(rules, |searcher: Searcher| {
+        let (second, one, first) = searcher.occurrences(text.view(), 0).next_groups(Groups::of(searcher));
+        let (third, two, next) = second.next_groups(Groups::of(searcher));
+        let (last, three, _) = third.next_groups(Groups::of(searcher));
+        should_be(way_number(searcher), 4)
+            .and_then(|| expect(
+                has(first, 0, 46, 53) && has(first, 1, 46, 50) && has(first, 2, 51, 53),
+                "the first match after a long word and one with no digit"
+            ))
+            .and_then(|| expect(has(next, 0, 54, 60) && has(next, 1, 54, 58) && has(next, 2, 59, 60), "the one after it"))
+            .and_then(|| expect(
+                match (one, two, three) {
+                    (Matched(_), Matched(_), Nothing) => second.at() == 53 && third.at() == 60 && last.at() == 60,
+                    _ => false
+                },
+                "two matches and no third, and the stream stands at their ends"
+            ))
+            .and_then(|| expect(agrees(searcher, rules, text.view(), 2), "as the trees have them"))
+            .and_then(|| expect(agrees_from(searcher, rules, text.view(), 47, 2), "from a place inside the first"))
+    })
+}
+
+// 0 for a searcher, 1 for too many states with this limit, and 2 with the
+// rule added for a group that is misplaced.
+fn refusal(rules: List<Regex>, limit: u64) -> u64 {
+    match Searcher::with_groups(rules, limit) {
+        Ok(_) => 0,
+        Err(refused) => match refused {
+            TooManyStates(error) => if error.limit == limit { 1 } else { 1000 },
+            Misplaced(rule) => 2 + (rule as u64)
+        }
+    }
+}
+
+// A group under a complement or an intersection is refused, with the
+// rule that has it; so are rules whose groups need more states than the
+// limit, although their automaton does not.
+fn test_refused() -> Outcome {
+    let under_not = letters().group().not();
+    let under_and = letters().group().then(digits()).and(Regex::any_char().star());
+    let deep = digits().then(a().or(b().group().not()).star());
+    let fine = letters().and(word("if").not()).group();
+    should_be(refusal(rules1(under_not), 400), 2)
+        .and_then(|| should_be(refusal(rules2(fine, under_and), 400), 3))
+        .and_then(|| should_be(refusal(List::Cons { fine, rules2(date(), deep) }, 400), 4))
+        .and_then(|| should_be(refusal(rules1(fine), 400), 0))
+        // The automaton of the date is within twelve states; the
+        // automata that its groups are found with, together, are not.
+        .and_then(|| should_be(refusal(rules1(date()), 3), 1))
+        .and_then(|| should_be(refusal(rules1(date()), 12), 1))
+        .and_then(|| should_be(refusal(rules1(date()), 400), 0))
+        .and_then(|| expect(Searcher::build(List::Cons { date().to_bytes(), List::Nil }, 12).is_ok(), "the automaton alone is within the limit"))
+        // Without a group nothing more is built.
+        .and_then(|| should_be(refusal(rules1(plain_date()), 12), 0))
+}
+
+// The rule that accepts in `state`, or a number that no rule has.
+fn winner_of(automaton: Automaton, state: State) -> u64 {
+    match automaton.winner(state) {
+        Some(rule) => rule as u64,
+        None => nowhere()
+    }
+}
+
+// Whether two automata have the same states, with the same numbers,
+// leading to the same states on every byte and accepting for the same
+// rules: `pending` are the states still to compare, `seen` those that
+// were.
+fn same_states(first: Automaton, second: Automaton, pending: List<State>, seen: List<State>) -> bool {
+    match pending {
+        Nil => true,
+        Cons(state, rest) => {
+            let (_, alike, pending, seen) = while [byte = (0 as u64), alike = winner_of(first, state) == winner_of(second, state), pending = rest, seen = seen] (alike && byte < 256) {
+                let next = first.next(state, byte as u8);
+                if next == second.next(state, byte as u8) {
+                    if seen.contains(next) {
+                        (byte + 1, true, pending, seen)
+                    } else {
+                        (byte + 1, true, List::Cons { next, pending }, List::Cons { next, seen })
+                    }
+                } else {
+                    (byte, false, pending, seen)
+                }
+            };
+            alike && same_states(first, second, pending, seen)
+        }
+    }
+}
+
+fn way_number(searcher: Searcher) -> u64 {
+    match searcher.way() {
+        EveryPlace => 0,
+        FirstBytes => 1,
+        Prefix => 2,
+        Literal => 3,
+        Skip => 4,
+        Sets => 5
+    }
+}
+
+// Whether the searcher of `rules` with their groups has the automaton of
+// the searcher of `unmarked`, which are the same rules written without
+// groups, and seeks the same way.
+fn same_automaton(rules: List<Regex>, unmarked: List<Regex>) -> bool {
+    match Searcher::with_groups(rules, 400) {
+        Ok(marked) => match Searcher::build(unmarked.map(|rule: Regex| rule.to_bytes()), 400) {
+            Ok(plain) => {
+                let first = marked.automaton();
+                let second = plain.automaton();
+                let start = first.start();
+                first.states() == second.states() && first.columns() == second.columns()
+                    && start == second.start() && first.first_bytes() == second.first_bytes()
+                    && way_number(marked) == way_number(plain)
+                    && same_states(first, second, List::Cons { start, List::Nil }, List::Cons { start, List::Nil })
+            },
+            Err(_) => false
+        },
+        Err(_) => false
+    }
+}
+
+// The automaton of rules with groups is the automaton of the same rules
+// without them, and `to_bytes` leaves the groups out.
+fn test_automaton() -> Outcome {
+    let pair = letters().group().then(Regex::byte(61)).then(digits().group()).group().then(Regex::byte(59)).plus();
+    let plain_pair = letters().then(Regex::byte(61)).then(digits()).then(Regex::byte(59)).plus();
+    let plain_shared = a().or(word("ab")).then(Regex::byte(99).or(word("bcd"))).then(Regex::byte(100).star());
+    let km = word("km").group().then(digits().group());
+    let unmarked = word("km").then(digits());
+    expect(same_automaton(rules1(date()), rules1(plain_date())), "three groups one after another")
+        .and_then(|| expect(same_automaton(rules2(pair, shared(true)), rules2(plain_pair, plain_shared)), "groups inside groups, and in a repetition"))
+        .and_then(|| expect(
+            same_automaton(rules1(km), rules1(unmarked)) && same_automaton(rules1(word("km").group()), rules1(word("km"))),
+            "rules that begin with a literal"
+        ))
+        .and_then(|| expect(!same_automaton(rules1(date()), rules1(km)), "and not the automaton of other rules"))
+        .and_then(|| match Searcher::with_groups(rules1(km), 400) {
+            Ok(searcher) => should_be(way_number(searcher), 2),
+            Err(_) => expect(false, "the rules are refused")
+        })
+        .and_then(|| match Searcher::with_groups(rules1(word("km").group()), 400) {
+            Ok(searcher) => {
+                let groups = taken(searcher, "12 km");
+                should_be(way_number(searcher), 3)
+                    .and_then(|| expect(has(groups, 0, 3, 5) && has(groups, 1, 3, 5), "the groups of a literal that is sought alone"))
+            },
+            Err(_) => expect(false, "the rules are refused")
+        })
+        .and_then(|| expect(within(km.to_bytes(), bytes_of(Text::from_str("km12").view()), 0, 0, 4), "a regex with groups matches what it matches without"))
+        .and_then(|| expect(
+            !within(km.to_bytes(), bytes_of(Text::from_str("km12").view()), 0, 0, 2)
+                && within(unmarked.to_bytes(), bytes_of(Text::from_str("km12").view()), 0, 0, 4),
+            "and nothing else"
+        ))
+}
+
+// ----------------------- Fuzz: groups against the trees -----------------------
+
+// The two regexes on top of the stack, combined into one.
+fn combine(stack: List<Regex>, both: (Regex, Regex) -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, below) => match below {
+            Cons(under, rest) => List::Cons { both(under, top), rest },
+            Nil => stack
+        },
+        Nil => stack
+    }
+}
+
+// The regex on top of the stack, changed.
+fn change(stack: List<Regex>, one: Regex -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, rest) => List::Cons { one(top), rest },
+        Nil => stack
+    }
+}
+
+// One step of a small program that builds regexes with groups on a
+// stack. Groups and parts one after another come most often; complements
+// and intersections seldom, since a group under one is refused.
+fn step(stack: List<Regex>, op: u8) -> List<Regex> {
+    match op % 24 {
+        0 => List::Cons { a(), stack },
+        1 => List::Cons { b(), stack },
+        2 => List::Cons { a().or(b()), stack },
+        3 => List::Cons { Regex::epsilon(), stack },
+        4 => List::Cons { Regex::char('é'), stack },
+        5 => List::Cons { word("aa"), stack },
+        6 => List::Cons { word("ab"), stack },
+        7 => List::Cons { word("aab"), stack },
+        8 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        9 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        10 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        11 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        12 => combine(stack, |first: Regex, second: Regex| Regex::Union { first, second }),
+        13 => change(stack, |inner: Regex| inner.star()),
+        14 => change(stack, |inner: Regex| inner.plus()),
+        15 => change(stack, |inner: Regex| inner.optional()),
+        16 => change(stack, |inner: Regex| inner.group()),
+        17 => change(stack, |inner: Regex| inner.group()),
+        18 => change(stack, |inner: Regex| inner.group()),
+        19 => change(stack, |inner: Regex| inner.star().group()),
+        20 => combine(stack, |first: Regex, second: Regex| first.group().then(second)),
+        21 => combine(stack, |first: Regex, second: Regex| first.and(second)),
+        22 => change(stack, |inner: Regex| inner.not()),
+        // 23: any character.
+        _ => List::Cons { Regex::any_char(), stack }
+    }
+}
+
+// The regex a program builds: whatever is left on the stack, one after
+// another.
+fn rule_of(ops: List<u8>) -> Regex {
+    let stack = ops.fold_left(List::Nil, |stack: List<Regex>, op: u8| step(stack, op));
+    stack.fold_left(Regex::epsilon(), |all: Regex, regex: Regex| regex.then(all))
+}
+
+// `string` and after it `a`, `b`, `é` and blanks, one for each number.
+fn spelled(numbers: List<u8>, string: String) -> String {
+    numbers.fold_left(string, |string: String, number: u8| match number % 8 {
+        0 => string.push_char('a'),
+        1 => string.push_char('b'),
+        2 => string.push_char('a'),
+        3 => string.push_char('b'),
+        4 => string.push_char('a'),
+        5 => string.push_char('b'),
+        6 => string.push_char('é'),
+        _ => string.push_char(' ')
+    })
+}
+
+// The first of `rules`, numbered from `rule`, with a group under a
+// complement or an intersection, as `refusal` numbers it; 0 when there is
+// none.
+fn hides(rules: List<Regex>, rule: u64) -> u64 {
+    match rules {
+        Nil => 0,
+        Cons(regex, _) if hidden(regex, false) => 2 + rule,
+        Cons(_, rest) => hides(rest, rule + 1)
+    }
+}
+
+// One more match in the number that stands for the matches so far.
+fn mixed(sum: u64, rule: u32, start: u64, end: u64) -> u64 {
+    sum * 31 + (rule as u64) + start * 3 + end * 7
+}
+
+// The matches of `searcher` in `view` from the byte `from` on, pulled
+// with their groups, as one number, when each has the groups that one
+// search says for it; a number that no matches have when one has not.
+// One search is also asked for the groups of bytes that the searcher
+// did not find, from the beginning of each match to the end of the view.
+fn pulled(searcher: Searcher, view: TextView, from: u64) -> u64 {
+    let (_, _, sum, _) = while [stream = searcher.occurrences(view, from), groups = Groups::of(searcher), sum = (0 as u64), going = true] (going) {
+        let (rest, found, groups) = stream.next_groups(groups);
+        match found {
+            Matched(found) => {
+                let one = searcher.groups(view, found, Groups::of(searcher));
+                // Bytes that the rule may not match, up to the end of
+                // the view: the groups say nothing that holds, but the
+                // whole is what was asked for.
+                let more = Match { rule: found.rule, start: found.start, end: view.len() };
+                let loose = searcher.groups(view, more, Groups::of(searcher));
+                if alike(one, groups) && has(groups, 0, found.start, found.end) && groups.rule() == found.rule
+                    && has(loose, 0, found.start, view.len()) && loose.len() == groups.len() {
+                    (rest, groups, mixed(sum, found.rule, found.start, found.end), true)
+                } else {
+                    (rest, groups, nowhere(), false)
+                }
+            },
+            Nothing => (rest, groups, sum, false)
+        }
+    };
+    sum
+}
+
+// How deep the repetitions of `regex` are inside each other.
+fn depth(regex: Regex) -> u64 {
+    match regex {
+        Group(inner) => depth(inner),
+        Concat(a, b) => deeper(depth(a), depth(b)),
+        Union(a, b) => deeper(depth(a), depth(b)),
+        Intersect(a, b) => deeper(depth(a), depth(b)),
+        Star(inner) => 1 + depth(inner),
+        Plus(inner) => 1 + depth(inner),
+        Not(inner) => depth(inner),
+        // A set, the empty string or nothing.
+        _ => 0
+    }
+}
+
+fn deeper(first: u64, second: u64) -> u64 {
+    if first > second { first } else { second }
+}
+
+// Where a text is searched from, by the first of its numbers: its
+// beginning for half of them, and else one of its first three bytes,
+// which may be inside a character or past the end.
+fn place_of(numbers: List<u8>) -> u64 {
+    match numbers {
+        Nil => 0,
+        Cons(number, _) => {
+            let place = ((number / 8) % 8) as u64;
+            if place > 3 { 0 } else { place }
+        }
+    }
+}
+
+// The view of the text of `numbers` inside a longer text, with bytes
+// before it and after it that the rules can match.
+fn inside(numbers: List<u8>) -> TextView {
+    let before = spelled(numbers, String::from_str("abé"));
+    let end = before.len();
+    match Text::from_string(before.push_str("éab")).view().slice_byte(4, end) {
+        Some(part) => part,
+        None => Text::from_string(spelled(numbers, String::new())).view()
+    }
+}
+
+// The groups of two rules in a text of up to ten characters, which is a
+// view of a part of a longer one, from one of its first places on,
+// against the trees; the matches against the searcher of the rules
+// without their groups; the stream and one search against each other;
+// and what is refused against the trees.
+fn fuzz_groups(input: (List<u8>, List<u8>, List<u8>)) -> Outcome {
+    let (first, second, text) = input;
+    let rules = rules2(rule_of(first), rule_of(second));
+    let view = inside(text);
+    let from = place_of(text);
+    let hid = hides(rules, 0);
+    match Searcher::with_groups(rules, 300) {
+        Err(refused) => match refused {
+            // Too many states for this test: nothing to compare.
+            TooManyStates(_) => expect(hid == 0, "too many states is said before a misplaced group"),
+            Misplaced(rule) => should_be(2 + (rule as u64), hid)
+        },
+        Ok(searcher) => match Searcher::build(rules.map(|rule: Regex| rule.to_bytes()), 300) {
+            Ok(plain) => {
+                let matches = plain.fold(view, from, 0 as u64, |sum: u64, found: Match| mixed(sum, found.rule, found.start, found.end));
+                // The trees of repetitions inside repetitions grow too
+                // fast to ask: those groups are only compared between
+                // the stream and one search.
+                let shallow = depth(rule_of(first)) <= 2 && depth(rule_of(second)) <= 2;
+                should_be(hid, 0)
+                    .and_then(|| expect(
+                        !shallow || agrees_from(searcher, rules, view, from, plain.count(view, from)),
+                        "a searcher and the trees say different groups"
+                    ))
+                    .and_then(|| should_be(pulled(searcher, view, from), matches))
+            },
+            Err(_) => expect(false, "the automaton without groups has too many states")
+        }
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex groups")
+        .with_case("parts one after another", test_parts)
+        .with_case("the earlier part takes the most", test_most)
+        .with_case("one or the other", test_branches)
+        .with_case("repetitions", test_repetitions)
+        .with_case("groups inside groups", test_inside)
+        .with_case("complements and intersections", test_complements)
+        .with_case("characters", test_characters)
+        .with_case("several rules", test_rules)
+        .with_case("long matches", test_long)
+        .with_case("the stream, one search and the fold", test_ways)
+        .with_case("a searcher that skips", test_skipping)
+        .with_case("what is refused", test_refused)
+        .with_case("the automaton without the groups", test_automaton)
+        .with_fuzz(
+            "groups & the trees (fuzz)",
+            tuple3(
+                u8_domain().list_with_len(0, 12),
+                u8_domain().list_with_len(0, 12),
+                u8_domain().list_with_len(0, 10)
+            ),
+            fuzz_groups
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

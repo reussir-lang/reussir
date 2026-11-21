@@ -25,8 +25,6 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
     let shift = while [shift = 3] ((1 << shift) < columns) { shift + 1 };
     let first_run = array::get(starts, 3);
     let words = runs.words();
-    let marks = runs.lookup();
-    let pairs = runs.nibbles();
     let first_classes = array::tabulate<[u64; ?]>(columns, |column: i64| firsts.get_or(column as u64, 0));
     let class_cells = array::tabulate<[u8; 256]>(|byte: i64| of_class.get_or(sets.class_index(byte as u8), 0) as u8);
     // A row is longer than its columns when their number is no power of
@@ -49,8 +47,6 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
     let winner_cells = array::tabulate<[u32; ?]>(array::get(starts, 5), |place: i64| array::get(rules, place));
     let word_cells = array::tabulate<[u64; ?]>(words.len(), |at: i64| words.get_or(at as u64, 0));
     let vector_cells = runs.vectors();
-    let mark_cells = array::tabulate<[u8; ?]>(marks.len(), |at: i64| marks.get_or(at as u64, 0));
-    let pair_cells = array::tabulate<[u8; ?]>(pairs.len(), |at: i64| pairs.get_or(at as u64, 0));
     Automaton {
         classes: class_cells,
         columns,
@@ -61,8 +57,8 @@ pub fn pack(arranged: Arranged, shared: Columns, runs: LoopOptimizer, sets: Byte
         runs: encoding::cell(first_run as u32, shift as u32, 0),
         run_words: word_cells,
         vectors: vector_cells,
-        lookup: mark_cells,
-        nibbles: pair_cells,
+        lookup: runs.lookup(),
+        nibbles: runs.nibbles(),
         start: encoding::cell(start as u32, shift as u32, array::get(kinds, start as i64))
     }
 }

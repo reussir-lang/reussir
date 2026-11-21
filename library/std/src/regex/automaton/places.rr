@@ -1,0 +1,136 @@
+//! The bytes that a match can have at each of its first places.
+//!
+//! The first byte of a match is one that the start state goes on with. The
+//! second is one that a state after such a byte goes on with, whichever
+//! state that is, and so on, place after place: the states that are one
+//! step further are walked together, and the bytes that any of them goes
+//! on with are the set of the place:
+//!
+//! ```text
+//! rule      [Tt]he | [0-9] km
+//!
+//! place     states after        go on with
+//! 0         nothing             T t 0-9
+//! 1         T or t , a digit    h , a blank
+//! 2         Th , a digit and    e k
+//!           a blank
+//! ```
+//!
+//! A set says nothing of the bytes before: `0he` has a byte of every set
+//! and is no match. So the sets are what a match needs, and a place whose
+//! bytes are in them still has to be matched.
+//!
+//! The walk ends where a state that accepts is reached, since a match may
+//! end there and have no byte at the next place: the places are as many
+//! as the shortest match has bytes, at most. Here that is three.
+
+import core::intrinsic::array;
+import std::collections::pure::list::List;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::encoding;
+
+impl Automaton {
+    /// The bytes that a match can have at its first place, at its second,
+    /// and so on: for every place, the bytes that go on from a state that
+    /// is that many steps from the start state. There are as many places
+    /// as the shortest match has bytes, and no more than `most`. A place
+    /// is left out, with those after it, when the states that are walked
+    /// for the places up to it are more than `limit`. The first set is
+    /// `first_bytes`. Rules that match nothing have no place, and neither
+    /// have rules that match no bytes.
+    pub fn first_sets(self: Self, most: u64, limit: u64) -> List<Bits> {
+        let kind = encoding::kind(self.start);
+        if kind >= 5 && most > 0 && limit > 0 {
+            self.level_sets(most, limit)
+        } else {
+            List::Nil
+        }
+    }
+
+    // The same when the start state neither accepts nor is dead, for one
+    // place or more. The states of a place are `now`, and those of the
+    // next one are gathered in `then`, each once: `marks` has for every
+    // state the last place that it was gathered for, counted from 1.
+    fn level_sets(self: Self, most: u64, limit: u64) -> List<Bits> {
+        let states = self.states();
+        let room = if states < limit { states } else { limit };
+        let start = encoding::place(self.start, self.shift);
+        let now = array::set(array::splat<[u32; ?]>(room, 0), 0, start);
+        let (_, _, _, _, _, _, sets, _) = while [
+            depth = (1 as u32),
+            now = now,
+            count = (1 as u64),
+            then = array::splat<[u32; ?]>(room, 0),
+            marks = array::splat<[u32; ?]>(states, 0),
+            walked = (1 as u64),
+            sets = List::Nil,
+            going = true
+        ] (going) {
+            // The states of the next place, as many as the limit leaves
+            // room for.
+            let free = limit - walked;
+            let (_, then, marks, found, columns, ended, over) = while [
+                at = (0 as u64),
+                then = then,
+                marks = marks,
+                found = (0 as u64),
+                columns = Bits::empty(),
+                ended = false,
+                over = false
+            ] (at < count) {
+                let place = array::get(now, at as i64) as u64;
+                let (_, then, marks, found, columns, ended, over) = while [
+                    column = (0 as u64),
+                    then = then,
+                    marks = marks,
+                    found = found,
+                    columns = columns,
+                    ended = ended,
+                    over = over
+                ] (column < self.columns) {
+                    let cell = self.cell_after(place, column);
+                    let kind = encoding::kind(cell);
+                    let to = encoding::place(cell, self.shift) as i64;
+                    if kind == 0 { (column + 1, then, marks, found, columns, ended, over) } else {
+                        let columns = columns.insert(column);
+                        // A match may end in a state that accepts.
+                        let ended = ended || kind <= 4;
+                        if array::get(marks, to) == depth || found == free {
+                            (column + 1, then, marks, found, columns, ended, over || array::get(marks, to) != depth)
+                        } else {
+                            (
+                                column + 1,
+                                array::set(then, found as i64, to as u32),
+                                array::set(marks, to, depth),
+                                found + 1,
+                                columns,
+                                ended,
+                                over
+                            )
+                        }
+                    }
+                };
+                (at + 1, then, marks, found, columns, ended, over)
+            };
+            let sets = List::Cons { self.bytes_of(columns), sets };
+            let going = !ended && !over && (depth as u64) < most;
+            // The two lists of states change places.
+            (depth + 1, then, found, now, marks, walked + found, sets, going)
+        };
+        sets.reverse()
+    }
+
+    // The bytes whose column is one of `columns`.
+    fn bytes_of(self: Self, columns: Bits) -> Bits {
+        let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+            let bytes = if columns.contains(array::get(self.classes, byte as i64) as u64) {
+                bytes.insert(byte)
+            } else {
+                bytes
+            };
+            (byte + 1, bytes)
+        };
+        bytes
+    }
+}

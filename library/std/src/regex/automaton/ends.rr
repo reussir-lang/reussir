@@ -1,0 +1,224 @@
+//! The automaton of the ends: where the first match ends, wherever it
+//! began.
+//!
+//! An automaton matches from one place. Its automaton of the ends reads a
+//! text once for the matches from every place: a match is begun at every
+//! byte, and a state of it is the states that the matches begun so far
+//! have come to, those that have not failed. It accepts when one of them
+//! does, and there its way ends:
+//!
+//! ```text
+//! rule      a b+ c
+//! states    1 before a    2 after a    3 after b    4 after c, accepts
+//!
+//! text       x    a    b    a    b    b    c
+//! begun     -    -    2    3    2    3    3    accepts
+//! ```
+//!
+//! So it accepts at the first place of a text where a match ends, and it
+//! is the automaton of any bytes and then one of the rules, cut where it
+//! first accepts. Which match ends there it does not say, nor where that
+//! match began.
+//!
+//! Its start state is the state with no match begun. The way is in it
+//! again whenever every match begun so far has failed, as after the `x`
+//! above. A match that ends later began at that place or after it, which
+//! is what a search reads from the place where the way was last in the
+//! start state.
+//!
+//! The states are found as `explore` finds those of rules, and the same
+//! steps make the automaton from them, so a state that stays in itself has
+//! its run: in the start state, the bytes that begin no match are skipped
+//! sixteen at a time.
+
+import core::intrinsic::array;
+import core::intrinsic::math;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::hashmap::HashMap;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::alphabet::byte_classes::ByteClasses;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::TooManyStates;
+import std::regex::automaton::encoding;
+import std::regex::automaton::explore::Explored;
+import std::result::Result;
+
+// The states found so far. A state is the cells of the matches begun, in
+// the order of their states and each once; the state 0 has none. The
+// state 1 accepts, whatever was begun, and the state 2 is where it goes:
+// no way leaves it.
+struct Begun {
+    states: Vec<List<u32>>,
+    // The number of every state but those two, by its cells.
+    numbers: HashMap<List<u32>, u32>,
+    // The transitions of the states expanded so far, row after row.
+    next: Vec<u32>,
+    // The cells of all the states together.
+    held: u64
+}
+
+// Marks the cells that the matches in the cells `begun` come to on
+// `column`, those that have not failed, and says whether one of them
+// accepts. A cell is marked with the bit of its state in `marks`, which
+// has a bit for every state of `automaton`, and is kept in `cells` at
+// the place of its state. So a cell that many matches come to is taken
+// once, and a row costs its cells and not their square.
+fn after(automaton: Automaton, begun: List<u32>, column: u64, marks: [u64; ?], cells: [u32; ?]) -> ([u64; ?], [u32; ?], bool) {
+    match begun {
+        Nil => (marks, cells, false),
+        Cons(cell, rest) => {
+            let to = array::get(automaton.next, ((encoding::row(cell) as u64) + column) as i64);
+            let kind = encoding::kind(to);
+            if kind == 0 { after(automaton, rest, column, marks, cells) } else {
+                // 1 to 4: accepts.
+                if kind <= 4 { (marks, cells, true) } else {
+                    let place = encoding::place(to, automaton.shift) as u64;
+                    let word = (place >> 6) as i64;
+                    let marked = array::get(marks, word) | ((1 as u64) << (place & 63));
+                    after(automaton, rest, column, array::set(marks, word, marked), array::set(cells, place as i64, to))
+                }
+            }
+        }
+    }
+}
+
+// The cells that are marked, in the order of their states, how many
+// they are, and the marks with no bit left.
+fn listed(marks: [u64; ?], cells: [u32; ?]) -> (List<u32>, u64, [u64; ?]) {
+    let none: List<u32> = List::Nil;
+    // From the last state to the first, each in front of those after it.
+    let (_, list, size, marks) = while [word = array::dim(marks, 0), list = none, size = (0 as u64), marks = marks] (word > 0) {
+        let (_, list, size) = while [bits = array::get(marks, (word - 1) as i64), list = list, size = size] (bits != 0) {
+            let bit = 63 - math::ctlz(bits);
+            let place = (word - 1) * 64 + bit;
+            (bits ^ ((1 as u64) << bit), List::Cons { array::get(cells, place as i64), list }, size + 1)
+        };
+        (word - 1, list, size, array::set(marks, (word - 1) as i64, 0))
+    };
+    (list, size, marks)
+}
+
+// The marks with no bit left.
+fn cleared(marks: [u64; ?]) -> [u64; ?] {
+    let (_, marks) = while [word = (0 as u64), marks = marks] (word < array::dim(marks, 0)) {
+        (word + 1, array::set(marks, word as i64, 0))
+    };
+    marks
+}
+
+impl Begun {
+    // Whether the states found are no more than `limit`, the two that end
+    // a way not counted, and hold no more than 64 cells for each state
+    // of the limit: what a state holds is what it costs to keep and to
+    // expand.
+    fn within(self: Self, limit: u64) -> bool {
+        self.states.len() - 2 <= limit && self.held / 64 <= limit
+    }
+
+    fn new() -> Self {
+        let states = Vec::new().push(List::Nil).push(List::Nil).push(List::Nil);
+        Begun { states, numbers: HashMap::new().insert(List::Nil, 0), next: Vec::new(), held: 0 }
+    }
+
+    // The number of the state with these cells, which are `size`. A new
+    // state takes the next number and is entered under them.
+    fn allocate(self: Self, state: List<u32>, size: u64) -> (Self, u32) {
+        match self.numbers.get(state) {
+            Some(number) => (self, number),
+            None => {
+                // The fields leave `self` first: a field that `self` still
+                // holds is copied by its update.
+                let states = self.states;
+                let numbers = self.numbers;
+                let next = self.next;
+                let held = self.held + size;
+                let number = states.len() as u32;
+                (Begun { states: states.push(state), numbers: numbers.insert(state, number), next, held }, number)
+            }
+        }
+    }
+
+    // One more transition of the row that is being written.
+    fn push(self: Self, to: u32) -> Self {
+        // As in `allocate`, the fields leave `self` first.
+        let states = self.states;
+        let numbers = self.numbers;
+        let next = self.next;
+        let held = self.held;
+        Begun { states, numbers, next: next.push(to), held }
+    }
+
+    // One row: where the state `number` goes on every class, whose columns
+    // in `automaton` are `columns`. A match begins at every byte, so the
+    // start state of `automaton` is among the cells whatever the state.
+    // `marks` and `cells` are what `after` writes to; the marks come and
+    // go with no bit.
+    fn expand(self: Self, automaton: Automaton, columns: [u64; ?], number: u64, marks: [u64; ?], cells: [u32; ?]) -> (Self, [u64; ?], [u32; ?]) {
+        let ended = number == 1 || number == 2 || (number == 0 && automaton.accepts_empty());
+        let begun = List::Cons { automaton.start, self.states.get(number).unwrap_or(List::Nil) };
+        let (_, table, marks, cells) = while [class = (0 as u64), table = self, marks = marks, cells = cells] (class < array::dim(columns, 0)) {
+            if ended { (class + 1, table.push(2), marks, cells) } else {
+                let (marks, cells, accepts) = after(automaton, begun, array::get(columns, class as i64), marks, cells);
+                if accepts { (class + 1, table.push(1), cleared(marks), cells) } else {
+                    let (state, size, marks) = listed(marks, cells);
+                    let (table, to) = table.allocate(state, size);
+                    (class + 1, table.push(to), marks, cells)
+                }
+            }
+        };
+        (table, marks, cells)
+    }
+}
+
+impl Automaton {
+    /// The automaton of the ends of this one: from a place of a text, it
+    /// accepts at the first place where a match of the rules ends that
+    /// began at that place or after it, and no byte goes on from there.
+    /// With a rule that matches no bytes that is the place itself. It has
+    /// one rule, the rule 0. The search for its states gives up when it
+    /// has found more than `limit` of them, the two that end a way not
+    /// counted. A state is the matches that are begun, each in a state
+    /// of this automaton, and the search gives up as well when the
+    /// states found hold more than 64 of those for each state of the
+    /// limit: a rule of a thousand letters has a thousand states that
+    /// hold five hundred each.
+    pub fn ends(self: Self, limit: u64) -> Result<Automaton, TooManyStates> {
+        let sets = self.byte_sets();
+        let columns = array::tabulate<[u64; ?]>(sets.len(), |class: i64| {
+            let least = sets.class(class as u64).unwrap_or(Bits::empty()).least();
+            array::get(self.classes, least as i64) as u64
+        });
+        // The marks have a bit for every state, and the cells a place.
+        let marks = array::splat<[u64; ?]>((self.states() + 63) >> 6, 0);
+        let cells = array::splat<[u32; ?]>(self.states(), 0);
+        let (_, table, _, _) = while [at = (0 as u64), table = Begun::new(), marks = marks, cells = cells] (at < table.states.len() && table.within(limit)) {
+            let (table, marks, cells) = table.expand(self, columns, at, marks, cells);
+            (at + 1, table, marks, cells)
+        };
+        if !table.within(limit) { Result::Err { TooManyStates { limit } } } else {
+            let (_, winners) = while [state = (0 as u64), winners = Vec::new()] (state < table.states.len()) {
+                let accepts = state == 1 || (state == 0 && self.accepts_empty());
+                (state + 1, winners.push(if accepts { Option::Some { 0 } } else { Option::None }))
+            };
+            Result::Ok { Automaton::of_states(Explored { classes: sets.len(), next: table.next, winners }, sets) }
+        }
+    }
+
+    // The classes of bytes that this automaton tells apart: the bytes of
+    // every column.
+    fn byte_sets(self: Self) -> ByteClasses {
+        let (_, sets) = while [column = (0 as u64), sets = ByteClasses::whole()] (column < self.columns) {
+            let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+                if (array::get(self.classes, byte as i64) as u64) == column {
+                    (byte + 1, bytes.insert(byte))
+                } else {
+                    (byte + 1, bytes)
+                }
+            };
+            (column + 1, sets.refine(bytes))
+        };
+        sets
+    }
+}

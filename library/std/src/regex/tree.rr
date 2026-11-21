@@ -36,7 +36,10 @@ pub enum Regex {
     Star(Regex),
     /// Once or more.
     Plus(Regex),
-    Not(Regex)
+    Not(Regex),
+    /// The same strings as the regex inside, marked as a group: a search
+    /// can say which bytes of a match it took.
+    Group(Regex)
 }
 
 /// A regex whose leaves are sets of bytes only.
@@ -184,8 +187,17 @@ impl Regex {
         Regex::Union { Regex::Epsilon, self }
     }
 
+    /// `self` as a group. It matches what `self` matches, and `to_bytes`
+    /// leaves the mark out, so an automaton does not know of it. A search
+    /// that is built from rules with groups says which bytes of a match
+    /// each group took: see `std::regex::search::groups`. The groups of a
+    /// rule are numbered from 1, in the order they begin in.
+    pub fn group(self: Self) -> Self {
+        Regex::Group { self }
+    }
+
     /// The same regex with every set of characters replaced by the UTF-8
-    /// encodings of its members.
+    /// encodings of its members, and without its groups.
     pub fn to_bytes(self: Self) -> ByteRegex {
         let (regex, _) = lower(self);
         regex
@@ -318,6 +330,8 @@ fn lower(regex: Regex) -> (ByteRegex, bool) {
             } else {
                 (all, false)
             }
-        }
+        },
+        // A group matches what is inside it.
+        Group(inner) => lower(inner)
     }
 }

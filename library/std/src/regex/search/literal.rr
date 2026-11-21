@@ -1,0 +1,519 @@
+//! The places of a literal: some bytes, one after another, in a text.
+//!
+//! A place of the text has the literal when two of its bytes are there,
+//! and then the others. The two bytes are the rarest of the literal, by
+//! the ranks of `rank`: few places have both, so few are compared whole.
+//! Sixteen places are tested at a time. The bytes that stand as far after
+//! them as the two bytes stand in the literal are two vectors, each is
+//! compared with sixteen copies of its byte, and one test says whether
+//! some place has both:
+//!
+//! ```text
+//! literal     Sherlock Holmes         'H' at 9 and 'k' at 7 are the rarest
+//! text        he asked Sherlock Holmes of it
+//! places      ----------------        from 0, sixteen of them
+//! 'k' there          ----------------            the bytes 7 after them
+//! 'H' there            ----------------          the bytes 9 after them
+//! both                 ^              only the place 9, which has it
+//! ```
+//!
+//! The places of the sixteen that have both bytes are read as sixteen
+//! bits, and each is compared with the literal, the first one first:
+//! sixteen bytes at a time, and a literal shorter than that as two numbers
+//! that share some of its bytes. When none of them has the literal, the
+//! search goes on with the next sixteen. This is how `memchr::memmem`, the
+//! Rust crate, finds a literal of up to 32 bytes; W. Muła's "SIMD-friendly
+//! algorithms for substring searching" tests the first and the last byte
+//! so.
+//!
+//! The vectors leave the last places of a text untested, fewer than
+//! sixteen. They are tested with the two vectors that end with the text,
+//! less the places that were tested before. A text too short for those is
+//! tested place by place.
+//!
+//! A literal of one byte is found by a `ByteFinder`. A literal of no bytes
+//! is at every place, the end too, and a stream gives it once at each.
+//!
+//! Building a finder copies the literal and, for one byte, builds the
+//! `ByteFinder`. Every search from a place begins with new vectors, so a
+//! text that has the literal at nearly every place is searched more
+//! slowly than one that has it rarely.
+//!
+//! The time is not bounded by the length of the text alone. Every place
+//! that has both bytes is compared, and for long when the literal is
+//! nearly there: a hundred `a` in a text of `a` with a `b` after every
+//! ninety-nine are compared at nearly every place, for half of their
+//! bytes on the average, which is hundreds of times slower than a text
+//! without such places. Nothing guards against that yet.
+
+import core::intrinsic::array;
+import core::intrinsic::math;
+import core::ptr;
+import core::ptr::Generic;
+import core::ptr::PtrArithFlag;
+import core::simd;
+import std::option::Option;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::native;
+import std::regex::search::bytes::ByteFinder;
+import std::regex::search::rank;
+import std::text::TextView;
+
+/// Finds a literal in a text. It is built once for the literal and finds
+/// from any place of any text.
+pub struct LiteralFinder {
+    needle: [u8; ?],
+    // The number of bytes of the literal.
+    size: u64,
+    // Where the two bytes that are tested first stand in the literal, and
+    // the bytes: `rare` is the rarest byte of the literal and `other` the
+    // rarest byte at another place. A literal of fewer than two bytes has
+    // none, and these are zeros.
+    first: u64,
+    second: u64,
+    rare: u8,
+    other: u8,
+    // The finder of the byte of a literal of one byte. No other literal
+    // has one.
+    byte: Option<ByteFinder>
+}
+
+/// What a stream of the places of a literal reads: a finder, a text, and
+/// where the bytes of the text begin. It holds the text, so those bytes
+/// stay readable for as long as a stream is around.
+pub struct Finding {
+    finder: LiteralFinder,
+    input: TextView,
+    bytes: ConstPtr<Generic>
+}
+
+/// The places of a literal in a text, one after another: each begins
+/// where the one before ended or after, so two of them share no byte. A
+/// place is pulled with `next`, which answers the stream after it:
+///
+/// ```text
+/// let (rest, found) = literals.next();
+/// ```
+///
+/// A literal of no bytes is given once at every place, the end too. The
+/// stream is a pointer and a place, and a loop that keeps pulling from
+/// the stream it was just given moves it along without counting
+/// references.
+pub struct [value] Literals {
+    finding: Finding,
+    // Where the search for the next place begins.
+    at: u64
+}
+
+// Where the two bytes of `needle` that are tested first stand: the rarest
+// byte and the rarest byte at another place, the earliest of each. A later
+// byte takes the place of the second only when it is rarer and is not the
+// rarest byte again, so the two are the same byte when the literal has no
+// other, and when it begins with its rarest byte twice and no later byte
+// is rarer than that. `needle` has two bytes at least.
+fn pair(needle: [u8; ?]) -> (u64, u64) {
+    let size = array::dim(needle, 0);
+    let (first, second) = if rank::rank(array::get(needle, 1)) < rank::rank(array::get(needle, 0)) {
+        (1, 0)
+    } else {
+        (0, 1)
+    };
+    let (_, first, second) = while [at = (2 as u64), first = (first as u64), second = (second as u64)] (at < size) {
+        let byte = array::get(needle, at as i64);
+        let rare = array::get(needle, first as i64);
+        let less = array::get(needle, second as i64);
+        if rank::rank(byte) < rank::rank(rare) { (at + 1, at, first) } else {
+            if byte != rare && rank::rank(byte) < rank::rank(less) {
+                (at + 1, first, at)
+            } else {
+                (at + 1, first, second)
+            }
+        }
+    };
+    (first, second)
+}
+
+// The eight bytes at `at` as one number.
+fn word_at(bytes: ConstPtr<Generic>, at: u64) -> u64 {
+    ptr::load_extended<u64>(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), false, false, false, false, 1)
+}
+
+// Whether the sixteen bytes at `at` of `needle` and of `here` are the
+// same.
+fn same_chunk(needle: ConstPtr<Generic>, here: ConstPtr<Generic>, at: u64) -> bool {
+    let same: Simd<[bool; 16]> = simd::eq(native::chunk_at(needle, at), native::chunk_at(here, at));
+    simd::all(same)
+}
+
+// The four bytes at `at` as one number.
+fn half_at(bytes: ConstPtr<Generic>, at: u64) -> u32 {
+    ptr::load_extended<u32>(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), false, false, false, false, 1)
+}
+
+// The two bytes at `at` as one number.
+fn pair_at(bytes: ConstPtr<Generic>, at: u64) -> u16 {
+    ptr::load_extended<u16>(ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), false, false, false, false, 1)
+}
+
+// Whether the `size` bytes at `here` are those at `needle`, two bytes at
+// least. Sixteen bytes are compared at a time, and the last sixteen once
+// more where the size is no multiple of sixteen. Fewer are two numbers of
+// eight, four or two bytes, the first bytes and the last, which share
+// some of them.
+fn same(needle: ConstPtr<Generic>, here: ConstPtr<Generic>, size: u64) -> bool {
+    if size >= 16 {
+        let (_, equal) = while [at = (0 as u64), equal = true] (equal && at + 16 <= size) {
+            (at + 16, same_chunk(needle, here, at))
+        };
+        equal && same_chunk(needle, here, size - 16)
+    } else {
+        if size >= 8 {
+            ((word_at(needle, 0) ^ word_at(here, 0))
+                | (word_at(needle, size - 8) ^ word_at(here, size - 8))) == 0
+        } else {
+            if size >= 4 {
+                ((half_at(needle, 0) ^ half_at(here, 0))
+                    | (half_at(needle, size - 4) ^ half_at(here, size - 4))) == 0
+            } else {
+                ((pair_at(needle, 0) ^ pair_at(here, 0))
+                    | (pair_at(needle, size - 2) ^ pair_at(here, size - 2))) == 0
+            }
+        }
+    }
+}
+
+// The places among the sixteen from `at` on that have both bytes: `one`
+// and `two` are where the bytes of the place 0 are read, and `a` and `b`
+// are sixteen copies of each byte.
+fn both(one: ConstPtr<Generic>, two: ConstPtr<Generic>, a: Simd<[u8; 16]>, b: Simd<[u8; 16]>, at: u64) -> Simd<[bool; 16]> {
+    let rare: Simd<[bool; 16]> = simd::eq(native::chunk_at(one, at), a);
+    let other: Simd<[bool; 16]> = simd::eq(native::chunk_at(two, at), b);
+    simd::and(rare, other)
+}
+
+// The lanes of `hit` that are set, as sixteen bits: the bit `k` for the
+// lane `k`. A lane that is set is given one bit of a byte, the bit of its
+// number among eight lanes. The first eight lanes and the last are read
+// as two numbers, and a multiplication adds the eight bytes of each,
+// which share no bit, into its highest byte.
+fn bits_of(hit: Simd<[bool; 16]>) -> u64 {
+    let lanes = simd::and(simd::step<Simd<[u8; 16]>>(), simd::splat<Simd<[u8; 16]>>(7));
+    let bit: Simd<[u8; 16]> = simd::shl(simd::splat<Simd<[u8; 16]>>(1), lanes);
+    let marked: Simd<[u8; 16]> = simd::select(hit, bit, simd::splat<Simd<[u8; 16]>>(0));
+    let halves = simd::bitcast<Simd<[u64; 2]>>(marked);
+    let low: u64 = simd::extract(halves, 0);
+    let high: u64 = simd::extract(halves, 1);
+    let every: u64 = 0x0101010101010101;
+    ((low * every) >> 56) | (((high * every) >> 56) << 8)
+}
+
+// Reads on from the place `at`, sixteen places at a time, up to the first
+// sixteen of which some have both bytes: where the sixteen begin, and
+// which of them have both, the bit `k` for the place `k` after that.
+// `ahead` is the last place that sixteen can be tested from. When no
+// sixteen up to there have such a place, the answer is for the sixteen
+// from `ahead` on, less those that were tested before, and may be no
+// place. `at` is past `ahead` by fewer than sixteen at most.
+fn candidates(one: ConstPtr<Generic>, two: ConstPtr<Generic>, a: Simd<[u8; 16]>, b: Simd<[u8; 16]>, at: u64, ahead: u64) -> (u64, u64) {
+    let (reached, bits, _) = while [at = at, bits = (0 as u64), going = true] (going && at <= ahead) {
+        let hit = both(one, two, a, b, at);
+        // One test for sixteen places. The bits are made only for a
+        // step that has a place.
+        if simd::any(hit) {
+            (at, bits_of(hit), false)
+        } else {
+            (at + 16, 0, true)
+        }
+    };
+    if bits != 0 { (reached, bits) } else {
+        // The places before `reached` were tested.
+        let before = reached - ahead;
+        if before >= 16 { (ahead, 0) } else {
+            (ahead, (bits_of(both(one, two, a, b, ahead)) >> before) << before)
+        }
+    }
+}
+
+impl LiteralFinder {
+    /// The finder of the bytes of `needle`.
+    pub fn new(needle: TextView) -> Self {
+        let from = needle.unsafe_data_ptr();
+        let bytes = array::tabulate<[u8; ?]>(needle.len(), |at: i64| native::byte_at(from, at as u64));
+        // The length is asked for again so that the last use of `needle`
+        // comes after its bytes are read through the pointer.
+        LiteralFinder::sized(bytes, needle.len())
+    }
+
+    /// The finder of the bytes `needle`, which need be no text.
+    pub fn of_bytes(needle: [u8; ?]) -> Self {
+        LiteralFinder::sized(needle, array::dim(needle, 0))
+    }
+
+    // The finder of the `size` bytes that `needle` is.
+    fn sized(needle: [u8; ?], size: u64) -> Self {
+        let (first, second) = if size >= 2 {
+            pair(needle)
+        } else {
+            (0, 0)
+        };
+        let (rare, other) = if size >= 2 {
+            (array::get(needle, first as i64), array::get(needle, second as i64))
+        } else {
+            (0, 0)
+        };
+        let byte = if size == 1 {
+            Option::Some { ByteFinder::new(Bits::single(array::get(needle, 0) as u64)) }
+        } else {
+            Option::None
+        };
+        LiteralFinder { needle, size, first, second, rare, other, byte }
+    }
+
+    /// The bytes of the literal.
+    pub fn needle(self: Self) -> [u8; ?] {
+        self.needle
+    }
+
+    /// The number of bytes of the literal.
+    pub fn len(self: Self) -> u64 {
+        self.size
+    }
+
+    /// Where the two bytes that are tested before the others stand in the
+    /// literal, the rarest byte first: the rarest byte of the literal and
+    /// the rarest byte at another place, by `rank`. They may be the same
+    /// byte at two places. A literal of fewer than two bytes has none, and
+    /// the answer is two zeros. Which two are tested is no promise: a
+    /// later choice may be another.
+    pub fn tested(self: Self) -> (u64, u64) {
+        (self.first, self.second)
+    }
+
+    /// The first place of the literal in `input` that begins at the byte
+    /// `from` or after it, as a match of the rule 0. A literal of no bytes
+    /// is found at `from`, at the end of `input` as well, and nothing is
+    /// found from past the end.
+    pub fn find(self: Self, input: TextView, from: u64) -> Found {
+        let start = self.unsafe_find(input.unsafe_data_ptr(), input.len(), from);
+        // The length is asked for again so that the last use of `input`
+        // comes after its bytes are read through the pointer.
+        if start <= input.len() && self.size <= input.len() - start {
+            Found::Matched { Match { rule: 0, start, end: start + self.size } }
+        } else {
+            Found::Nothing
+        }
+    }
+
+    /// The same for the `length` bytes at `bytes`, which the caller keeps
+    /// readable for the call: the index of the byte where the literal
+    /// begins. When it is nowhere from `from` on, the answer is a place
+    /// that leaves fewer bytes than the literal has: `length` for a
+    /// literal that has bytes, and `from`, which is past the end then, for
+    /// one that has none. No byte is read from a place past the end,
+    /// whatever `from` is.
+    pub fn unsafe_find(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> u64 {
+        let size = self.size;
+        if size == 0 { from } else {
+            if size > length || from > length - size { length } else {
+                if size == 1 {
+                    self.by_byte(bytes, length, from)
+                } else {
+                    self.sought(bytes, length, from)
+                }
+            }
+        }
+    }
+
+    // The same for a literal of one byte.
+    fn by_byte(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> u64 {
+        match self.byte {
+            Some(finder) => finder.unsafe_find(bytes, length, from),
+            None => length
+        }
+    }
+
+    // The same for a literal of two bytes or more that fits between `from`
+    // and the end. The literal is read through a pointer, and the finder
+    // holds it: it is lent to this call by a caller that has a use for it
+    // afterwards.
+    fn sought(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> u64 {
+        let needle = array::unsafe_data_ptr(self.needle);
+        let size = self.size;
+        let rare = self.rare;
+        let other = self.other;
+        let one = ptr::offset(bytes, self.first as i64, PtrArithFlag::Inbounds);
+        let two = ptr::offset(bytes, self.second as i64, PtrArithFlag::Inbounds);
+        // The last byte of a place that is read before the place is
+        // compared whole.
+        let far = if self.first < self.second {
+            self.second
+        } else {
+            self.first
+        };
+        // The last place that the literal fits at.
+        let last = length - size;
+        let (found, _) = if length < far + 16 {
+            // Too short for a vector: place by place.
+            while [at = from, going = true] (going) {
+                if at > last { (length, false) } else {
+                    if native::byte_at(one, at) == rare
+                        && native::byte_at(two, at) == other
+                        && same(needle, ptr::offset(bytes, at as i64, PtrArithFlag::Inbounds), size) {
+                        (at, false)
+                    } else {
+                        (at + 1, true)
+                    }
+                }
+            }
+        } else {
+            let a = simd::splat<Simd<[u8; 16]>>(rare);
+            let b = simd::splat<Simd<[u8; 16]>>(other);
+            // The last place that sixteen places are tested from: their
+            // bytes end with the text. `last` is not sixteen places after
+            // it, so a place past its sixteen is past `last`.
+            let ahead = length - far - 16;
+            while [at = from, going = true] (going) {
+                let (chunk, bits) = candidates(one, two, a, b, at, ahead);
+                // The first of those places that has the literal: the
+                // lowest bit is the first place, and a place without the
+                // literal is taken out of the bits. No place past `last`
+                // is compared.
+                let (_, place, found, _) = while [bits = bits, place = chunk, found = false, more = true] (more) {
+                    if bits == 0 { (bits, place, false, false) } else {
+                        let here = chunk + math::cttz(bits);
+                        if here > last { (bits, here, false, false) } else {
+                            if same(needle, ptr::offset(bytes, here as i64, PtrArithFlag::Inbounds), size) {
+                                (bits, here, true, false)
+                            } else {
+                                (bits & (bits - 1), here, false, true)
+                            }
+                        }
+                    }
+                };
+                if found { (place, false) } else {
+                    // The literal fits at no place past `last`, which
+                    // the sixteen from `ahead` on reach.
+                    if chunk + 16 > last {
+                        (length, false)
+                    } else {
+                        (chunk + 16, true)
+                    }
+                }
+            }
+        };
+        // The size is read from the finder after the loops, which keeps
+        // it, and its literal, until they are over.
+        if found <= length - self.size {
+            found
+        } else {
+            length
+        }
+    }
+
+    /// The places of the literal in `input`, one after another, from the
+    /// byte `from` on. To take them all, pull from the stream, fold over
+    /// it or count: that asks for the finder once for the whole text.
+    pub fn literals(self: Self, input: TextView, from: u64) -> Literals {
+        let finding = Finding { finder: self, bytes: input.unsafe_data_ptr(), input };
+        Literals { finding, at: from }
+    }
+
+    /// Folds over the places of the literal in `input` from the byte
+    /// `from` on, one after another, up to the end of the input.
+    pub fn fold<A>(self: Self, input: TextView, from: u64, initial: A, step: (A, Match) -> A) -> A {
+        self.literals(input, from).fold(initial, step)
+    }
+
+    /// The number of places of the literal in `input` from the byte `from`
+    /// on, of which no two share a byte.
+    pub fn count(self: Self, input: TextView, from: u64) -> u64 {
+        self.literals(input, from).count()
+    }
+}
+
+impl Finding {
+    // Where a stream stands after the literal was found at `start`: at
+    // its end, and one byte after a literal of no bytes, so that it is
+    // not found again.
+    fn after(self: Self, start: u64) -> u64 {
+        if self.finder.size == 0 {
+            start + 1
+        } else {
+            start + self.finder.size
+        }
+    }
+
+    // The next place of the literal for a stream that stands at the byte
+    // `at`, as `LiteralFinder::unsafe_find` gives it, and whether the
+    // literal is there. The stream keeps `self` across the call, so the
+    // finder is read here without counting references.
+    fn next_place(self: Self, at: u64) -> (u64, bool) {
+        let length = self.input.len();
+        let start = self.finder.unsafe_find(self.bytes, length, at);
+        (start, start <= length && self.finder.size <= length - start)
+    }
+
+    // The number of places of a stream that stands at the byte `at`.
+    fn count(self: Self, at: u64) -> u64 {
+        let (_, count, _) = while [at = at, count = (0 as u64), going = true] (going) {
+            let (start, found) = self.next_place(at);
+            if found {
+                (self.after(start), count + 1, true)
+            } else {
+                (at, count, false)
+            }
+        };
+        count
+    }
+}
+
+impl Literals {
+    /// The first place of the literal that begins where the stream stands
+    /// or after, as a match of the rule 0, and the stream after it. After
+    /// `Nothing` the stream stays where it is: the literal is nowhere in
+    /// the rest of the text, and pulling again searches it again to say
+    /// so. A stream that begins past the end of the text answers `Nothing`
+    /// too.
+    pub fn next(self: Self) -> (Literals, Found) {
+        // The place is read first, so that taking `finding` is the last
+        // use of `self` and moves it.
+        let at = self.at;
+        let finding = self.finding;
+        let (start, found) = finding.next_place(at);
+        if found {
+            let end = start + finding.finder.size;
+            let at = finding.after(start);
+            (Literals { finding, at }, Found::Matched { Match { rule: 0, start, end } })
+        } else {
+            (Literals { finding, at }, Found::Nothing)
+        }
+    }
+
+    /// The index of the byte where the search for the next place begins:
+    /// the end of the place before, or one byte after it for a literal of
+    /// no bytes; before any place, where the stream was made from.
+    pub fn at(self: Self) -> u64 {
+        self.at
+    }
+
+    /// Folds over the places left in the stream, one after another, up to
+    /// the end of the text.
+    pub fn fold<A>(self: Self, initial: A, step: (A, Match) -> A) -> A {
+        // `step` is passed along to the fold of the rest, which lets the
+        // compiler specialize the fold for a closure written at the call;
+        // a loop clones the closure for every place.
+        let (rest, found) = self.next();
+        match found {
+            Matched(found) => rest.fold(step(initial, found), step),
+            Nothing => initial
+        }
+    }
+
+    /// The number of places left in the stream.
+    pub fn count(self: Self) -> u64 {
+        let at = self.at;
+        self.finding.count(at)
+    }
+}

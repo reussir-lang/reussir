@@ -14,6 +14,7 @@ impl Matches {
     /// The longest match that begins where the stream stands, and the
     /// stream after it. After `Nothing` the stream stays where it is: no
     /// rule matches there, the match has no bytes, or the text has ended.
+    /// A stream that begins past the end of the text answers `Nothing` too.
     pub fn next(self: Self) -> (Matches, Found) {
         // The place is read first, so that taking `reading` is the last use
         // of `self` and moves it.

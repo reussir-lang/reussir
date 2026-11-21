@@ -1,0 +1,131 @@
+//! The next byte of a set.
+//!
+//! A run of an automaton reads on while the bytes are in a set and stops at
+//! the first one outside. Finding a byte of a set is the run of the bytes
+//! outside it:
+//!
+//! ```text
+//! set       { ',' , ';' }
+//! text      one two, three; four
+//! from 0    -------^                 found at 7
+//! from 8            ------^          found at 14
+//! from 15                  -----^    none: the length, 20
+//! ```
+//!
+//! So a finder is one run: the word and the tables that `LoopOptimizer`
+//! makes for the other bytes, read by the loops of `native`, sixteen bytes
+//! at a time. Those loops leave fewer than sixteen bytes at the end unread.
+//! The last sixteen bytes of the text are then read once more as one
+//! vector: the bytes of it that were read before are not in the set, so the
+//! first one found is the answer.
+//!
+//! ```text
+//! text      ................ ................ .......      39 bytes
+//! vectors   ---------------- ----------------
+//! the last                          ----------------       from 23
+//! ```
+//!
+//! Only when fewer than sixteen bytes follow the place asked from are they
+//! tested one by one against the set.
+//!
+//! A finder pays for bytes that are rare. Every byte found costs about as
+//! much as reading ten bytes one by one, so where the bytes of the set are
+//! fewer than ten bytes apart, testing each byte against the set is faster.
+
+import core::intrinsic::array;
+import core::ptr::Generic;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::lookahead::LoopOptimizer;
+import std::regex::automaton::native;
+import std::text::TextView;
+
+/// Finds the bytes of a set in a text. It is built once for a set and
+/// finds from any place of any text.
+pub struct ByteFinder {
+    set: Bits,
+    // The run that stays on the bytes outside the set: its word, its four
+    // vectors, and the lookup table or the pair of shuffle tables when it
+    // has one.
+    word: u64,
+    vectors: [u8; ?],
+    lookup: [u8; ?],
+    nibbles: [u8; ?]
+}
+
+impl ByteFinder {
+    /// The finder of the bytes of `set`.
+    pub fn new(set: Bits) -> Self {
+        let run = LoopOptimizer::new().add_up_to(set);
+        ByteFinder {
+            set,
+            word: run.words().get_or(0, 0),
+            vectors: run.vectors(),
+            lookup: run.lookup(),
+            nibbles: run.nibbles()
+        }
+    }
+
+    /// The bytes that are found.
+    pub fn set(self: Self) -> Bits {
+        self.set
+    }
+
+    /// The index of the first byte of the set at the byte `from` of `input`
+    /// or after it; the length of `input` when there is none, which is the
+    /// answer for an empty set and from the end or past it. When every byte
+    /// is in the set, a place before the end is found itself.
+    pub fn find(self: Self, input: TextView, from: u64) -> u64 {
+        let found = self.unsafe_find(input.unsafe_data_ptr(), input.len(), from);
+        // The length is asked for again so that the last use of `input`
+        // comes after its bytes are read through the pointer.
+        if found < input.len() {
+            found
+        } else {
+            input.len()
+        }
+    }
+
+    /// The same for the `length` bytes at `bytes`, which the caller keeps
+    /// readable for the call: the answer is `length` when no byte from
+    /// `from` on is in the set. No byte is read from a place past the end,
+    /// whatever `from` is.
+    pub fn unsafe_find(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> u64 {
+        if from >= length { length } else {
+            let reached = self.reached(bytes, length, from);
+            let left = length - reached;
+            if left >= 16 || left == 0 {
+                reached
+            } else {
+                self.settled(bytes, length, from, reached)
+            }
+        }
+    }
+
+    // Where the loops of the run stop from `at`, which is at most `length`:
+    // at the first byte of the set, or within sixteen bytes of the end. The
+    // vectors are read through a pointer, and the finder holds them: it is
+    // lent to this call by a caller that has a use for it afterwards. The
+    // loops then read its tables without counting them.
+    fn reached(self: Self, bytes: ConstPtr<Generic>, length: u64, at: u64) -> u64 {
+        native::run(self.word, array::unsafe_data_ptr(self.vectors), self.lookup, self.nibbles, bytes, at, length)
+    }
+
+    // The answer when the loops of the run stopped at `reached`, fewer than
+    // sixteen bytes before the end.
+    fn settled(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64, reached: u64) -> u64 {
+        let near = if length - from >= 16 {
+            // No byte from `from` to `reached` is in the set, so the first
+            // one of the last sixteen bytes is the first one from `from`:
+            // this stops at it or at the end.
+            self.reached(bytes, length, length - 16)
+        } else {
+            reached
+        };
+        // One by one from there. The set is read from the finder after the
+        // loops, which keeps it, and its vectors, until they are over.
+        let set = self.set;
+        while [at = near] (at < length && !set.contains(native::byte_at(bytes, at) as u64)) {
+            at + 1
+        }
+    }
+}

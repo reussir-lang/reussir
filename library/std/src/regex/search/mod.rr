@@ -1,0 +1,284 @@
+//! Search: the places of a text where something is found, wherever they
+//! are.
+//!
+//! A match of an automaton begins at the place it is asked from. A search
+//! finds the matches of the rules wherever they begin. A match that has a
+//! byte begins with one of the first bytes of the automaton, so the
+//! searcher seeks the next of them and asks the automaton for the longest
+//! match from there; when there is none, it seeks on from the byte after:
+//!
+//! ```text
+//! rule      [0-9]+ m
+//! text      run 12 km or 300m today
+//! seek      ----^                      a digit at 4
+//! match         --                     no match from there
+//! seek           ^                     a digit at 5
+//! match          -                     no match from there
+//! seek            -------^             a digit at 13
+//! match                  ----          the match, from 13 to 17
+//! ```
+//!
+//! The match found is the one that begins first, and of those that begin
+//! there the longest; where two rules match the same bytes, the earlier
+//! one. The next match begins where it ended or after.
+//!
+//! Where every match begins with the same two bytes or more, those are
+//! sought instead, as a literal, and the automaton matches from the places
+//! that have them. Where the rules match one literal and nothing else, its
+//! places are the matches and the automaton is not asked:
+//!
+//! ```text
+//! rule      "km" [0-9]+
+//! text      a walk of 12 km, km12 on
+//! seek      -------------^               km at 13, not the k of walk
+//! match                  --              no match from there
+//! seek                    ---^           km at 17
+//! match                      ----        the match, from 17 to 21
+//! ```
+//!
+//! A first byte that is within four places is tried as it is, whether
+//! the searcher seeks the first bytes or those that every match begins
+//! with: reading on to it costs less than a finder. So the bytes are
+//! sought only from a place that has no first byte that near, as the `k`
+//! of `walk` is passed over from 0, and from 2 it would be tried. In a
+//! text where the first byte of those bytes is never more than four
+//! places away, they are not sought at all.
+//!
+//! Where the matches share no such bytes, each of their first places
+//! still has its set of bytes. When the bytes of a later place are rare
+//! in ordinary text, or far rarer than first bytes that a text is full
+//! of, those are sought, at their place, and the automaton matches from
+//! the places whose bytes are all in their sets:
+//!
+//! ```text
+//! rule      [a-z] [a-z] : [0-9]
+//! text      see fig:2 or eq:17, not a:1
+//! seek      -------^                     a colon at 7, two places on
+//! match          ----                    the match, from 5 to 9
+//! ```
+//!
+//! No match is without a byte of that set at that place, so none is
+//! passed over. `plan` says when a set is sought.
+//!
+//! Which of these a searcher does is chosen once, when it is built, from
+//! the automaton alone: the bytes that the start state is forced through,
+//! and the bytes that its states go on with, step after step. So rules
+//! with an intersection or a complement are sought as any other.
+//!
+//! A match may have no bytes, when a rule matches none. Then every place
+//! is the beginning of a match and nothing is sought. A match of no bytes
+//! is not given at the place where the match before it ended, and the
+//! search goes on one byte after it, which may be inside a character.
+//! That is the rule of the iterator of `regex-automata`, the Rust crate:
+//!
+//! ```text
+//! rule      a*
+//! text      baab
+//! matches   0 to 0, 1 to 3, 4 to 4      and none from 3 to 3
+//! ```
+//!
+//! A place that gives no match costs the bytes that were read from it, and
+//! the next place is read from its own beginning. So the time of a search
+//! is not bounded by the length of the text alone: `a*b` in a text of `a`
+//! only reads from every place to the end, which is the square of the
+//! length.
+//!
+//! Where the rules let a match begin while another is on its way, a
+//! searcher that was given a limit for it has a second automaton, which
+//! reads every byte once and stops where the first match ends. When the
+//! places that gave no match have cost more than the text that was
+//! passed, it reads on, and the places are tried again from the earliest
+//! one where that match can have begun, so the text before it is read
+//! once and not from every place. `a*b` in a text of `a` only is then
+//! read twice. `skip` has the bound, the account of what places cost,
+//! and what is left of the square.
+//!
+//! - `bytes`: `ByteFinder`, which finds the next byte of a set.
+//! - `groups`: the bytes of a match that each group of its rule took.
+//! - `literal`: `LiteralFinder`, which finds some bytes one after another.
+//! - `rank`: how common every byte is.
+//! - `plan`: how a searcher seeks, chosen from its automaton.
+//! - `seek`: one search, the first match from a place.
+//! - `sets`: the sets of bytes that a match begins with, and the places
+//!   that have them.
+//! - `skip`: the text that holds no match, passed over in one reading.
+//! - `stream`: the matches of a text, pulled one after another.
+
+import core::intrinsic::array;
+import core::ptr::Generic;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::regex::automaton::Automaton;
+import std::regex::automaton::TooManyStates;
+import std::regex::search::bytes::ByteFinder;
+import std::regex::search::groups::Program;
+import std::regex::search::literal::LiteralFinder;
+import std::regex::tree::ByteRegex;
+import std::result::Result;
+import std::text::TextView;
+
+pub mod bytes;
+pub mod groups;
+pub mod literal;
+mod plan;
+pub mod rank;
+mod seek;
+mod sets;
+mod skip;
+mod stream;
+
+/// A search for the matches of rules anywhere in a text. It is built once
+/// for the rules and searches any text from any place.
+pub struct Searcher {
+    automaton: Automaton,
+    // How the next place to try is come to.
+    way: Way,
+    // The finder of the bytes that a match can begin with; when the sets
+    // are sought, of the bytes of the sought place.
+    finder: ByteFinder,
+    // The finder of the bytes that every match begins with, when those
+    // are what is sought.
+    literal: Option<LiteralFinder>,
+    // The questions that say the groups of a match, when a rule has one.
+    program: Option<Program>,
+    // The automaton of the ends, when the searcher skips with it or
+    // bounds the places of the sets with it, and the greatest length that
+    // the shortest match from a place can have; the greatest number
+    // there is when the lengths have none, and 0 without the automaton.
+    ends: Option<Automaton>,
+    reach: u64,
+    // When the sets are sought: for every byte, the places whose set has
+    // it, a bit each; how many places there are; and the sought one.
+    sets: [u8; ?],
+    places: u64,
+    sought: u64
+}
+
+/// How a searcher comes to the next place to try. It is chosen when the
+/// searcher is built, and `Searcher::way` says which it is. There may be
+/// more ways later: a `match` on a way needs an arm for the others.
+pub enum [value] Way {
+    /// Every place is tried: a rule matches no bytes, or a match can begin
+    /// with every byte.
+    EveryPlace,
+    /// The next byte that a match can begin with is sought.
+    FirstBytes,
+    /// The bytes that every match begins with are sought, two or more, and
+    /// the automaton matches from where they are. A first byte within four
+    /// places is tried as it is, and the bytes are sought beyond that.
+    Prefix,
+    /// The rules match one string of two bytes or more and nothing else,
+    /// and the first rule matches it. It is sought, and where it is, there
+    /// is the match.
+    Literal,
+    /// A match has two bytes or more, and the bytes that it can have at
+    /// one of its places after the first are rare, or far rarer than
+    /// first bytes that a text is full of. Those are sought, at that
+    /// place, and the automaton matches from where the bytes of all the
+    /// first places are in their sets. A searcher with a second
+    /// automaton asks it as one that skips does, when the places that
+    /// give no match cost more than the text that is passed.
+    Sets,
+    /// The next first byte is sought and tried. When the places that
+    /// give no match cost more than the text that is passed, a second
+    /// automaton reads up to the first place where a match ends, and the
+    /// first bytes are sought again from the earliest place where that
+    /// match can have begun.
+    Skip
+}
+
+/// What a stream of occurrences reads: a searcher, a text, and where the
+/// bytes of the text begin. It holds the text, so those bytes stay
+/// readable for as long as a stream is around.
+pub struct Searching {
+    searcher: Searcher,
+    input: TextView,
+    bytes: ConstPtr<Generic>
+}
+
+/// The matches of the rules anywhere in a text, one after another: each
+/// begins where the one before ended or after. A match is pulled with
+/// `next`, which answers the stream after it:
+///
+/// ```text
+/// let (rest, found) = occurrences.next();
+/// ```
+///
+/// A match of no bytes is not given at the place where the match before
+/// it ended. The stream is a pointer and two places, and a loop that
+/// keeps pulling from the stream it was just given moves it along without
+/// counting references.
+pub struct [value] Occurrences {
+    searching: Searching,
+    // Where the search for the next match begins.
+    at: u64,
+    // Where the match before ended: a match of no bytes is not given
+    // there. It is `at` after a match that has bytes and the byte before
+    // `at` after one that has none; before any match it is a place that
+    // `at` is not. A place rather than a yes or no, so that the stream is
+    // three words, which a call passes as they are. A searcher that
+    // skips gives no match of no bytes, and its stream keeps in this
+    // word what it has to its credit, as `skip` counts it.
+    barred: u64
+}
+
+impl Searcher {
+    /// The searcher of `rules`. The search for the states of their
+    /// automaton gives up when it has found more than `limit` of them.
+    /// The second automaton of a searcher that skips has the same limit
+    /// for itself, as in `skipping`: with more states than that, the
+    /// searcher is built without it and seeks as that of `new` does.
+    pub fn build(rules: List<ByteRegex>, limit: u64) -> Result<Searcher, TooManyStates> {
+        match Automaton::build(rules, limit) {
+            Ok(automaton) => Result::Ok { Searcher::skipping(automaton, limit) },
+            Err(error) => Result::Err { error }
+        }
+    }
+
+    /// The searcher of the rules of `automaton` that builds no second
+    /// automaton, and so does not skip. How it seeks is chosen here, once.
+    pub fn new(automaton: Automaton) -> Searcher {
+        let first = automaton.first_bytes();
+        let (prefix, cell) = automaton.forced();
+        let plain = Way::of(automaton, first, prefix, cell);
+        let sets = plain.first_sets(automaton);
+        let (sought, rare, least, common) = Way::rarest(sets);
+        let way = plain.or_sets(sought, least, common, Way::scarce(rare));
+        let literal = match way {
+            Prefix => Option::Some { LiteralFinder::of_bytes(prefix) },
+            Literal => Option::Some { LiteralFinder::of_bytes(prefix) },
+            _ => Option::None
+        };
+        match way {
+            Sets => Searcher {
+                automaton,
+                way,
+                finder: ByteFinder::new(rare),
+                literal,
+                program: Option::None,
+                ends: Option::None,
+                reach: 0,
+                sets: Way::table(sets),
+                places: sets.len(),
+                sought
+            },
+            _ => Searcher {
+                automaton,
+                way,
+                finder: ByteFinder::new(first),
+                literal,
+                program: Option::None,
+                ends: Option::None,
+                reach: 0,
+                sets: array::splat<[u8; ?]>(0, 0),
+                places: 0,
+                sought: 0
+            }
+        }
+    }
+
+    /// The automaton of the rules, which matches from a given place.
+    pub fn automaton(self: Self) -> Automaton {
+        self.automaton
+    }
+}

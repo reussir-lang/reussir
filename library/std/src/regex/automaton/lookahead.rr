@@ -233,22 +233,39 @@ impl LoopOptimizer {
         }
     }
 
-    /// Adds the run of a state that stays on `set`, which is not empty: the
-    /// set itself when it is cheap, else its complement when that is, else
-    /// shuffle tables or a bit of the lookup table.
+    /// Adds the run that stays on `set`: the set itself when it is cheap,
+    /// else its complement when that is, else shuffle tables or a bit of
+    /// the lookup table. A run that stays on no byte has no vectors of its
+    /// own: it is the bytes outside the stretch of every byte.
     pub fn add(self: Self, set: Bits) -> Self {
         match vectors::few(set) {
-            Some(inside) => {
+            Some(inside) if !set.is_empty() => {
                 let (form, bytes) = vectors::vectors_of(inside);
                 self.push(encoding::inside(encoding::vector_word(form)), bytes)
             },
-            None => match vectors::few(set.complement()) {
+            _ => match vectors::few(set.complement()) {
                 Some(outside) => {
                     let (form, bytes) = vectors::vectors_of(outside);
                     self.push(encoding::vector_word(form), bytes)
                 },
                 None => self.add_wide(set)
             }
+        }
+    }
+
+    /// Adds the run that reads up to the first byte of `set`: it stays on
+    /// the other bytes. It is `add` of the other bytes, except that a set
+    /// that costs no more vectors than they do is compared with its own:
+    /// one byte is one vector, where the bytes around it are four.
+    pub fn add_up_to(self: Self, set: Bits) -> Self {
+        let others = set.complement();
+        match vectors::few(set) {
+            Some(outside) if !set.is_empty()
+                && vectors::cost(outside) <= vectors::cost(vectors::stretches(others)) => {
+                let (form, bytes) = vectors::vectors_of(outside);
+                self.push(encoding::vector_word(form), bytes)
+            },
+            _ => self.add(others)
         }
     }
 
@@ -268,13 +285,15 @@ impl LoopOptimizer {
     }
 
     /// The lookup tables one after another, 256 bytes each.
-    pub fn lookup(self: Self) -> Vec<u8> {
-        self.lookup
+    pub fn lookup(self: Self) -> [u8; ?] {
+        let marks = self.lookup;
+        array::tabulate<[u8; ?]>(marks.len(), |at: i64| marks.get_or(at as u64, 0))
     }
 
     /// The pairs of shuffle tables one after another.
-    pub fn nibbles(self: Self) -> Vec<u8> {
-        self.nibbles
+    pub fn nibbles(self: Self) -> [u8; ?] {
+        let pairs = self.nibbles;
+        array::tabulate<[u8; ?]>(pairs.len(), |at: i64| pairs.get_or(at as u64, 0))
     }
 }
 

@@ -1,13 +1,17 @@
 //! An automaton one step at a time: its states, where they lead, which
-//! rule accepts in them, and their runs.
+//! rule accepts in them, their runs, and how a match can begin: with
+//! which bytes, and with which bytes one after another.
 
 import core::intrinsic::array;
+import core::simd;
+import std::collections::cow::vec::Vec;
 import std::option::Option;
 import std::regex::alphabet::bits::Bits;
 import std::regex::automaton::Automaton;
 import std::regex::automaton::Run;
 import std::regex::automaton::State;
 import std::regex::automaton::encoding;
+import std::regex::automaton::native;
 import std::regex::automaton::vectors::stretches;
 
 impl Automaton {
@@ -51,6 +55,132 @@ impl Automaton {
         if kind >= 1 && kind <= 4 && place < array::dim(self.winners, 0) {
             Option::Some { array::get(self.winners, place as i64) }
         } else { Option::None }
+    }
+
+    /// The bytes that a match can begin with: those that do not lead the
+    /// start state to the dead state. A match of no bytes begins with none
+    /// of them: `accepts_empty` says whether there is one, at every place.
+    pub fn first_bytes(self: Self) -> Bits {
+        let (_, bytes) = while [byte = (0 as u64), bytes = Bits::empty()] (byte < 256) {
+            let bytes = if array::get(self.first, byte as i64) != 0 {
+                bytes.insert(byte)
+            } else {
+                bytes
+            };
+            (byte + 1, bytes)
+        };
+        bytes
+    }
+
+    /// Whether a rule matches no bytes: the start state accepts.
+    pub fn accepts_empty(self: Self) -> bool {
+        let kind = encoding::kind(self.start);
+        kind >= 1 && kind <= 4
+    }
+
+    /// The bytes that every match begins with: as many as all of them
+    /// share. They are the bytes on the way from the start state for as
+    /// long as its states do not accept and go on with one byte only:
+    ///
+    /// ```text
+    /// rule      "ab" [0-9]+ | "abc"
+    /// state     start   after a   after ab
+    /// goes on   a       b         0 to 9, c         the bytes: ab
+    /// ```
+    ///
+    /// A state that accepts ends them, since a match ends there. So do two
+    /// bytes that go on, whichever states they lead to. Rules that match
+    /// nothing have none, and neither have rules that match no bytes.
+    pub fn common_prefix(self: Self) -> [u8; ?] {
+        let (bytes, _) = self.forced();
+        bytes
+    }
+
+    /// Whether the rules match one string of bytes and no other. The
+    /// string is `common_prefix` then, and may have no bytes.
+    pub fn is_literal(self: Self) -> bool {
+        let (_, cell) = self.forced();
+        cell != 0
+    }
+
+    // The bytes on the way from the start state up to the first state that
+    // accepts or does not go on with just one byte, and the cell of that
+    // state when the rules match those bytes and nothing else: it accepts,
+    // and no byte goes on. Otherwise the cell is 0. A searcher asks for
+    // both at once. No state is on the way twice: the states between two
+    // times would lead only to each other and none of them accepts, so
+    // they would be the dead state. The way is still left after as many
+    // steps as there are states, so that it ends whatever the tables are.
+    fn forced(self: Self) -> ([u8; ?], u32) {
+        let (bytes, cell, _) = while [bytes = Vec::new(), cell = self.start, left = self.states()] (left > 0) {
+            let kind = encoding::kind(cell);
+            if kind >= 1 && kind <= 4 { (bytes, cell, 0) } else {
+                let (byte, next) = self.only(cell);
+                if byte == 256 { (bytes, cell, 0) } else {
+                    (bytes.push(byte as u8), next, left - 1)
+                }
+            }
+        };
+        let last = if encoding::kind(cell) == 1 { cell } else { 0 };
+        (array::tabulate<[u8; ?]>(bytes.len(), |at: i64| bytes.get_or(at as u64, 0)), last)
+    }
+
+    // The byte that the state of `cell` goes on with and the cell that it
+    // leads to, when the state goes on with just one byte; 256 when it
+    // goes on with none or with several. The row is read first, a cell
+    // for every column: the bytes are asked for their columns only when
+    // just one column goes on, to see whether it is the column of one
+    // byte.
+    fn only(self: Self, cell: u32) -> (u64, u32) {
+        let row = encoding::row(cell) as u64;
+        let none = self.columns;
+        let (_, column, to, _) = while [at = (0 as u64), column = none, to = (0 as u32), going = true] (going && at < none) {
+            let next = array::get(self.next, (row + at) as i64);
+            if next == 0 { (at + 1, column, to, true) } else {
+                if column == none {
+                    (at + 1, at, next, true)
+                } else {
+                    (at, none, 0, false)
+                }
+            }
+        };
+        if column == none { (256, to) } else { (self.sole(column), to) }
+    }
+
+    // The byte that has the column `column` when just one byte has it,
+    // and 256 otherwise. The columns of the bytes are compared sixteen at
+    // a time, to find the sixteen bytes that have such a byte, and how
+    // many sixteens do; with one, its bytes are asked one by one.
+    fn sole(self: Self, column: u64) -> u64 {
+        let classes = array::unsafe_data_ptr(self.classes);
+        let wanted = simd::splat<Simd<[u8; 16]>>(column as u8);
+        let (_, chunk, chunks) = while [at = (0 as u64), chunk = (0 as u64), chunks = (0 as u64)] (at < 256) {
+            let hit: Simd<[bool; 16]> = simd::eq(native::chunk_at(classes, at), wanted);
+            if simd::any(hit) {
+                (at + 16, at, chunks + 1)
+            } else {
+                (at + 16, chunk, chunks)
+            }
+        };
+        // How many of the sixteen bytes have the column, and the sum of
+        // them, which is the byte when there is one. They are read from
+        // the automaton, after the loop that read through the pointer:
+        // that keeps the columns until the loop is over.
+        let (_, count, sum) = while [byte = chunk, count = (0 as u64), sum = (0 as u64)] (byte < chunk + 16) {
+            if (array::get(self.classes, byte as i64) as u64) == column {
+                (byte + 1, count + 1, sum + byte)
+            } else {
+                (byte + 1, count, sum)
+            }
+        };
+        if chunks == 1 && count == 1 { sum } else { 256 }
+    }
+
+    // The table as it is: the cells row after row, the column of every
+    // byte, and the cell of the start state. `search::groups` copies them
+    // into one table of several automata, which it steps as `scan` does.
+    fn table(self: Self) -> ([u32; ?], [u8; 256], u32) {
+        (self.next, self.classes, self.start)
     }
 
     /// The bytes on which `state` stays in itself.
