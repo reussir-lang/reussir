@@ -46,6 +46,8 @@
 //! - `inspect`: an automaton one step at a time.
 //! - `lengths`: how long the shortest match from a place can be, and
 //!   whether a match can begin while another is on its way.
+//! - `places`: the bytes that a match can have at each of its first
+//!   places.
 //! - `ends`: the automaton that accepts where the first match ends,
 //!   wherever it began, made from a finished automaton.
 //! - `native`: the loops that read the bytes of the input through a
@@ -82,6 +84,7 @@ mod lengths;
 pub mod lookahead;
 pub mod native;
 mod pack;
+mod places;
 pub mod scan;
 mod shuffle;
 mod stream;

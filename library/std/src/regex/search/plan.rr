@@ -6,12 +6,15 @@
 //! that holds is the way:
 //!
 //! ```text
-//! a rule matches no bytes, or a match       every place is tried
-//! can begin with every byte
+//! a rule matches no bytes                   every place is tried
 //! the rules match one literal of two        the literal is sought, and
 //! bytes or more and nothing else            its places are the matches
 //! every match begins with the same two      those bytes are sought, and
 //! bytes or more                             the automaton matches there
+//! the bytes of a later place are rare,       those are sought, and the
+//! or far rarer than common first bytes      automaton matches where all
+//!                                           the first places fit
+//! every byte can begin a match              every place is tried
 //! otherwise                                 the next first byte is sought
 //! ```
 //!
@@ -29,13 +32,61 @@
 //! finder of those bytes is never asked, and every such place is tried
 //! with the automaton, as it was without them.
 //!
+//! The sets of the first places, up to eight, are sought when the one of
+//! the least weight, as `sets` weighs a set by the ranks of its bytes, is
+//! not the first, and
+//!
+//! ```text
+//! its weight is half that of the first set at most,
+//! and less than an eighth of a text,
+//! and the first set weighs an eighth of a text or more,
+//!     or every byte of the sought set is rare
+//! ```
+//!
+//! Half is on the near side of where seeking a later place was measured
+//! to stop paying, in English text and in source code. After a small
+//! letter, the four most common letters, which weigh under half of what
+//! the letters do, are sought a third to two fifths faster than the
+//! first bytes, the six most common a tenth to a sixth faster, the eight
+//! most common about as fast, and more of them slower, by up to a tenth,
+//! since about as many places are tried as there are first bytes and
+//! each costs the test of its sets besides. The eighth of the second
+//! line keeps a set that ordinary text is full of from being sought
+//! where the first set is so common that half of it still is, as after
+//! any byte. There the five most common letters and more, up to all of
+//! them, were sought a tenth to two fifths faster than every place is
+//! tried, since the test of a set costs less than the automaton does at
+//! a place that fails. That is left, so that no set that a text is full
+//! of is sought, and a searcher that would skip for such rules skips.
+//!
+//! The last condition is there because a weight is not a share of the
+//! text at hand, and is wrong by several times for single bytes. A first
+//! set that weighs an eighth or more is a class of letters or wider: a
+//! text is full of it, the finder of its bytes stops at every other
+//! place, and any later set of half the weight tries fewer places. Under
+//! an eighth the first bytes may well be rare in the text, and their
+//! finder then passes it as fast as any: seeking a later set that the
+//! text has more of was measured to cost up to nine tenths of the speed,
+//! as a point after a digit does in English text. So the later set is
+//! sought only when its bytes are rare by their ranks alone, which
+//! `sets` says: a `k` after `S` or `s`, and not a colon, a point or a
+//! hyphen after a digit, nor an `h` or an `x` after a capital. Those
+//! were faster in some texts, a date in source code two and a half
+//! times, and slower in others, the same date in English text by half.
+//! When the first set is the one of the least weight, its bytes are the
+//! first bytes, which are sought as they are: testing the other sets
+//! before the automaton is asked was not faster than asking it.
+//!
 //! A searcher that may build a second automaton, `Searcher::skipping`,
 //! skips where it would seek the first bytes or try every place, a match
 //! can begin while another is on its way, and the shortest match from a
 //! place can have five bytes or more: `skip` says what that does and why
-//! the literals are sought as they are.
+//! the literals are sought as they are. One that seeks the sets goes on
+//! seeking them under the same two conditions, with the second automaton
+//! for the places that fail.
 
 import core::intrinsic::array;
+import std::collections::pure::list::List;
 import std::regex::alphabet::bits::Bits;
 import std::regex::automaton::Automaton;
 import std::regex::automaton::scan;
@@ -62,8 +113,37 @@ impl Way {
         }
     }
 
-    // Whether a searcher that would seek this way skips instead, with
-    // the automaton of the ends of `automaton`: no literal is sought, a
+    // The sets of the first places of the matches of `automaton`, eight
+    // at most, for a searcher that would seek this way; none when it
+    // seeks a literal. The walk for them is left after 1024 states.
+    fn first_sets(self: Self, automaton: Automaton) -> List<Bits> {
+        match self {
+            Literal => List::Nil,
+            Prefix => List::Nil,
+            _ => automaton.first_sets(8, 1024)
+        }
+    }
+
+    // The way of a searcher that would seek this way, when the set of
+    // the least weight among the first places of a match is that of the
+    // place `sought` and weighs `least`, the set of the first place
+    // weighs `first`, and `scarce` says whether every byte of the sought
+    // set is rare: by the sets when the place is not the first, its
+    // weight is half that of the first at most and less than an eighth
+    // of a text, which is 8192 parts, and either the first set weighs
+    // that eighth or the sought bytes are rare.
+    fn or_sets(self: Self, sought: u64, least: u64, first: u64, scarce: bool) -> Way {
+        let lighter = sought > 0 && least < 8192 && least * 2 <= first;
+        if lighter && (first >= 8192 || scarce) {
+            Way::Sets
+        } else {
+            self
+        }
+    }
+
+    // Whether a searcher that would seek this way skips instead, or has
+    // its places bounded when it seeks the sets, with the automaton of
+    // the ends of `automaton`: no literal is sought, a
     // match can begin while another is on its way, and a place that
     // fails can have read four bytes or more, which it has when the
     // shortest match from a place can have five. A place that reads

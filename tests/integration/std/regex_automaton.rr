@@ -4,8 +4,9 @@
 // transitions on chosen strings, the rule that wins, a start state that is
 // dead, the bytes that a match can begin with and whether a rule matches no
 // bytes, the bytes that every match begins with and whether the rules match
-// them and nothing else, the limit on the number of states, the columns that
-// are shared, the
+// them and nothing else, the bytes that a match can have at each of its
+// first places, the limit on the number of states, the columns that are
+// shared, the
 // runs of states that stay in themselves, the lookup table that the runs
 // share, the longest match from a place of a text, over runs of every
 // form, whether a match begins at a place, the fold over the matches of a
@@ -30,7 +31,11 @@
 // match begins with with the matches that the trees find in a random string
 // and in that string after those bytes, and shows that they are no fewer
 // than all matches share: the trees match them, or two strings that the
-// steps find, which part right after them.
+// steps find, which part right after them. The fifth compares the bytes
+// that a match can have at each of its first places with the matches that
+// the trees find in a random string, and with the bytes that the steps of
+// the automaton go on with, place after place, for the number of places
+// and the limit that the input chooses.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_automaton %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}regex_automaton
@@ -44,6 +49,7 @@
 // CHECK-NEXT: regex automaton/dead states: unit
 // CHECK-NEXT: regex automaton/the first bytes: unit
 // CHECK-NEXT: regex automaton/the common prefix: unit
+// CHECK-NEXT: regex automaton/the first sets: unit
 // CHECK-NEXT: regex automaton/the limit: unit
 // CHECK-NEXT: regex automaton/shared columns: unit
 // CHECK-NEXT: regex automaton/runs: unit
@@ -57,6 +63,7 @@
 // CHECK-NEXT: regex automaton/the longest match & the steps (fuzz):
 // CHECK-NEXT: regex automaton/the first bytes & the trees (fuzz):
 // CHECK-NEXT: regex automaton/the common prefix & the trees (fuzz):
+// CHECK-NEXT: regex automaton/the first sets & the trees (fuzz):
 
 import core::intrinsic::array;
 import core::simd;
@@ -679,6 +686,135 @@ fn test_common_prefix() -> Outcome {
             false,
             "the first byte that some characters share"
         ))
+}
+
+fn same_sets(first: List<Bits>, second: List<Bits>) -> bool {
+    match first {
+        Nil => second.is_nil(),
+        Cons(set, rest) => match second {
+            Nil => false,
+            Cons(other, others) => set == other && same_sets(rest, others)
+        }
+    }
+}
+
+fn sets1(a: Bits) -> List<Bits> {
+    List::Cons { a, List::Nil }
+}
+
+fn sets2(a: Bits, b: Bits) -> List<Bits> {
+    List::Cons { a, sets1(b) }
+}
+
+fn sets3(a: Bits, b: Bits, c: Bits) -> List<Bits> {
+    List::Cons { a, sets2(b, c) }
+}
+
+// The set of the two bytes.
+fn pair(first: u64, second: u64) -> Bits {
+    Bits::single(first).insert(second)
+}
+
+// Whether the bytes that a match of `rules` can have at its first places,
+// `most` of them at most and with the limit `limit` on the states that are
+// walked, are `sets`.
+fn placed_sets(rules: List<ByteRegex>, most: u64, limit: u64, sets: List<Bits>, message: str) -> Outcome {
+    built(rules, 100, |automaton: Automaton| expect(same_sets(automaton.first_sets(most, limit), sets), message))
+}
+
+// `The` or `the`, or a digit and ` km`.
+fn the_or_km() -> List<ByteRegex> {
+    rule1(Regex::bytes(pair(84, 116)).then(word("he")).or(Regex::range(48, 57).then(word(" km"))))
+}
+
+// The places are as many as the shortest match has bytes: a state that
+// accepts ends them. Each has the bytes of all the states that are that
+// many steps from the start state, those of the rules together and of
+// what an intersection or a complement leaves. There are no more places
+// than are asked for, and none whose states are over the limit.
+fn test_first_sets() -> Outcome {
+    let digit = Regex::range(48, 57);
+    let lower = Regex::range(97, 122);
+    let letters = Bits::range(97, 122);
+    let first = pair(84, 116).union(Bits::range(48, 57));
+    let anything = Regex::bytes(Bits::full()).star();
+    let no_x = anything.then(Regex::byte(120)).then(anything).not();
+    placed_sets(the_or_km(), 8, 100, sets3(first, pair(104, 32), pair(101, 107)), "the shortest match has three bytes")
+        .and_then(|| placed_sets(the_or_km(), 2, 100, sets2(first, pair(104, 32)), "two places are asked for"))
+        .and_then(|| placed_sets(the_or_km(), 1, 100, sets1(first), "one place is asked for"))
+        .and_then(|| placed_sets(the_or_km(), 0, 100, List::Nil, "no place is asked for"))
+        .and_then(|| placed_sets(the_or_km(), 8, 0, List::Nil, "no state may be walked"))
+        .and_then(|| placed_sets(the_or_km(), 8, 1, sets1(first), "the start state alone may be walked"))
+        .and_then(|| placed_sets(the_or_km(), 8, 2, sets1(first), "the two states of the second place are one too many"))
+        .and_then(|| placed_sets(the_or_km(), 8, 3, sets2(first, pair(104, 32)), "three states: two places"))
+        .and_then(|| placed_sets(the_or_km(), 8, 4, sets2(first, pair(104, 32)), "four states: still two places"))
+        .and_then(|| placed_sets(the_or_km(), 8, 5, sets3(first, pair(104, 32), pair(101, 107)), "five states: all three places"))
+        .and_then(|| built(the_or_km(), 100, |automaton: Automaton| expect(
+            same_sets(automaton.first_sets(1, 100), sets1(automaton.first_bytes())),
+            "the first set is the first bytes"
+        )))
+        .and_then(|| placed_sets(
+            rule1(word("while")),
+            3,
+            100,
+            sets3(Bits::single(119), Bits::single(104), Bits::single(105)),
+            "the first three bytes of a literal"
+        ))
+        .and_then(|| built(rule1(word("while")), 100, |automaton: Automaton| should_be(automaton.first_sets(8, 100).len(), 5)))
+        .and_then(|| placed_sets(
+            rule1(word("ab").then(digit.plus()).or(word("abc"))),
+            8,
+            100,
+            sets3(Bits::single(97), Bits::single(98), Bits::range(48, 57).insert(99)),
+            "a match ends after three bytes and another goes on"
+        ))
+        // A state is walked for several places.
+        .and_then(|| placed_sets(
+            rule1(lower.plus().then(Regex::byte(33))),
+            8,
+            100,
+            sets2(letters, letters.insert(33)),
+            "letters and a mark: two places"
+        ))
+        .and_then(|| placed_sets(
+            rule1(lower.then(lower).then(lower.star()).then(Regex::byte(33))),
+            8,
+            100,
+            sets3(letters, letters, letters.insert(33)),
+            "two letters or more and a mark: three places"
+        ))
+        .and_then(|| placed_sets(
+            rules2(word("ab").then(lower), digit.then(Regex::byte(46)).then(digit).then(digit)),
+            8,
+            100,
+            sets3(Bits::single(97).union(Bits::range(48, 57)), pair(98, 46), letters.union(Bits::range(48, 57))),
+            "two rules: the shorter one ends the places"
+        ))
+        .and_then(|| placed_sets(
+            rule1(word("ab").then(Regex::range(99, 100)).and(word("abd").not())),
+            8,
+            100,
+            sets3(Bits::single(97), Bits::single(98), Bits::single(99)),
+            "what a complement leaves"
+        ))
+        .and_then(|| placed_sets(
+            rule1(lower.then(Regex::bytes(Bits::full())).then(anything).and(no_x)),
+            8,
+            100,
+            sets2(letters.subtract(Bits::single(120)), Bits::single(120).complement()),
+            "an intersection with a complement"
+        ))
+        .and_then(|| placed_sets(
+            rule1(Regex::char('é').then(digit)),
+            8,
+            100,
+            sets3(Bits::single(0xC3), Bits::single(0xA9), Bits::range(48, 57)),
+            "the two bytes of a character and a digit"
+        ))
+        .and_then(|| placed_sets(rule1(Regex::byte(97).star()), 8, 100, List::Nil, "a rule that matches no bytes"))
+        .and_then(|| placed_sets(rule1(Regex::epsilon()), 8, 100, List::Nil, "only no bytes"))
+        .and_then(|| placed_sets(rule1(lower.plus().and(digit.plus())), 8, 100, List::Nil, "rules that match nothing"))
+        .and_then(|| placed_sets(rule1(lower.plus()), 8, 100, sets1(letters), "a match of one byte: one place"))
 }
 
 // "an `a` seven bytes from the end" needs a state for every combination of
@@ -1531,6 +1667,117 @@ fn fuzz_prefix(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>
     }
 }
 
+// ------------------ Fuzz: the first sets against the trees ------------------
+
+// Whether every beginning of `string` that the trees match has as many
+// bytes as there are `sets` or more, each of the first ones in the set of
+// its place.
+fn within_sets(rules: List<ByteRegex>, string: List<u8>, sets: List<Bits>) -> bool {
+    let (_, sound) = while [count = 0, sound = true] (sound && count <= string.len()) {
+        let start = take(string, count);
+        (count + 1, matching(rules, start, 0).is_nil() || (count >= sets.len() && in_sets(start, sets)))
+    };
+    sound
+}
+
+// Whether the first bytes of `string` are in `sets`, one after another, as
+// many as there are sets and bytes.
+fn in_sets(string: List<u8>, sets: List<Bits>) -> bool {
+    match sets {
+        Nil => true,
+        Cons(set, rest) => match string {
+            Nil => true,
+            Cons(byte, bytes) => set.contains(byte as u64) && in_sets(bytes, rest)
+        }
+    }
+}
+
+// The states that a byte leads one of `states` to, each once; the bytes
+// that lead one of them to a state that is not dead; and whether a state
+// that they lead to accepts.
+fn stepped_on(automaton: Automaton, states: List<State>) -> (List<State>, Bits, bool) {
+    states.fold_left((List::Nil, Bits::empty(), false), |so_far: (List<State>, Bits, bool), state: State| {
+        let (found, bytes, ended) = so_far;
+        let (_, found, bytes, ended) = while [byte = (0 as u64), found = found, bytes = bytes, ended = ended] (byte < 256) {
+            let next = automaton.next(state, byte as u8);
+            if next == Automaton::dead() { (byte + 1, found, bytes, ended) } else {
+                let ended = ended || automaton.winner(next).is_some();
+                if found.contains(next) {
+                    (byte + 1, found, bytes.insert(byte), ended)
+                } else {
+                    (byte + 1, List::Cons { next, found }, bytes.insert(byte), ended)
+                }
+            }
+        };
+        (found, bytes, ended)
+    })
+}
+
+// The sets of the first places as the steps of the automaton give them:
+// the bytes that the states of a place go on with, up to `most` places, to
+// a state that accepts, or to a place whose states, with those before
+// them, are more than `limit`.
+fn stepped_sets(automaton: Automaton, most: u64, limit: u64) -> List<Bits> {
+    let start = automaton.start();
+    let begins = !(start == Automaton::dead()) && automaton.winner(start).is_none();
+    let (_, _, _, sets, _) = while [
+        states = List::Cons { start, List::Nil },
+        walked = (1 as u64),
+        left = most,
+        sets = List::Nil,
+        going = begins && most > 0 && limit > 0
+    ] (going) {
+        let (next, bytes, ended) = stepped_on(automaton, states);
+        let walked = walked + next.len();
+        (next, walked, left - 1, List::Cons { bytes, sets }, !ended && left > 1 && walked <= limit)
+    };
+    sets.reverse()
+}
+
+// The bytes that a match can have at its first places: every match of the
+// trees in a random string, and in that string without its first byte, has
+// them there and is no shorter than the places; and they are what the
+// steps of the automaton give, for eight places, and for the number of
+// places and the limit that the input chooses. An automaton of many states
+// is not walked.
+fn fuzz_sets(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8>, List<u8>), (List<char>, List<u8>))) -> Outcome {
+    let (sets, programs, probe) = input;
+    let (characters, tail) = probe;
+    let rules = rules_of(sets, programs);
+    let string = join(text(characters), tail);
+    let (most, limit) = match tail {
+        Cons(first, rest) => match rest {
+            Cons(second, _) => ((first as u64) % 10, (second as u64) % 12),
+            Nil => ((first as u64) % 10, 3)
+        },
+        Nil => (4, 1000)
+    };
+    match Automaton::build(rules, 400) {
+        // Too many states for this test: nothing to compare.
+        Err(_) => expect(true, "skipped"),
+        Ok(automaton) => {
+            let all = automaton.first_sets(8, 1000);
+            let walked = automaton.states() <= 32;
+            expect(
+                within_sets(rules, string, all) && within_sets(rules, rest_from(string, 1), all),
+                "a match of the trees has a byte that its place has not, or is shorter than the places"
+            )
+                .and_then(|| expect(
+                    !walked || same_sets(all, stepped_sets(automaton, 8, 1000)),
+                    "the sets are not the bytes that the steps go on with"
+                ))
+                .and_then(|| expect(
+                    !walked || same_sets(automaton.first_sets(most, limit), stepped_sets(automaton, most, limit)),
+                    "the sets of a few places or under a limit are not those of the steps"
+                ))
+                .and_then(|| expect(
+                    all.is_nil() || all.head().unwrap_or(Bits::empty()) == automaton.first_bytes(),
+                    "the first set is not the first bytes"
+                ))
+        }
+    }
+}
+
 fn suite() -> TestTree {
     TestTree::group("regex automaton")
         .with_case("a lexer", test_lexer)
@@ -1539,6 +1786,7 @@ fn suite() -> TestTree {
         .with_case("dead states", test_dead)
         .with_case("the first bytes", test_first_bytes)
         .with_case("the common prefix", test_common_prefix)
+        .with_case("the first sets", test_first_sets)
         .with_case("the limit", test_limit)
         .with_case("shared columns", test_shared)
         .with_case("runs", test_runs)
@@ -1611,6 +1859,22 @@ fn suite() -> TestTree {
                 tuple2(char_domain().utf8().list_with_len(0, 2), u8_domain().list_with_len(0, 2))
             ),
             fuzz_prefix
+        )
+        .with_fuzz(
+            "the first sets & the trees (fuzz)",
+            tuple3(
+                tuple2(
+                    tuple2(char_domain().utf8(), char_domain().utf8()).list_with_len(0, 3),
+                    tuple2(u8_domain(), u8_domain()).list_with_len(0, 3)
+                ),
+                tuple3(
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5),
+                    u8_domain().list_with_len(0, 5)
+                ),
+                tuple2(char_domain().utf8().list_with_len(0, 2), u8_domain().list_with_len(0, 2))
+            ),
+            fuzz_sets
         )
 }
 

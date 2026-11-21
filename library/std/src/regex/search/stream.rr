@@ -126,12 +126,26 @@ impl Searching {
         self.searcher.spotted(self.bytes, self.input.len(), at)
     }
 
+    // The next match of a stream that stands at the byte `at` when the
+    // sets are sought, as `Searcher::fitted` gives it. Such a match has
+    // bytes, so no match of none is passed over. As in `next_span`, no
+    // reference is counted.
+    fn next_fitted(self: Self, at: u64) -> (u32, u64, u64) {
+        self.searcher.fitted(self.bytes, self.input.len(), at)
+    }
+
     // The same as a match with its rule, for a searcher that does not
     // skip: the stream of one that skips asks `next_skipped`, which
     // keeps its credit. A literal that is all the rules match is found
     // without the automaton, and its rule is the first.
     fn next_match(self: Self, at: u64, ended: bool) -> Found {
         match self.searcher.way {
+            Sets => {
+                let (last, start, end) = self.next_fitted(at);
+                if last == 0 { Found::Nothing } else {
+                    Found::Matched { Match { rule: self.searcher.rule(last), start, end } }
+                }
+            },
             Literal => {
                 let (start, end) = self.next_place(at);
                 if start < end {
@@ -157,6 +171,7 @@ impl Searching {
         match self.searcher.way {
             Literal => self.count_places(at),
             Skip => self.count_skipped(at, barred),
+            Sets => self.count_fitted(at),
             _ => self.count_spans(at, barred)
         }
     }
@@ -181,6 +196,18 @@ impl Searching {
         let (_, _, count, _) = while [at = at, credit = credit, count = (0 as u64), going = true] (going) {
             let (last, _, end, credit) = self.next_skipped(at, credit);
             if last == 0 { (at, credit, count, false) } else { (end, credit, count + 1, true) }
+        };
+        count
+    }
+
+    // The same when the sets are sought: the next search begins at the
+    // end of the match before. The loop ends on the cell of no match and
+    // has no flag for it: with one, the loop of the literal above was
+    // built with two more values to carry for every match.
+    fn count_fitted(self: Self, at: u64) -> u64 {
+        let (_, count, _) = while [at = at, count = (0 as u64), last = (1 as u32)] (last != 0) {
+            let (last, _, end) = self.next_fitted(at);
+            (end, if last == 0 { count } else { count + 1 }, last)
         };
         count
     }

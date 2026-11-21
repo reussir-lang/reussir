@@ -296,7 +296,10 @@ impl Searcher {
             literal: self.literal,
             program,
             ends: self.ends,
-            reach: self.reach
+            reach: self.reach,
+            sets: self.sets,
+            places: self.places,
+            sought: self.sought
         }
     }
 

@@ -36,16 +36,34 @@
 //! match                      ----        the match, from 17 to 21
 //! ```
 //!
-//! A first byte that is within four places is tried as it is, whichever
-//! way the searcher seeks: reading on to it costs less than a finder. So
-//! the bytes are sought only from a place that has no first byte that
-//! near, as the `k` of `walk` is passed over from 0, and from 2 it would
-//! be tried. In a text where the first byte of those bytes is never more
-//! than four places away, they are not sought at all.
+//! A first byte that is within four places is tried as it is, whether
+//! the searcher seeks the first bytes or those that every match begins
+//! with: reading on to it costs less than a finder. So the bytes are
+//! sought only from a place that has no first byte that near, as the `k`
+//! of `walk` is passed over from 0, and from 2 it would be tried. In a
+//! text where the first byte of those bytes is never more than four
+//! places away, they are not sought at all.
+//!
+//! Where the matches share no such bytes, each of their first places
+//! still has its set of bytes. When the bytes of a later place are rare
+//! in ordinary text, or far rarer than first bytes that a text is full
+//! of, those are sought, at their place, and the automaton matches from
+//! the places whose bytes are all in their sets:
+//!
+//! ```text
+//! rule      [a-z] [a-z] : [0-9]
+//! text      see fig:2 or eq:17, not a:1
+//! seek      -------^                     a colon at 7, two places on
+//! match          ----                    the match, from 5 to 9
+//! ```
+//!
+//! No match is without a byte of that set at that place, so none is
+//! passed over. `plan` says when a set is sought.
 //!
 //! Which of these a searcher does is chosen once, when it is built, from
-//! the automaton alone: the bytes that the start state is forced through.
-//! So rules with an intersection or a complement are sought as any other.
+//! the automaton alone: the bytes that the start state is forced through,
+//! and the bytes that its states go on with, step after step. So rules
+//! with an intersection or a complement are sought as any other.
 //!
 //! A match may have no bytes, when a rule matches none. Then every place
 //! is the beginning of a match and nothing is sought. A match of no bytes
@@ -81,9 +99,12 @@
 //! - `rank`: how common every byte is.
 //! - `plan`: how a searcher seeks, chosen from its automaton.
 //! - `seek`: one search, the first match from a place.
+//! - `sets`: the sets of bytes that a match begins with, and the places
+//!   that have them.
 //! - `skip`: the text that holds no match, passed over in one reading.
 //! - `stream`: the matches of a text, pulled one after another.
 
+import core::intrinsic::array;
 import core::ptr::Generic;
 import std::collections::pure::list::List;
 import std::option::Option;
@@ -102,6 +123,7 @@ pub mod literal;
 mod plan;
 pub mod rank;
 mod seek;
+mod sets;
 mod skip;
 mod stream;
 
@@ -111,18 +133,25 @@ pub struct Searcher {
     automaton: Automaton,
     // How the next place to try is come to.
     way: Way,
-    // The finder of the bytes that a match can begin with.
+    // The finder of the bytes that a match can begin with; when the sets
+    // are sought, of the bytes of the sought place.
     finder: ByteFinder,
     // The finder of the bytes that every match begins with, when those
     // are what is sought.
     literal: Option<LiteralFinder>,
     // The questions that say the groups of a match, when a rule has one.
     program: Option<Program>,
-    // The automaton of the ends, when the searcher skips with it, and the
-    // greatest length that the shortest match from a place can have; the
-    // greatest number there is when the lengths have none.
+    // The automaton of the ends, when the searcher skips with it or
+    // bounds the places of the sets with it, and the greatest length that
+    // the shortest match from a place can have; the greatest number
+    // there is when the lengths have none, and 0 without the automaton.
     ends: Option<Automaton>,
-    reach: u64
+    reach: u64,
+    // When the sets are sought: for every byte, the places whose set has
+    // it, a bit each; how many places there are; and the sought one.
+    sets: [u8; ?],
+    places: u64,
+    sought: u64
 }
 
 /// How a searcher comes to the next place to try. It is chosen when the
@@ -142,6 +171,14 @@ pub enum [value] Way {
     /// and the first rule matches it. It is sought, and where it is, there
     /// is the match.
     Literal,
+    /// A match has two bytes or more, and the bytes that it can have at
+    /// one of its places after the first are rare, or far rarer than
+    /// first bytes that a text is full of. Those are sought, at that
+    /// place, and the automaton matches from where the bytes of all the
+    /// first places are in their sets. A searcher with a second
+    /// automaton asks it as one that skips does, when the places that
+    /// give no match cost more than the text that is passed.
+    Sets,
     /// The next first byte is sought and tried. When the places that
     /// give no match cost more than the text that is passed, a second
     /// automaton reads up to the first place where a match ends, and the
@@ -203,20 +240,40 @@ impl Searcher {
     pub fn new(automaton: Automaton) -> Searcher {
         let first = automaton.first_bytes();
         let (prefix, cell) = automaton.forced();
-        let way = Way::of(automaton, first, prefix, cell);
+        let plain = Way::of(automaton, first, prefix, cell);
+        let sets = plain.first_sets(automaton);
+        let (sought, rare, least, common) = Way::rarest(sets);
+        let way = plain.or_sets(sought, least, common, Way::scarce(rare));
         let literal = match way {
             Prefix => Option::Some { LiteralFinder::of_bytes(prefix) },
             Literal => Option::Some { LiteralFinder::of_bytes(prefix) },
             _ => Option::None
         };
-        Searcher {
-            automaton,
-            way,
-            finder: ByteFinder::new(first),
-            literal,
-            program: Option::None,
-            ends: Option::None,
-            reach: 0
+        match way {
+            Sets => Searcher {
+                automaton,
+                way,
+                finder: ByteFinder::new(rare),
+                literal,
+                program: Option::None,
+                ends: Option::None,
+                reach: 0,
+                sets: Way::table(sets),
+                places: sets.len(),
+                sought
+            },
+            _ => Searcher {
+                automaton,
+                way,
+                finder: ByteFinder::new(first),
+                literal,
+                program: Option::None,
+                ends: Option::None,
+                reach: 0,
+                sets: array::splat<[u8; ?]>(0, 0),
+                places: 0,
+                sought: 0
+            }
         }
     }
 

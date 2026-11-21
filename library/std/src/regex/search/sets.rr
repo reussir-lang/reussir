@@ -1,0 +1,302 @@
+//! Seeking by the sets of bytes that a match begins with.
+//!
+//! Where the matches do not all begin with the same bytes, each of their
+//! first places still has its set of bytes, as `Automaton::first_sets`
+//! gives them, and one of those sets may be far rarer in a text than the
+//! first. Its bytes are sought, that many places further on, and where
+//! one is found the other places are tested against their sets before
+//! the automaton is asked:
+//!
+//! ```text
+//! rule      [Ss]herlock [Hh]olmes
+//! sets      Ss  h  e  r  l  o  c  k
+//! sought    k, the place 7
+//!
+//! text      she saw Sherlock Holmes
+//! seek             --------^           a k at 15: a match may begin at 8
+//! sets              --------           each byte from 8 on is in its set
+//! match             ---------------    the match, from 8 to 23
+//! ```
+//!
+//! Every match has a byte of the sought set at that place, so no match is
+//! passed over, and the places are tried from left to right, so the match
+//! found is the first. A place that has a byte of every set need not have
+//! a match: the automaton says.
+//!
+//! How rare a set is in a text is not known when the searcher is built.
+//! `rank` orders the bytes by how common they are, and by the rule of
+//! Zipf the byte that is the `n`-th most common has about `1 / n` of the
+//! share of the most common one. So a byte of rank `r` is given the
+//! weight
+//!
+//! ```text
+//! 1 / (6.12 * (256 - r))        a blank 16 %, e 5 %, k 0.2 %
+//! ```
+//!
+//! and a set the sum over its bytes. The sought place is the one whose
+//! set has the least weight, the earliest of them; `plan` says when it is
+//! sought at all.
+//!
+//! A weight orders the sets; it is not the share that a set has of a
+//! text. 6.12 is the sum of `1 / n` up to 256, which would make the
+//! weights of all bytes one text if every rank were there once. The ranks
+//! are not: the bytes from 192 on all have the rank of the blank and so
+//! its weight, on purpose, and the weights of all bytes are eleven texts.
+//! And the weights of single bytes are off by several times either way:
+//! a point has 0.4 % and is 1 to 3 % of English text and of source code,
+//! the ten digits have 2.7 % and are 0.2 % of the one and 0.9 % of the
+//! other. So `plan` trusts a weight for no more than the ranks say: which
+//! bytes are rare, and which sets are common.
+//!
+//! As with the first bytes, four places are tested one by one before the
+//! finder is asked. The places are tested against a table of 256 bytes,
+//! a bit for each of up to eight sets.
+//!
+//! A place that fits and gives no match has cost what the automaton read
+//! from it, as any place that is tried, and a place that has a byte of
+//! the sought set and does not fit has cost its test. A searcher that was
+//! given a limit for a second automaton, and whose rules `skip` would
+//! skip for, keeps the account of `skip` for both: a place that does not
+//! fit pays as one that was tried and read no byte. Such places are
+//! counted while they are passed and paid for together, so up to sixteen
+//! more than the credit pays for are passed. When the credit does not
+//! pay, the automaton of the ends reads on to where a match ends, and the
+//! sets are sought again from the bound that this gives. Without that
+//! automaton the places can cost the square of the length:
+//! `[a-z]@[a-z@]+=` in `a@a@a@...` reads from every `a` to the end.
+
+import core::intrinsic::array;
+import core::ptr::Generic;
+import std::collections::pure::list::List;
+import std::regex::alphabet::bits::Bits;
+import std::regex::automaton::Found;
+import std::regex::automaton::Match;
+import std::regex::automaton::native;
+import std::regex::automaton::scan;
+import std::regex::search::Searcher;
+import std::regex::search::Way;
+import std::regex::search::rank;
+import std::regex::search::skip;
+import std::text::TextView;
+
+// The weight of `set` in parts of 65536: a part of 10701 for a byte of the
+// highest rank, which is 65536 / 6.12, and less by its place among the
+// ranks for every other.
+fn weight(set: Bits) -> u64 {
+    let (_, sum) = while [byte = (0 as u64), sum = (0 as u64)] (byte < 256) {
+        if set.contains(byte) {
+            (byte + 1, sum + 10701 / (256 - (rank::rank(byte as u8) as u64)))
+        } else {
+            (byte + 1, sum)
+        }
+    };
+    sum
+}
+
+impl Way {
+    // The place of `sets` whose set has the least weight, the earliest of
+    // them, with that set and its weight, and the weight of the set of
+    // the first place; the place 0 when there is no set.
+    fn rarest(sets: List<Bits>) -> (u64, Bits, u64, u64) {
+        let first = match sets {
+            Cons(set, _) => weight(set),
+            Nil => 0
+        };
+        let none = (0 as u64, 0 as u64, Bits::empty(), first);
+        let (_, place, set, least) = sets.fold_left(none, |best: (u64, u64, Bits, u64), set: Bits| {
+            let (at, place, rarest, least) = best;
+            let part = weight(set);
+            if part < least {
+                (at + 1, at, set, part)
+            } else {
+                (at + 1, place, rarest, least)
+            }
+        });
+        (place, set, least, first)
+    }
+
+    // Whether every byte of `set` is rare: below 128, and of a rank under
+    // 200. From that rank on a byte is held for common where one byte is
+    // chosen to be sought, as the `regex-syntax` crate of Rust seeks the
+    // first byte of its literals only under it (`hir::literal`): most
+    // small letters have such a rank, and the points, commas and
+    // brackets. A byte from 128 on is part of a character of several
+    // bytes, and a text in the script of that character is full of it.
+    fn scarce(set: Bits) -> bool {
+        let (_, all) = while [byte = (0 as u64), all = true] (all && byte < 256) {
+            (byte + 1, !set.contains(byte) || (byte < 128 && rank::rank(byte as u8) < 200))
+        };
+        all
+    }
+
+    // The table that the places are tested with: for every byte, the bit
+    // `i` says whether the byte is in the set of the place `i`. There are
+    // eight sets at most.
+    fn table(sets: List<Bits>) -> [u8; ?] {
+        array::tabulate<[u8; ?]>(256, |byte: i64| {
+            let (_, bits) = sets.fold_left((1 as u8, 0 as u8), |so_far: (u8, u8), set: Bits| {
+                let (bit, bits) = so_far;
+                if set.contains(byte as u64) {
+                    (bit << 1, bits | bit)
+                } else {
+                    (bit << 1, bits)
+                }
+            });
+            bits
+        })
+    }
+}
+
+impl Searcher {
+    // What `find` answers when the sets are sought.
+    fn found_fitting(self: Self, input: TextView, from: u64) -> Found {
+        let (last, start, end) = self.fitted(input.unsafe_data_ptr(), input.len(), from);
+        // As in `find`, the length is asked for again.
+        if last == 0 || end > input.len() { Found::Nothing } else {
+            Found::Matched { Match { rule: self.rule(last), start, end } }
+        }
+    }
+
+    // The first match that begins at the byte `from` of the `length`
+    // bytes at `bytes` or after it, as `sought` gives it, when the sets
+    // are sought: the automaton matches from the places whose first
+    // bytes are in their sets. A searcher that has the automaton of the
+    // ends keeps the account of `skip` for the places that fail, with
+    // the credit of a stream for every search: a place that the
+    // automaton tried pays as it does there, and a place that has a
+    // byte of the sought set and does not fit pays four, as one that
+    // was tried and read no byte. When the credit does not pay, that
+    // automaton reads on, and the places are tried again from the bound
+    // that it gives.
+    fn fitted(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64, u64) {
+        // The automaton is taken once, as in `sought`.
+        let automaton = self.automaton;
+        // A searcher has a reach when it has the automaton of the ends.
+        let bounded = self.reach > 0;
+        let (at, _, last, start, end, _, paid) = while [
+            at = from,
+            credit = skip::allowance(),
+            last = 0,
+            start = from,
+            end = from,
+            going = true,
+            paid = true
+        ] (going) {
+            // Sixteen places more than the credit pays for may fail to
+            // fit before the account is looked at again.
+            let most = credit / 4 + 16;
+            let (place, left) = self.fitting(bytes, length, at, most);
+            let earned = credit + (place - at);
+            let unfit = 4 * (most - left);
+            if left == 0 {
+                // None was found yet, and `place` is where to go on.
+                if earned >= unfit {
+                    (place, earned - unfit, last, start, end, true, true)
+                } else {
+                    // Without the automaton of the ends the search
+                    // goes on from where it is.
+                    (place, 0, last, start, end, !bounded, !bounded)
+                }
+            } else {
+                let (last, end, read) = scan::tried(automaton, bytes, length, place);
+                if last != 0 || place >= length { (at, credit, last, place, end, false, true) } else {
+                    let cost = unfit + 4 + (read - place) / 2;
+                    if earned + 1 >= cost {
+                        (place + 1, earned + 1 - cost, last, place, end, true, true)
+                    } else {
+                        (place + 1, 0, last, place, end, !bounded, !bounded)
+                    }
+                }
+            }
+        };
+        if paid { (last, start, end) } else {
+            let (found, low) = self.bound(bytes, length, at);
+            if found { self.fitted_on(bytes, length, low) } else { (0, from, from) }
+        }
+    }
+
+    // The same without an account: the search after the automaton of
+    // the ends has said that a match begins at `from` or after.
+    fn fitted_on(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> (u32, u64, u64) {
+        let automaton = self.automaton;
+        let (_, last, start, end, _) = while [at = from, last = 0, start = from, end = from, going = true] (going) {
+            // However many places do not fit.
+            let (place, _) = self.fitting(bytes, length, at, 18446744073709551615);
+            let (last, end) = scan::scan(automaton, bytes, length, place);
+            if last == 0 && place < length {
+                (place + 1, last, place, end, true)
+            } else {
+                (place, last, place, end, false)
+            }
+        };
+        (last, start, end)
+    }
+
+    // The next place to try from `at` when the sets are sought: the
+    // first one from `at` on whose bytes are in the sets of their
+    // places, as many as there are sets. The end of the bytes when there
+    // is none, or when `at` is past it, `at` itself. No more than
+    // `most` places that have a byte of the sought set and do not fit
+    // are passed, of which there is one at least. With the place, how
+    // many of them are left: when none is, the place is the one after
+    // the last that did not fit, and need not fit itself.
+    fn fitting(self: Self, bytes: ConstPtr<Generic>, length: u64, at: u64, most: u64) -> (u64, u64) {
+        let places = self.places;
+        if at >= length || length - at < places {
+            // No match has room.
+            (if at > length { at } else { length }, most)
+        } else {
+            let sought = self.sought;
+            // The last place where a match has room.
+            let last = length - places;
+            let (place, left, _) = while [at = at, left = most, going = true] (going) {
+                let hit = self.hit(bytes, length, at + sought);
+                // Without a byte of the sought set there is no place,
+                // and none after the last.
+                if hit >= length || hit - sought > last { (length, left, false) } else {
+                    if self.fits(bytes, hit - sought) {
+                        (hit - sought, left, false)
+                    } else {
+                        (hit - sought + 1, left - 1, left > 1)
+                    }
+                }
+            };
+            (place, left)
+        }
+    }
+
+    // The first byte of the sought set at the byte `from` or after it,
+    // which is not past the end; the end when there is none. Four bytes
+    // are tested one by one before the finder is asked.
+    fn hit(self: Self, bytes: ConstPtr<Generic>, length: u64, from: u64) -> u64 {
+        let sought = self.sought;
+        let (near, left) = while [near = from, left = (4 as u64)] (
+            left > 0 && near < length && !self.has(native::byte_at(bytes, near), sought)
+        ) {
+            (near + 1, left - 1)
+        };
+        if left == 0 {
+            self.finder.unsafe_find(bytes, length, near)
+        } else {
+            near
+        }
+    }
+
+    // Whether the bytes from `start` on are in the sets of their places.
+    // As many bytes as there are sets are there to read.
+    fn fits(self: Self, bytes: ConstPtr<Generic>, start: u64) -> bool {
+        let places = self.places;
+        let (_, all) = while [place = (0 as u64), all = true] (all && place < places) {
+            (place + 1, self.has(native::byte_at(bytes, start + place), place))
+        };
+        all
+    }
+
+    // Whether `byte` is in the set of `place`. The table has 256 bytes
+    // when the sets are sought, so it is read without a test of the
+    // place in it.
+    fn has(self: Self, byte: u8, place: u64) -> bool {
+        let table = array::unsafe_data_ptr(self.sets);
+        (((native::byte_at(table, byte as u64) as u64) >> place) & 1) != 0
+    }
+}

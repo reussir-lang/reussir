@@ -998,7 +998,8 @@ fn way_number(searcher: Searcher) -> u64 {
         FirstBytes => 1,
         Prefix => 2,
         Literal => 3,
-        Skip => 4
+        Skip => 4,
+        Sets => 5
     }
 }
 

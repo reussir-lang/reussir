@@ -20,6 +20,7 @@ impl Searcher {
     pub fn find(self: Self, input: TextView, from: u64) -> Found {
         match self.way {
             Literal => self.found_alone(input, from),
+            Sets => self.found_fitting(input, from),
             _ => {
                 // A searcher that skips has the match by now, or the
                 // place to seek on from.
@@ -62,7 +63,8 @@ impl Searcher {
     /// place that has a match, it does not wait for the end of the longest
     /// one. The places that have none cost what they cost `find`. A
     /// searcher that skips reads up to the first place where a match ends,
-    /// every byte once, and tries no place.
+    /// every byte once, and tries no place. One that seeks the sets finds
+    /// the first match as `find` does.
     pub fn is_match(self: Self, input: TextView, from: u64) -> bool {
         let found = match self.way {
             Literal => {
@@ -72,6 +74,10 @@ impl Searcher {
             Skip => {
                 let (found, _, _) = self.ending(input.unsafe_data_ptr(), input.len(), from);
                 found
+            },
+            Sets => {
+                let (last, _, _) = self.fitted(input.unsafe_data_ptr(), input.len(), from);
+                last != 0
             },
             _ => self.any(input.unsafe_data_ptr(), input.len(), from)
         };

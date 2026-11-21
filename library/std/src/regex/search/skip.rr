@@ -100,6 +100,13 @@
 //! would be asked for every such place to say what the next place says
 //! as fast. The literal that every match begins with is sought as before,
 //! whatever follows it.
+//!
+//! A searcher that seeks the sets of the first places, as `sets` has it,
+//! keeps doing so under those two conditions, and keeps this account for
+//! the places that it tries, with the credit of a stream for every
+//! search: the automaton of the ends reads on from the first place that
+//! the credit does not pay for, and the sets are sought again from the
+//! bound.
 
 import core::ptr::Generic;
 import std::option::Option;
@@ -118,16 +125,23 @@ pub fn allowance() -> u64 {
 impl Searcher {
     /// The searcher of the rules of `automaton` that skips with the
     /// automaton of the ends when that serves its rules, as `Way::Skip`
-    /// says. The search for the states of the automaton of the ends gives
-    /// up when it has found more than `limit` of them, and the searcher
-    /// then seeks as that of `new` does.
+    /// says, or bounds with it the places that it seeks by their sets,
+    /// as `Way::Sets` says. The search for the states of the automaton
+    /// of the ends gives up when it has found more than `limit` of them,
+    /// and the searcher then seeks as that of `new` does.
     pub fn skipping(automaton: Automaton, limit: u64) -> Searcher {
         let plain = Searcher::new(automaton);
         if plain.way.gains(automaton) {
             match automaton.ends(limit) {
                 Ok(ends) => Searcher {
                     automaton,
-                    way: Way::Skip,
+                    // A searcher that seeks the sets goes on seeking
+                    // them, and has the automaton of the ends for the
+                    // places that its credit does not pay for.
+                    way: match plain.way {
+                        Sets => Way::Sets,
+                        _ => Way::Skip
+                    },
                     finder: plain.finder,
                     literal: plain.literal,
                     program: plain.program,
@@ -135,7 +149,10 @@ impl Searcher {
                     reach: match automaton.shortest_lengths() {
                         Within(_, greatest) => greatest,
                         _ => 18446744073709551615
-                    }
+                    },
+                    sets: plain.sets,
+                    places: plain.places,
+                    sought: plain.sought
                 },
                 Err(_) => plain
             }
