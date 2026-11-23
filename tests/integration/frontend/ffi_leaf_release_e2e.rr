@@ -1,0 +1,61 @@
+// UNSUPPORTED: darwin
+// A Rust `Vec` drops Reussir boxes through the `_ffi_release` glue. A box
+// whose payload is trivially copyable (a record of scalars, an enum of
+// scalars with nullary arms) is released in place; one that holds another
+// box still enters a destruction scope.
+
+// RUN: %rrc %s -t llvm-ir -Oaggressive -o %t.ll
+// RUN: %FileCheck %s --check-prefix=LEAF --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=COLOR --input-file=%t.ll
+// RUN: %FileCheck %s --check-prefix=HELD --input-file=%t.ll
+// RUN: %rrc %s -o %t.o --relocation-mode pic
+// RUN: %cc %t.o %S/ffi_leaf_release_e2e.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.exe
+// RUN: %rrc %s -o %t.opt.o --relocation-mode pic -Oaggressive --drop-order forward
+// RUN: %cc %t.opt.o %S/ffi_leaf_release_e2e.c -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: %t.opt.exe
+
+extern "rust" [{
+    use reussir_rt::collections::vec::Vec as RVec;
+}];
+
+#[ffi(rust = "::reussir_rt::collections::vec::Vec")]
+pub struct Vec<T>;
+
+pub struct Leaf { a: i64, b: f64 }
+pub enum Color { Red, Green, Rgb(i64) }
+pub struct Held { leaf: Leaf }
+
+#[ffi(import)]
+pub fn new<T>() -> Vec<T> [{ RVec::new() }];
+
+#[ffi(import)]
+pub fn push<T>(v: Vec<T>, x: T) -> Vec<T> [{ RVec::push(v, x) }];
+
+// Clones the vector, which retains every element, and drops both copies.
+#[ffi(import)]
+pub fn count<T>(v: Vec<T>) -> i64 [{
+    let w = v.clone().push(v.get(0).unwrap());
+    (v.len() + w.len()) as i64
+}];
+
+pub fn main() -> i64 {
+    let leaves = push(push(new<Leaf>(), Leaf { a: 1, b: 2.0 }), Leaf { a: 3, b: 4.0 });
+    let colors = push(push(push(new<Color>(), Color::Red), Color::Rgb{7}), Color::Green);
+    let held = push(new<Held>(), Held { leaf: Leaf { a: 5, b: 6.0 } });
+    count(leaves) * 100 + count(colors) * 10 + count(held)
+}
+
+extern "C" trampoline "reussir_main" = main;
+
+// LEAF: define {{.*}}4Leaf_ffi_release.backward(
+// LEAF-NOT: __reussir_drop_join_or_run
+// LEAF: {{^}}}
+
+// COLOR: define {{.*}}5Color_ffi_release.backward(
+// COLOR-NOT: __reussir_drop_join_or_run
+// COLOR: {{^}}}
+
+// HELD: define {{.*}}4Held_ffi_release.backward(
+// HELD: __reussir_drop_join_or_run
+// HELD: {{^}}}
