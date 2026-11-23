@@ -6,8 +6,10 @@
 // runs of states that stay in themselves, the lookup table that the runs
 // share, the longest match from a place of a text, over runs of every
 // form, the fold over the matches of a text, and the stream that the
-// matches of a text are pulled from. A name is tested with shuffle tables or
-// with the lookup table, as the target has it.
+// matches of a text are pulled from, and compare the automaton of rules
+// with groups, state by state, with that of the same rules without them.
+// A name is tested with shuffle tables or with the lookup table, as the
+// target has it.
 // The first fuzz target builds the automaton of three random rules and
 // compares the longest match that its steps find in a random string, and
 // the rule that wins on the whole string, with a small matcher on the trees
@@ -34,6 +36,7 @@
 // CHECK-NEXT: regex automaton/the longest match: unit
 // CHECK-NEXT: regex automaton/the fold: unit
 // CHECK-NEXT: regex automaton/the stream: unit
+// CHECK-NEXT: regex automaton/rules with groups: unit
 // CHECK-NEXT: regex automaton/automaton & the trees (fuzz):
 // CHECK-NEXT: regex automaton/the longest match & the steps (fuzz):
 
@@ -902,6 +905,75 @@ fn fuzz_longest(input: ((List<(char, char)>, List<(u8, u8)>), (List<u8>, List<u8
     }
 }
 
+// The rule that accepts in `state`, or a number that no rule has.
+fn winner_of(automaton: Automaton, state: State) -> u64 {
+    match automaton.winner(state) {
+        Some(rule) => rule as u64,
+        None => 0xFFFFFFFFFFFFFFFF
+    }
+}
+
+// Whether two automata have the same states, with the same numbers,
+// leading to the same states on every byte and accepting for the same
+// rules: `pending` are the states still to compare, `seen` those that
+// were.
+fn same_states(first: Automaton, second: Automaton, pending: List<State>, seen: List<State>) -> bool {
+    match pending {
+        Nil => true,
+        Cons(state, rest) => {
+            let (_, alike, pending, seen) = while [
+                byte = (0 as u64),
+                alike = winner_of(first, state) == winner_of(second, state),
+                pending = rest,
+                seen = seen
+            ] (alike && byte < 256) {
+                let next = first.next(state, byte as u8);
+                if next == second.next(state, byte as u8) {
+                    if seen.contains(next) {
+                        (byte + 1, true, pending, seen)
+                    } else {
+                        (byte + 1, true, List::Cons { next, pending }, List::Cons { next, seen })
+                    }
+                } else {
+                    (byte, false, pending, seen)
+                }
+            };
+            alike && same_states(first, second, pending, seen)
+        }
+    }
+}
+
+// Whether the automaton of `marked` is that of `plain`.
+fn same_automaton(marked: List<Regex>, plain: List<Regex>) -> bool {
+    match (Automaton::build(marked.map(|rule: Regex| rule.to_bytes()), 400), Automaton::build(plain.map(|rule: Regex| rule.to_bytes()), 400)) {
+        (Ok(first), Ok(second)) => {
+            let start = first.start();
+            first.states() == second.states() && first.columns() == second.columns() && start == second.start()
+                && same_states(first, second, List::Cons { start, List::Nil }, List::Cons { start, List::Nil })
+        },
+        _ => false
+    }
+}
+
+// The automaton of rules with groups is the automaton of the same rules
+// written without them.
+fn test_groups() -> Outcome {
+    let digits = Regex::range(48, 57).plus();
+    let letters = Regex::range(97, 122).plus();
+    let dash = Regex::byte(45);
+    let date = digits.group().then(dash).then(digits.group()).then(dash).then(digits.group());
+    let plain_date = digits.then(dash).then(digits).then(dash).then(digits);
+    let pair = letters.group().then(Regex::byte(61)).then(digits.group().or(letters)).group().then(Regex::byte(59)).plus();
+    let plain_pair = letters.then(Regex::byte(61)).then(digits.or(letters)).then(Regex::byte(59)).plus();
+    let one = |rule: Regex| List::Cons { rule, List::Nil };
+    expect(same_automaton(one(date), one(plain_date)), "three groups one after another")
+        .and_then(|| expect(
+            same_automaton(List::Cons { pair, one(date) }, List::Cons { plain_pair, one(plain_date) }),
+            "groups inside groups, in a branch and in a repetition"
+        ))
+        .and_then(|| expect(!same_automaton(one(date), one(pair)), "and not the automaton of other rules"))
+}
+
 fn suite() -> TestTree {
     TestTree::group("regex automaton")
         .with_case("a lexer", test_lexer)
@@ -915,6 +987,7 @@ fn suite() -> TestTree {
         .with_case("the longest match", test_longest)
         .with_case("the fold", test_fold)
         .with_case("the stream", test_stream)
+        .with_case("rules with groups", test_groups)
         .with_fuzz(
             "automaton & the trees (fuzz)",
             tuple3(
