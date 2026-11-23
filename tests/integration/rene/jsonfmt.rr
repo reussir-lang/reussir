@@ -1,0 +1,61 @@
+// A JSON formatter as a standalone program on the `std` and `regex`
+// packages: the tokens come from a lexer of `regex::lexer` whose rules have
+// actions (a constant for each sign and word, the view of the match for a
+// number and a string, none for white space), a recursive-descent parser
+// pulls them from the stream, and `std::format` lays the tree out in 80
+// columns. The program reads stdin and writes stdout; a text that is not
+// JSON is reported on stderr with its line and column.
+
+// RUN: %rene build --manifest-path %S/jsonfmt/rene.ncl --build-dir %t.bdir %rrc_linker | %FileCheck %s --check-prefix=LISTING
+
+// LISTING: {{[/\\]}}dev{{[/\\]}}jsonfmt
+
+// A group that fits stays on its line, one that does not puts every element
+// on a line of its own, and each group decides for itself. Numbers and
+// strings are written back as they were.
+// RUN: %t.bdir/dev/jsonfmt%exe_ext < %S/jsonfmt/example.json > %t.out
+// RUN: %FileCheck %s --strict-whitespace < %t.out
+
+// CHECK:{{^}}{
+// CHECK-NEXT:{{^}}  "name": "réussir",
+// CHECK-NEXT:{{^}}  "version": [0, 1, 0],
+// CHECK-NEXT:{{^}}  "tags": [],
+// CHECK-NEXT:{{^}}  "meta": {},
+// CHECK-NEXT:{{^}}  "numbers": [-0, 3.25, 1e10, -12.5E-3, 6.02e+23],
+// CHECK-NEXT:{{^}}  "escapes": "tab\t quote\" slash\/ \u00e9 \\",
+// CHECK-NEXT:{{^}}  "flags": {"debug": true, "release": false, "target": null},
+// CHECK-NEXT:{{^}}  "matrix": {{\[}}[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+// CHECK-NEXT:{{^}}  "packages": [
+// CHECK-NEXT:{{^}}    {
+// CHECK-NEXT:{{^}}      "name": "std",
+// CHECK-NEXT:{{^}}      "path": "library/std",
+// CHECK-NEXT:{{^}}      "features": ["regex", "format", "collections"]
+// CHECK-NEXT:{{^}}    },
+// CHECK-NEXT:{{^}}    {"name": "test", "path": "library/test", "features": []}
+// CHECK-NEXT:{{^}}  ]
+// CHECK-NEXT:{{^}}}
+
+// What the formatter wrote is JSON that it writes the same way again.
+// RUN: %t.bdir/dev/jsonfmt%exe_ext < %t.out | %FileCheck %s --strict-whitespace
+
+// A token where the grammar has none, a text that ends inside a value, a
+// byte that begins no token, a second value after the first, and a member
+// whose name is a number.
+// RUN: %not %t.bdir/dev/jsonfmt%exe_ext < %S/jsonfmt/misplaced.json 2>&1 | %FileCheck %s --check-prefix=MISPLACED
+// RUN: %not %t.bdir/dev/jsonfmt%exe_ext < %S/jsonfmt/ended.json 2>&1 | %FileCheck %s --check-prefix=ENDED
+// RUN: %not %t.bdir/dev/jsonfmt%exe_ext < %S/jsonfmt/unmatched.json 2>&1 | %FileCheck %s --check-prefix=UNMATCHED
+// RUN: %not %t.bdir/dev/jsonfmt%exe_ext < %S/jsonfmt/trailing.json 2>&1 | %FileCheck %s --check-prefix=TRAILING
+// RUN: %not %t.bdir/dev/jsonfmt%exe_ext < %S/jsonfmt/name.json 2>&1 | %FileCheck %s --check-prefix=NAME
+
+// MISPLACED: jsonfmt: line 2, column 3: this token cannot be here
+// ENDED: jsonfmt: line 1, column 6: the text ends before the value does
+// UNMATCHED: jsonfmt: line 1, column 7: no token of JSON begins here
+// TRAILING: jsonfmt: line 1, column 5: this token cannot be here
+// NAME: jsonfmt: line 1, column 2: this token cannot be here
+
+// The release profile is the same formatter.
+// RUN: %rene build --manifest-path %S/jsonfmt/rene.ncl --build-dir %t.bdir --profile release %rrc_linker | %FileCheck %s --check-prefix=RELEASE
+// RUN: %t.bdir/release/jsonfmt%exe_ext < %S/jsonfmt/example.json | %FileCheck %s --strict-whitespace
+// RUN: %not %t.bdir/release/jsonfmt%exe_ext < %S/jsonfmt/misplaced.json 2>&1 | %FileCheck %s --check-prefix=MISPLACED
+
+// RELEASE: {{[/\\]}}release{{[/\\]}}jsonfmt
