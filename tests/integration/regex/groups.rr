@@ -2,7 +2,9 @@
 // bytes of a match that each marked part of its rule took.
 // Unit cases take the groups of parts one after another, where an earlier
 // part takes the most bytes it can, with a group or without one and
-// however `then` nests them; of parts with complements and intersections
+// however `then` nests them; of branches, where the earliest that
+// matches the bytes is taken and the groups of the others are absent,
+// however `or` nests them; of parts with complements and intersections
 // inside a group and beside it; of characters of several bytes; of rules
 // with different numbers of groups, for the matches of their automaton;
 // of long matches, where many beginnings are alive; of a text that is a
@@ -28,6 +30,7 @@
 
 // CHECK:      regex groups/parts one after another: unit
 // CHECK-NEXT: regex groups/the earlier part takes the most: unit
+// CHECK-NEXT: regex groups/one or the other: unit
 // CHECK-NEXT: regex groups/complements and intersections: unit
 // CHECK-NEXT: regex groups/characters: unit
 // CHECK-NEXT: regex groups/the matches of an automaton: unit
@@ -160,11 +163,12 @@ fn marks(regex: Regex) -> u64 {
 }
 
 // Whether `regex` has a misplaced group: one under something other than
-// parts one after another and groups.
+// parts one after another, branches and groups.
 fn hidden(regex: Regex) -> bool {
     match regex {
         Group(inner) => hidden(inner),
         Concat(a, b) => hidden(a) || hidden(b),
+        Union(a, b) => hidden(a) || hidden(b),
         // Anything else.
         _ => marks(regex) > 0
     }
@@ -214,6 +218,11 @@ fn spans(regex: Regex, bytes: List<u8>, from: u64, to: u64, after: List<(u64, u6
     match regex {
         Group(inner) => List::Cons { (from, to), spans(inner, bytes, from, to, after) },
         Concat(_, _) => spans_of_parts(parts(regex, List::Nil), bytes, from, to, after),
+        Union(one, other) => if within(one.to_bytes(), bytes, 0, from, to) {
+            spans(one, bytes, from, to, blank(marks(other), after))
+        } else {
+            blank(marks(one), spans(other, bytes, from, to, after))
+        },
         // Nothing else has a group that is not misplaced.
         _ => blank(marks(regex), after)
     }
@@ -473,6 +482,81 @@ fn test_most() -> Outcome {
         }))
 }
 
+// The letters from `a` to `e`, each once or more as a group, as branches
+// put together from the left or from the right.
+fn five(left: bool) -> Regex {
+    let letter = |byte: u8| Regex::byte(byte).plus().group();
+    if left {
+        letter(97).or(letter(98)).or(letter(99)).or(letter(100)).or(letter(101))
+    } else {
+        letter(97).or(letter(98).or(letter(99).or(letter(100).or(letter(101)))))
+    }
+}
+
+// Of the branches of a union the earliest that matches the bytes is
+// taken, and the groups of the others are absent.
+fn test_branches() -> Outcome {
+    let either = rules1(a().plus().group().or(a().or(b()).plus().group()));
+    built(either, |groups: Groups| {
+        let one = whole(groups, "aa");
+        let other = whole(groups, "ab");
+        expect(one.len() == 3 && has(one, 1, 0, 2) && lacks(one, 2), "both match: the first is taken")
+            .and_then(|| expect(lacks(other, 1) && has(other, 2, 0, 2), "the second, where the first does not match"))
+            .and_then(|| expect(agrees(groups, either, Text::from_str("aa ab ba a").view(), 10), "as the trees have them"))
+    })
+        // `optional` is the empty string first: a group that may be left
+        // out is absent where it has no bytes.
+        .and_then(|| built(rules1(a().star().group().optional().then(b())), |groups: Groups| {
+            let with = whole(groups, "ab");
+            let without = whole(groups, "b");
+            expect(has(with, 1, 0, 1), "the group, where it has a byte")
+                .and_then(|| expect(has(without, 0, 0, 1) && lacks(without, 1), "absent where it has none"))
+        }))
+        // The other way round, the group comes first.
+        .and_then(|| built(rules1(a().star().group().or(Regex::epsilon()).then(b())), |groups: Groups| {
+            let without = whole(groups, "b");
+            expect(has(without, 1, 0, 0), "a group of no bytes, as the first branch")
+        }))
+        // The first branch does not match bytes that it could go on
+        // from.
+        .and_then(|| built(rules1(word("ab").group().or(a().group())), |groups: Groups| {
+            let taken = whole(groups, "a");
+            expect(has(taken, 0, 0, 1) && lacks(taken, 1) && has(taken, 2, 0, 1), "half of the first branch is the second")
+        }))
+        // Three branches, and a group in the middle one only.
+        .and_then(|| built(rules1(word("x").or(letters().group().then(digits())).or(digits())), |groups: Groups| {
+            let middle = whole(groups, "ab12");
+            let last = whole(groups, "12");
+            expect(has(middle, 0, 0, 4) && has(middle, 1, 0, 2), "the middle branch")
+                .and_then(|| expect(has(last, 0, 0, 2) && lacks(last, 1), "the last branch has no group"))
+        }))
+        // Five branches are one question, however they are nested, and
+        // need a state for each and two more.
+        .and_then(|| built(rules1(five(true)), |left: Groups| built(rules1(five(false)), |right: Groups| {
+            let taken = whole(left, "ccc");
+            let same = whole(right, "ccc");
+            let last = whole(right, "e");
+            expect(taken.len() == 6 && has(taken, 3, 0, 3) && lacks(taken, 1) && lacks(taken, 2) && lacks(taken, 4) && lacks(taken, 5), "the third of five")
+                .and_then(|| expect(has(same, 3, 0, 3) && lacks(same, 2) && lacks(same, 4), "nested from the right"))
+                .and_then(|| expect(has(last, 5, 0, 1) && lacks(last, 1) && lacks(last, 3), "the last of five"))
+                .and_then(|| should_be(left.states(), 7))
+                .and_then(|| should_be(right.states(), 7))
+        })))
+        // A union inside a branch, and parts inside a branch: in
+        // `((a) | b (c)) | (b)` on `bc` the group of `c` is there, and
+        // on `b` only the last group.
+        .and_then(|| {
+            let rule = a().group().or(b().then(Regex::byte(99).group())).group().or(b().group());
+            built(rules1(rule), |groups: Groups| {
+                let inner = whole(groups, "bc");
+                let outer = whole(groups, "b");
+                expect(has(inner, 1, 0, 2) && lacks(inner, 2) && has(inner, 3, 1, 2) && lacks(inner, 4), "a branch inside a branch")
+                    .and_then(|| expect(lacks(outer, 1) && lacks(outer, 2) && lacks(outer, 3) && has(outer, 4, 0, 1), "the last branch"))
+                    .and_then(|| expect(agrees(groups, rules1(rule), Text::from_str("abcb").view(), 4), "branches in branches, as the trees have them"))
+            })
+        })
+}
+
 // Inside a group and beside it, a part may be any regex: the groups are
 // asked of automata.
 fn test_complements() -> Outcome {
@@ -612,6 +696,15 @@ fn test_foreign() -> Outcome {
             let taken = groups.fill(Text::from_str("ab").view(), Match { rule: 0, start: 0, end: 2 });
             expect(loose(taken, 0, 2) && lacks(taken, 1) && lacks(taken, 2) && lacks(taken, 3), "a group without an end")
         }))
+        // Bytes that no branch matches.
+        .and_then(|| built(rules1(a().group().or(b().group())), |groups: Groups| {
+            let taken = whole(groups, "c");
+            expect(taken.len() == 3 && has(taken, 0, 0, 1) && lacks(taken, 1) && lacks(taken, 2), "no branch")
+        }))
+        .and_then(|| built(rules1(word("ab").group().or(Regex::byte(99).group())), |groups: Groups| {
+            let taken = whole(groups, "a");
+            expect(has(taken, 0, 0, 1) && lacks(taken, 1) && lacks(taken, 2), "half a branch is no branch")
+        }))
 }
 
 // Whether `groups` are those of the bytes from `start` to `end`, each
@@ -656,7 +749,8 @@ fn test_refused() -> Outcome {
         .and_then(|| should_be(refusal(rules2(fine, under_and), 400), 3))
         .and_then(|| should_be(refusal(List::Cons { fine, rules2(date(), deep) }, 400), 4))
         .and_then(|| should_be(refusal(rules1(fine), 400), 0))
-        .and_then(|| should_be(refusal(rules1(a().group().or(b())), 400), 2))
+        .and_then(|| should_be(refusal(rules1(a().group().or(b().group().not())), 400), 2))
+        .and_then(|| should_be(refusal(rules1(a().group().or(b())), 400), 0))
         .and_then(|| should_be(refusal(rules1(a().group().star()), 400), 2))
         .and_then(|| should_be(refusal(rules1(a().group().plus()), 400), 2))
         // The parts of the date have nine states with the dead one.
@@ -860,6 +954,7 @@ fn suite() -> TestTree {
     TestTree::group("regex groups")
         .with_case("parts one after another", test_parts)
         .with_case("the earlier part takes the most", test_most)
+        .with_case("one or the other", test_branches)
         .with_case("complements and intersections", test_complements)
         .with_case("characters", test_characters)
         .with_case("the matches of an automaton", test_rules)

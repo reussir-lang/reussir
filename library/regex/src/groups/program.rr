@@ -7,21 +7,28 @@
 //! read. A group is two registers, known when the questions are written:
 //!
 //! ```text
-//! rule      ([0-9]+) "-" ([0-9]+)
+//! rule      ([0-9]+) ("-" ([0-9]+) | [a-z]+)
 //!
 //! r2        where [0-9]+ ends in the bytes from r0 to r1, with
-//!           "-" [0-9]+ matching the rest
-//! r3        where "-" ends in the bytes from r2 to r1, with [0-9]+
+//!           "-" [0-9]+ | [a-z]+ matching the rest
+//! r3, r4    which branch the bytes from r2 to r1 are of: r3 is r2 when
+//!           they are a dash and digits, and else r4 is
+//! r5        where "-" ends in the bytes from r3 to r1, with [0-9]+
 //!           matching the rest
 //! group 1   from r0 to r2
-//! group 2   from r3 to r1
+//! group 2   from r2 to r1
+//! group 3   from r5 to r1
 //! ```
 //!
+//! A register of a part that the bytes did not come through holds no
+//! place, and so do the registers that its questions fill.
+//!
 //! A question is six words: what it asks, the registers of the beginning
-//! and of the end of its bytes, the register that it fills, and two more
-//! that are automata, by their numbers in the table of `table`. An
-//! automaton is that of a list of regexes without groups, and says the
-//! earliest of them that matches; a part of a rule is a list of one.
+//! and of the end of its bytes, the first register that it fills, and
+//! two more: automata, by their numbers in the table of `table`, or a
+//! count. An automaton is that of a list of regexes without groups, and
+//! says the earliest of them that matches; a part of a rule is a list of
+//! one, and the branches of a union are a list.
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
@@ -33,6 +40,13 @@ import regex::tree::Regex;
 /// to there and the automaton `second` from there on.
 pub fn splits() -> u64 {
     0
+}
+
+/// Which of `second` branches the bytes are of: the earliest that the
+/// automaton `first` says. The register of that branch, counted from the
+/// one that the question fills, holds their beginning.
+pub fn chooses() -> u64 {
+    1
 }
 
 /// The number of words of a question.
@@ -85,11 +99,12 @@ fn groups_of(regex: Regex) -> u64 {
 }
 
 // Whether `regex` has a group that no question finds: only parts one
-// after another, and groups, are asked about.
+// after another, branches and groups are asked about.
 fn misplaces(regex: Regex) -> bool {
     match regex {
         Group(inner) => misplaces(inner),
         Concat(first, second) => misplaces(first) || misplaces(second),
+        Union(first, second) => misplaces(first) || misplaces(second),
         // Anything else has no group inside, or one that is misplaced.
         _ => groups_of(regex) > 0
     }
@@ -110,6 +125,15 @@ fn flat(regex: Regex, after: List<Regex>) -> List<Regex> {
     match regex {
         Concat(first, second) => flat(first, flat(second, after)),
         // Anything else is one part.
+        _ => List::Cons { regex, after }
+    }
+}
+
+// The branches of `regex`, before `after`, however `or` nests them.
+fn branches(regex: Regex, after: List<Regex>) -> List<Regex> {
+    match regex {
+        Union(first, second) => branches(first, branches(second, after)),
+        // Anything else is one branch.
         _ => List::Cons { regex, after }
     }
 }
@@ -171,6 +195,20 @@ impl Asked {
         (asked, fills)
     }
 
+    // `count` more registers of the rule in hand, after the one that the
+    // last question fills.
+    fn spare(self: Self, count: u64) -> Asked {
+        Asked {
+            code: self.code,
+            rules: self.rules,
+            spans: self.spans,
+            parts: self.parts,
+            count: self.count,
+            registers: self.registers + count,
+            most: self.most
+        }
+    }
+
     // One more group of the rule in hand: the bytes from the register
     // `from` to the register `to`.
     fn group(self: Self, from: u64, to: u64) -> Asked {
@@ -205,8 +243,23 @@ impl Asked {
         match regex {
             Group(inner) => self.group(from, to).part(inner, from, to),
             Concat(_, _) => self.parts(pieces(flat(regex, List::Nil)), from, to),
+            Union(_, _) if groups_of(regex) > 0 => {
+                let all = branches(regex, List::Nil);
+                let (asked, which) = self.reads(all.map(|branch: Regex| branch.to_bytes()));
+                let (asked, one) = asked.ask(chooses(), from, to, which, all.len());
+                asked.spare(all.len() - 1).each(all, one, to)
+            },
             // Nothing else has a group inside that is not misplaced.
             _ => self
+        }
+    }
+
+    // The questions of `branches`, each with its bytes from its own
+    // register, the first of them `from`, to the register `to`.
+    fn each(self: Self, branches: List<Regex>, from: u64, to: u64) -> Asked {
+        match branches {
+            Nil => self,
+            Cons(first, rest) => self.part(first, from, to).each(rest, from + 1, to)
         }
     }
 
