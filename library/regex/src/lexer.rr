@@ -18,12 +18,19 @@
 //! }
 //! ```
 //!
+//! The tokens can be folded over as well, which reads a whole text faster
+//! than pulling them one by one:
+//!
+//! ```text
+//! let (count, end) = lexer.fold(input, 0, 0, |count: u64, token: Token, found: Match| count + 1);
+//! ```
+//!
 //! The ends of a match count from the beginning of the text that the lexer
 //! was given, as those of the automaton do.
 //!
-//! The lexer keeps the closure of an `InvokeOnLexeme`, so a call of it
-//! copies the closure first: one allocation for each match of such a rule.
-//! `Constant` and `Skip` allocate nothing.
+//! The lexer keeps the closure of an `InvokeOnView` or an `InvokeOnLexeme`,
+//! so a call of it copies the closure first: one allocation for each match
+//! of such a rule. `Constant` and `Skip` allocate nothing.
 
 import core::intrinsic::array;
 import regex::automaton::Automaton;
@@ -67,6 +74,8 @@ pub enum Action<R> {
     Constant(R),
     /// The match gives no token, as that of a space or a comment.
     Skip,
+    /// The token is made from the bytes of the match.
+    InvokeOnView(TextView -> R),
     /// The action reads what it wants of the match and says whether it
     /// gives a token.
     InvokeOnLexeme(Lexeme -> Emit<R>)
@@ -79,6 +88,7 @@ impl<R> Action<R> {
         match self {
             Constant(value) => Emit::Value { value },
             Skip => Emit::Skipped,
+            InvokeOnView(make) => Emit::Value { make(Lexeme { input: matches.input(), found }.view()) },
             InvokeOnLexeme(decide) => decide(Lexeme { input: matches.input(), found })
         }
     }
@@ -157,6 +167,28 @@ impl<R> Lexer<R> {
     /// The tokens of `input`, one after another, from the byte `from` on.
     pub fn tokens(self: Self, input: TextView, from: u64) -> Tokens<R> {
         Tokens { actions: self.actions, matches: self.automaton.matches(input, from) }
+    }
+
+    /// Folds over the tokens of `input`, one after another, from the byte
+    /// `from` on. `step` is given every token with the match it was made
+    /// of. The fold ends as that of the automaton does: at the end of the
+    /// input, where no rule matches, or at a match of no bytes; the place
+    /// where it ended comes with the value.
+    pub fn fold<A>(self: Self, input: TextView, from: u64, initial: A, step: (A, R, Match) -> A) -> (A, u64) {
+        let actions = self.actions;
+        let matches = self.automaton.matches(input, from);
+        // The stream goes along with the value, for the text of a lexeme.
+        // Were it captured, the compiler would not specialize the fold for
+        // this closure, which needs every capture to be a counted pointer
+        // or plain bits, and both closures would be copied for every match.
+        let ((folded, _), end) = matches.fold((initial, matches), |carried: (A, Matches), found: Match| {
+            let (folded, reading) = carried;
+            match array::get(actions, found.rule as i64).run(reading, found) {
+                Value(value) => (step(folded, value, found), reading),
+                Skipped => carried
+            }
+        });
+        (folded, end)
     }
 }
 
