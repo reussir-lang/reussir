@@ -725,6 +725,7 @@ fn test_stream() -> Outcome {
         expect(is_match(word, 0, 0, 3) && second.at() == 3, "the first match is the word")
             .and_then(|| expect(is_match(space, 2, 3, 4) && third.at() == 4, "the second is the space after it"))
             .and_then(|| expect(is_match(number, 1, 4, 6) && stuck.at() == 6, "a stream begins where it is told"))
+            .and_then(|| expect(stuck.input() == broken.view(), "and answers the text that it reads"))
             .and_then(|| expect(
                 is_nothing_found(nothing) && still.at() == 6 && is_nothing_found(same) && again.at() == 6,
                 "the stream stays at a byte that no rule matches"

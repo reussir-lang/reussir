@@ -1,0 +1,608 @@
+// Unit suite and coverage-guided fuzz driver for `regex::lexer`: rules that
+// each have an action.
+// Unit cases ask a lexeme for all it answers and build small lexers: the
+// tokens of a text, the rule that wins, the matches that give no token
+// wherever they are in the text, an action that decides for itself, the
+// stream that the tokens are pulled from and how it ends, a text that is a
+// part of another, a long row of matches that give no token, a lexer
+// without rules, and the limit on the number of states.
+// The fuzz target gives each of four rules a random form of action and
+// compares the tokens that the lexer makes of a part of a random text with
+// the matches of an automaton of the same rules and the same actions
+// written out by hand.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin lexer %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}lexer
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/lexer%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/lexer%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex lexer/a lexeme: unit
+// CHECK-NEXT: regex lexer/a lexer: unit
+// CHECK-NEXT: regex lexer/a keyword and a word: unit
+// CHECK-NEXT: regex lexer/matches that give no token: unit
+// CHECK-NEXT: regex lexer/an action that decides: unit
+// CHECK-NEXT: regex lexer/the stream: unit
+// CHECK-NEXT: regex lexer/the end and a stuck stream: unit
+// CHECK-NEXT: regex lexer/a part of a text: unit
+// CHECK-NEXT: regex lexer/a long row without a token: unit
+// CHECK-NEXT: regex lexer/no rules: unit
+// CHECK-NEXT: regex lexer/the limit: unit
+// CHECK-NEXT: regex lexer/lexer & the matches (fuzz):
+
+import regex::automaton::Automaton;
+import regex::automaton::Match;
+import regex::lexer::Action;
+import regex::lexer::Emit;
+import regex::lexer::Lexed;
+import regex::lexer::Lexeme;
+import regex::lexer::Lexer;
+import regex::lexer::Rule;
+import regex::lexer::Tokens;
+import regex::tree::ByteRegex;
+import regex::tree::Regex;
+import std::collections::pure::list::List;
+import std::option::Option;
+import std::result::Result;
+import std::string::String;
+import std::text::Text;
+import std::text::TextView;
+import test::domain::tuple2;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// --------------------------- Tokens for the tests ---------------------------
+
+enum Tok {
+    Word(TextView),
+    Number(u64, u64),
+    Plus,
+    Let
+}
+
+// `out` with `token` written after it, and a space.
+fn written(out: String, token: Tok) -> String {
+    match token {
+        Word(word) => word.write(out.push_str("w:"), 0, word.len()).unwrap_or_panic().push_char(' '),
+        Number(start, end) => out.push_str("n:").push_char(digit(start)).push_char('-').push_char(digit(end)).push_char(' '),
+        Plus => out.push_str("+ "),
+        Let => out.push_str("let ")
+    }
+}
+
+// A number below ten as a character.
+fn digit(number: u64) -> char {
+    match number {
+        0 => '0',
+        1 => '1',
+        2 => '2',
+        3 => '3',
+        4 => '4',
+        5 => '5',
+        6 => '6',
+        7 => '7',
+        8 => '8',
+        9 => '9',
+        // Ten and above.
+        _ => '?'
+    }
+}
+
+fn letters() -> Regex {
+    Regex::range(97, 122).plus()
+}
+
+fn digits() -> Regex {
+    Regex::range(48, 57).plus()
+}
+
+fn spaces() -> Regex {
+    Regex::byte(32).plus()
+}
+
+fn word() -> Rule<Tok> {
+    Rule::new(letters(), Action::InvokeOnLexeme { |lexeme: Lexeme| Emit::Value { Tok::Word { lexeme.view() } } })
+}
+
+fn number() -> Rule<Tok> {
+    Rule::new(digits(), Action::InvokeOnLexeme { |lexeme: Lexeme| {
+        Emit::Value { Tok::Number { lexeme.found.start, lexeme.found.end } }
+    } })
+}
+
+fn plus() -> Rule<Tok> {
+    Rule::new(Regex::byte(43), Action::Constant { Tok::Plus })
+}
+
+fn space() -> Rule<Tok> {
+    Rule::new(spaces(), Action::Skip)
+}
+
+// Words, numbers and plus signs, between spaces that give no token.
+fn calculator() -> List<Rule<Tok>> {
+    List::Cons { word(), List::Cons { number(), List::Cons { plus(), List::Cons { space(), List::Nil } } } }
+}
+
+// The outcome of `check` on the lexer of `rules`, or a failure when there
+// are too many states.
+fn built<R>(rules: List<Rule<R>>, limit: u64, check: Lexer<R> -> Outcome) -> Outcome {
+    match Lexer::build(rules, limit) {
+        Ok(lexer) => check(lexer),
+        Err(_) => expect(false, "the lexer has too many states")
+    }
+}
+
+// The tokens of `input` from the byte `from`, written one after another,
+// and where the stream stopped.
+fn spelled(lexer: Lexer<Tok>, input: TextView, from: u64) -> (String, u64) {
+    let (stopped, out, _) = while [tokens = lexer.tokens(input, from), out = String::new(), going = true] (going) {
+        let (rest, lexed) = tokens.next();
+        match lexed {
+            Token(token, _) => (rest, written(out, token), true),
+            // The end, or a stuck stream.
+            _ => (rest, out, false)
+        }
+    };
+    (out, stopped.at())
+}
+
+// Whether the tokens of `input` from the byte `from` are written as
+// `wanted`, and the stream stops at `end`.
+fn spells(lexer: Lexer<Tok>, input: str, from: u64, wanted: str, end: u64) -> bool {
+    let (out, reached) = spelled(lexer, Text::from_str(input).view(), from);
+    out.eq_str(wanted) && reached == end
+}
+
+// The number of bytes of a view, and its first byte.
+fn weigh(view: TextView) -> u64 {
+    view.len() * 1000 + (view.head_byte().unwrap_or(0) as u64)
+}
+
+// A token for a match of an even number of bytes only.
+fn even(lexeme: Lexeme) -> Emit<u64> {
+    let found = lexeme.found;
+    if (found.end - found.start) % 2 == 0 {
+        Emit::Value { (found.rule as u64) * 100 + found.end - found.start }
+    } else {
+        Emit::Skipped
+    }
+}
+
+// --------------------------------- Units ---------------------------------
+
+// Whether a lexeme answers as the match "cde" of rule 1 in "ab cde" does.
+fn answers(lexeme: Lexeme) -> bool {
+    let view = lexeme.view();
+    lexeme.found.rule == 1 && lexeme.found.start == 3 && lexeme.found.end == 6
+        && lexeme.input.eq_str("ab cde") && view.eq_str("cde") && view.offset() == 3
+}
+
+// All that a lexeme answers: the token of a word says whether its lexeme
+// is that of the second word of "ab cde".
+fn test_lexeme() -> Outcome {
+    let asked: Rule<bool> = Rule::new(letters(), Action::InvokeOnLexeme { |lexeme: Lexeme| Emit::Value { answers(lexeme) } });
+    let gap: Rule<bool> = Rule::new(spaces(), Action::Skip);
+    built(List::Cons { gap, List::Cons { asked, List::Nil } }, 100, |lexer: Lexer<bool>| {
+        let input = Text::from_str("ab cde");
+        let (second, first) = lexer.tokens(input.view(), 0).next();
+        let (_, last) = second.next();
+        expect(is_token(first, false), "the first word answers otherwise")
+            .and_then(|| expect(is_token(last, true), "the match, the text and the view"))
+    })
+}
+
+fn is_token(lexed: Lexed<bool>, wanted: bool) -> bool {
+    match lexed {
+        Token(token, _) => token == wanted,
+        // The end, or a stuck stream.
+        _ => false
+    }
+}
+
+// The tokens of a short text: one of every form.
+fn test_lexer() -> Outcome {
+    built(calculator(), 100, |lexer: Lexer<Tok>| {
+        expect(spells(lexer, "abc 42+de", 0, "w:abc n:4-6 + w:de ", 9), "the tokens of a text")
+            .and_then(|| expect(spells(lexer, "abc 42+de", 4, "n:4-6 + w:de ", 9), "from the middle"))
+            .and_then(|| expect(spells(lexer, "abc 42+de", 9, "", 9), "nothing at the end"))
+            .and_then(|| expect(spells(lexer, "", 0, "", 0), "nothing of an empty text"))
+            .and_then(|| expect(spells(lexer, "ab 1!cd", 0, "w:ab n:3-4 ", 4), "up to a byte that no rule matches"))
+    })
+}
+
+// `let` matches both rules: the earlier one gives the token.
+fn test_keyword() -> Outcome {
+    let keyword: Rule<Tok> = Rule::new(Regex::literal(Text::from_str("let")), Action::Constant { Tok::Let });
+    built(List::Cons { keyword, List::Cons { word(), List::Cons { space(), List::Nil } } }, 100, |lexer: Lexer<Tok>| {
+        expect(spells(lexer, "let lets le let", 0, "let w:lets w:le let ", 15), "a keyword only where it is the whole word")
+    })
+        .and_then(|| built(List::Cons { word(), List::Cons { keyword, List::Cons { space(), List::Nil } } }, 100, |lexer: Lexer<Tok>| {
+            expect(spells(lexer, "let", 0, "w:let ", 3), "a keyword after the rule of words is never the token")
+        }))
+}
+
+// Matches that give no token before the tokens, between them, after them,
+// and with no token at all.
+fn test_skips() -> Outcome {
+    built(calculator(), 100, |lexer: Lexer<Tok>| {
+        expect(spells(lexer, "   ab", 0, "w:ab ", 5), "before a token")
+            .and_then(|| expect(spells(lexer, "ab   ", 0, "w:ab ", 5), "after the last token: the stream ends after them"))
+            .and_then(|| expect(spells(lexer, "    ", 0, "", 4), "a text without a token"))
+            .and_then(|| expect(spells(lexer, "ab  !c", 0, "w:ab ", 4), "the stream stops after them at a byte that no rule matches"))
+    })
+        .and_then(|| {
+            // Two rules without a token, one after the other in the text.
+            let tab: Rule<Tok> = Rule::new(Regex::byte(9).plus(), Action::Skip);
+            let rules = List::Cons { word(), List::Cons { space(), List::Cons { tab, List::Nil } } };
+            built(rules, 100, |lexer: Lexer<Tok>| {
+                let input = Text::from_string(String::new().push_str("a ").push_char('\t').push_str(" ").push_char('\t').push_str("b"));
+                let (out, reached) = spelled(lexer, input.view(), 0);
+                expect(out.eq_str("w:a w:b ") && reached == 6, "matches of two rules in a row")
+            })
+        })
+}
+
+// An action that reads the lexeme: words of an even number of letters are
+// tokens, the others are not.
+fn test_decides() -> Outcome {
+    let picky: Rule<u64> = Rule::new(letters(), Action::InvokeOnLexeme { |lexeme: Lexeme| even(lexeme) });
+    let gap: Rule<u64> = Rule::new(spaces(), Action::Skip);
+    let start: Rule<u64> = Rule::new(digits(), Action::InvokeOnLexeme { |lexeme: Lexeme| Emit::Value { weigh(lexeme.view()) + lexeme.input.len() } });
+    built(List::Cons { gap, List::Cons { picky, List::Cons { start, List::Nil } } }, 100, |lexer: Lexer<u64>| {
+        let input = Text::from_str("ab abc abcd 77");
+        let (stopped, tokens, _) = while [stream = lexer.tokens(input.view(), 0), tokens = List::Nil, going = true] (going) {
+            let (rest, lexed) = stream.next();
+            match lexed {
+                Token(token, found) => (rest, List::Cons { token * 100 + found.start, tokens }, true),
+                // The end, or a stuck stream.
+                _ => (rest, tokens, false)
+            }
+        };
+        // The last token first: the number, two bytes from a 7 in a text of
+        // fourteen, then the words of four and of two letters, of rule 1.
+        expect(
+            match tokens {
+                Cons(number, words) => number == 206912 && match words {
+                    Cons(four, rest) => four == 10407 && match rest {
+                        Cons(two, none) => two == 10200 && none.is_nil(),
+                        Nil => false
+                    },
+                    Nil => false
+                },
+                Nil => false
+            },
+            "an action says which of its matches are tokens"
+        )
+            .and_then(|| should_be(stopped.at(), 14))
+    })
+}
+
+// Whether `lexed` is a plus sign made of the match from `start` to `end`.
+fn is_plus(lexed: Lexed<Tok>, start: u64, end: u64) -> bool {
+    match lexed {
+        Token(token, found) => found.rule == 2 && found.start == start && found.end == end && match token {
+            Plus => true,
+            // Any other token.
+            _ => false
+        },
+        // The end, or a stuck stream.
+        _ => false
+    }
+}
+
+fn is_word(lexed: Lexed<Tok>, wanted: str, start: u64) -> bool {
+    match lexed {
+        Token(token, found) => found.rule == 0 && found.start == start && match token {
+            Word(word) => word.eq_str(wanted),
+            // Any other token.
+            _ => false
+        },
+        // The end, or a stuck stream.
+        _ => false
+    }
+}
+
+fn is_end<R>(lexed: Lexed<R>) -> bool {
+    match lexed {
+        End => true,
+        // A token, or a stuck stream.
+        _ => false
+    }
+}
+
+fn is_stuck<R>(lexed: Lexed<R>) -> bool {
+    match lexed {
+        Stuck => true,
+        // A token, or the end.
+        _ => false
+    }
+}
+
+// The tokens of a lexer pulled one by one: the stream moves past the
+// matches that give no token, stays at a byte that no rule matches, and
+// stays at the end.
+fn test_stream() -> Outcome {
+    built(calculator(), 100, |lexer: Lexer<Tok>| {
+        let whole = Text::from_str("ab  + cd  ");
+        let broken = Text::from_str("ab  !cd");
+        let (second, first) = lexer.tokens(whole.view(), 0).next();
+        let (third, sign) = second.next();
+        let (fourth, last) = third.next();
+        let (ended, nothing) = fourth.next();
+        let (still, same) = ended.next();
+        let (stuck, _) = lexer.tokens(broken.view(), 0).next();
+        let (stays, none) = stuck.next();
+        let (again, never) = stays.next();
+        expect(is_word(first, "ab", 0) && second.at() == 2, "the first token is the word")
+            .and_then(|| expect(is_plus(sign, 4, 5) && third.at() == 5, "the second is after the spaces"))
+            .and_then(|| expect(is_word(last, "cd", 6) && fourth.at() == 8, "the third"))
+            .and_then(|| expect(is_end(nothing) && ended.at() == 10, "the stream ends after the spaces at the end"))
+            .and_then(|| expect(is_end(same) && still.at() == 10, "and stays there"))
+            .and_then(|| expect(is_stuck(none) && stays.at() == 4, "the stream stops at a byte that no rule matches"))
+            .and_then(|| expect(is_stuck(never) && again.at() == 4, "and stays there"))
+    })
+}
+
+// How a stream ends: at the end of the text, past it, at a byte that no
+// rule matches, and at a match of no bytes.
+fn test_ends() -> Outcome {
+    built(calculator(), 100, |lexer: Lexer<Tok>| {
+        let input = Text::from_str("ab !");
+        let (at_end, end) = lexer.tokens(input.view(), 4).next();
+        let (past, beyond) = lexer.tokens(input.view(), 99).next();
+        let (stopped, stuck) = lexer.tokens(input.view(), 2).next();
+        let (empty, none) = lexer.tokens(Text::from_str("").view(), 0).next();
+        expect(is_end(end) && at_end.at() == 4, "the end of the text")
+            .and_then(|| expect(is_end(beyond) && past.at() == 99, "a stream that begins past the end stays there"))
+            .and_then(|| expect(is_stuck(stuck) && stopped.at() == 3, "stuck after the space, at the sign"))
+            .and_then(|| expect(is_end(none) && empty.at() == 0, "an empty text has ended"))
+    })
+        .and_then(|| {
+            // A rule that matches no bytes where there is no letter.
+            let maybe: Rule<Tok> = Rule::new(Regex::range(97, 122).star(), Action::InvokeOnLexeme { |lexeme: Lexeme| {
+                Emit::Value { Tok::Word { lexeme.view() } }
+            } });
+            built(List::Cons { maybe, List::Nil }, 100, |lexer: Lexer<Tok>| {
+                let input = Text::from_str("ab1");
+                let (second, first) = lexer.tokens(input.view(), 0).next();
+                let (third, stuck) = second.next();
+                expect(is_word(first, "ab", 0) && second.at() == 2, "a match with bytes is a token")
+                    .and_then(|| expect(is_stuck(stuck) && third.at() == 2, "a match of no bytes is not, and the stream is stuck"))
+                    .and_then(|| {
+                        let (ended, end) = lexer.tokens(Text::from_str("ab").view(), 2).next();
+                        expect(is_end(end) && ended.at() == 2, "at the end of the text it has ended")
+                    })
+            })
+        })
+}
+
+// A lexer over the bytes of "ab 12 cd" that follow "xx ": the ends of a
+// match count from the beginning of the part, and a view of a match knows
+// where it is in the whole text.
+fn test_part() -> Outcome {
+    built(calculator(), 100, |lexer: Lexer<Tok>| {
+        let part = Text::from_str("xx ab 12 cd").view().drop_byte(3);
+        let (out, reached) = spelled(lexer, part, 0);
+        let (rest, first) = lexer.tokens(part, 0).next();
+        expect(out.eq_str("w:ab n:3-5 w:cd ") && reached == 8, "the tokens of the part")
+            .and_then(|| expect(
+                match first {
+                    Token(token, found) => found.start == 0 && found.end == 2 && match token {
+                        Word(word) => word.offset() == 3 && word.len() == 2,
+                        // Any other token.
+                        _ => false
+                    },
+                    // The end, or a stuck stream.
+                    _ => false
+                },
+                "the view of a word is where the word is in the whole text"
+            ))
+            .and_then(|| should_be(rest.at(), 2))
+    })
+}
+
+// Forty thousand matches in a row that give no token, before one that
+// does: the stream reads them all in one `next`.
+fn test_row() -> Outcome {
+    let tab: Rule<Tok> = Rule::new(Regex::byte(9), Action::Skip);
+    let one: Rule<Tok> = Rule::new(Regex::byte(32), Action::Skip);
+    built(List::Cons { word(), List::Cons { one, List::Cons { tab, List::Nil } } }, 100, |lexer: Lexer<Tok>| {
+        let (_, row) = while [count = (0 as u64), row = String::new()] (count < 20000) {
+            (count + 1, row.push_char(' ').push_char('\t'))
+        };
+        let input = Text::from_string(row.push_str("end"));
+        let (rest, lexed) = lexer.tokens(input.view(), 0).next();
+        expect(is_word(lexed, "end", 40000) && rest.at() == 40003, "the token after the row")
+    })
+}
+
+// A lexer without rules matches nothing.
+fn test_none() -> Outcome {
+    let rules: List<Rule<Tok>> = List::Nil;
+    built(rules, 100, |lexer: Lexer<Tok>| {
+        let (stopped, stuck) = lexer.tokens(Text::from_str("ab").view(), 0).next();
+        let (ended, end) = lexer.tokens(Text::from_str("").view(), 0).next();
+        expect(is_stuck(stuck) && stopped.at() == 0, "stuck at the first byte")
+            .and_then(|| expect(is_end(end) && ended.at() == 0, "an empty text has ended"))
+    })
+}
+
+fn test_limit() -> Outcome {
+    match Lexer::build(calculator(), 1) {
+        Ok(_) => expect(false, "the rules need more than one state"),
+        Err(error) => should_be(error.limit, 1)
+    }
+}
+
+// --------------------- Fuzz: the lexer against the matches ---------------------
+
+// One of three forms of an action.
+fn action_of(form: u8) -> Action<u64> {
+    match form % 3 {
+        0 => Action::Constant { 7 },
+        1 => Action::Skip,
+        // 2: decides for itself, and reads the text.
+        _ => Action::InvokeOnLexeme { |lexeme: Lexeme| {
+            match even(lexeme) {
+                Value(token) => Emit::Value { token + weigh(lexeme.view()) + lexeme.input.len() },
+                Skipped => Emit::Skipped
+            }
+        } }
+    }
+}
+
+// The same by hand: the token of a match of `input`, when it gives one.
+fn by_hand(form: u8, input: TextView, found: Match) -> Option<u64> {
+    let length = found.end - found.start;
+    match form % 3 {
+        0 => Option::Some { 7 },
+        1 => Option::None,
+        // 2: a token for an even number of bytes only.
+        _ => if length % 2 == 0 {
+            let first = input.byte_at(found.start).unwrap_or(0) as u64;
+            Option::Some { (found.rule as u64) * 100 + length + length * 1000 + first + input.len() }
+        } else {
+            Option::None
+        }
+    }
+}
+
+// The form of the action of `rule`.
+fn form_of(forms: ((u8, u8), (u8, u8)), rule: u32) -> u8 {
+    let (early, late) = forms;
+    let (first, second) = early;
+    let (third, fourth) = late;
+    match rule {
+        0 => first,
+        1 => second,
+        2 => third,
+        // 3: the last rule.
+        _ => fourth
+    }
+}
+
+// One of six characters: no rule matches the last.
+fn character(byte: u8) -> char {
+    match byte % 6 {
+        0 => 'a',
+        1 => 'b',
+        2 => '1',
+        3 => ' ',
+        4 => '+',
+        // 5: a byte that ends the tokens.
+        _ => '!'
+    }
+}
+
+fn text_of(bytes: List<u8>) -> Text {
+    Text::from_string(bytes.fold_left(String::new(), |string: String, byte: u8| string.push_char(character(byte))))
+}
+
+// The regex of `rule`: letters, digits, spaces and a plus sign.
+fn regex_of(rule: u32) -> Regex {
+    match rule {
+        0 => Regex::range(97, 98).plus(),
+        1 => Regex::byte(49).plus(),
+        2 => spaces(),
+        // 3: the last rule.
+        _ => Regex::byte(43)
+    }
+}
+
+// The four rules without their actions.
+fn regexes() -> List<ByteRegex> {
+    List::Cons { regex_of(0).to_bytes(), List::Cons { regex_of(1).to_bytes(),
+        List::Cons { regex_of(2).to_bytes(), List::Cons { regex_of(3).to_bytes(), List::Nil } } } }
+}
+
+// The rule `rule` with the action its form says.
+fn rule_of(forms: ((u8, u8), (u8, u8)), rule: u32) -> Rule<u64> {
+    Rule::new(regex_of(rule), action_of(form_of(forms, rule)))
+}
+
+fn rules_of(forms: ((u8, u8), (u8, u8))) -> List<Rule<u64>> {
+    List::Cons { rule_of(forms, 0), List::Cons { rule_of(forms, 1),
+        List::Cons { rule_of(forms, 2), List::Cons { rule_of(forms, 3), List::Nil } } } }
+}
+
+// One more token in the sum of the tokens.
+fn summed(sum: u64, token: u64, found: Match) -> u64 {
+    sum * 31 + token + (found.rule as u64) + found.start * 5
+}
+
+// The tokens pulled from a stream as one number, and where the stream
+// stops.
+fn pulled(tokens: Tokens<u64>) -> (u64, u64) {
+    let (stopped, sum, _) = while [tokens = tokens, sum = 0, going = true] (going) {
+        let (rest, lexed) = tokens.next();
+        match lexed {
+            Token(token, found) => (rest, summed(sum, token, found), true),
+            // The end, or a stuck stream.
+            _ => (rest, sum, false)
+        }
+    };
+    (sum, stopped.at())
+}
+
+fn same(first: (u64, u64), second: (u64, u64)) -> bool {
+    let (sum, reached) = first;
+    let (other, place) = second;
+    sum == other && reached == place
+}
+
+// A lexer over the bytes of a text after its first `cut`, from the byte
+// `place` of those.
+fn fuzz_matches(input: (((u8, u8), (u8, u8)), (List<u8>, (u8, u8)))) -> Outcome {
+    let (forms, probe) = input;
+    let (bytes, places) = probe;
+    let (cut, place) = places;
+    let text = text_of(bytes);
+    let part = text.view().drop_byte((cut as u64) % (text.len() + 1));
+    let from = (place as u64) % (part.len() + 1);
+    match (Lexer::build(rules_of(forms), 100), Automaton::build(regexes(), 100)) {
+        (Ok(lexer), Ok(automaton)) => {
+            let wanted = automaton.fold(part, from, 0, |sum: u64, found: Match| {
+                match by_hand(form_of(forms, found.rule), part, found) {
+                    Some(token) => summed(sum, token, found),
+                    None => sum
+                }
+            });
+            expect(same(pulled(lexer.tokens(part, from)), wanted), "the tokens of the lexer are not the actions on the matches")
+        },
+        // Either of the two has too many states.
+        _ => expect(false, "the lexer has too many states")
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex lexer")
+        .with_case("a lexeme", test_lexeme)
+        .with_case("a lexer", test_lexer)
+        .with_case("a keyword and a word", test_keyword)
+        .with_case("matches that give no token", test_skips)
+        .with_case("an action that decides", test_decides)
+        .with_case("the stream", test_stream)
+        .with_case("the end and a stuck stream", test_ends)
+        .with_case("a part of a text", test_part)
+        .with_case("a long row without a token", test_row)
+        .with_case("no rules", test_none)
+        .with_case("the limit", test_limit)
+        .with_fuzz(
+            "lexer & the matches (fuzz)",
+            tuple2(
+                tuple2(tuple2(u8_domain(), u8_domain()), tuple2(u8_domain(), u8_domain())),
+                tuple2(u8_domain().list_with_len(0, 24), tuple2(u8_domain(), u8_domain()))
+            ),
+            fuzz_matches
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
