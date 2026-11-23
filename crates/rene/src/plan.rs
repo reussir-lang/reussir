@@ -315,10 +315,13 @@ fn package_args(
 
 /// `--extern`/`--extern-src` pairs for a package's (transitive) dependency
 /// set: the interface to elaborate against, and the source root diagnostics
-/// re-anchor onto.
+/// re-anchor onto. A dependency comes before its dependents: an interface
+/// repeats the impls it uses from its own dependencies and names their
+/// methods without declaring them, so `rrc` must have loaded the package
+/// that declares them first.
 fn extern_args(graph: &Graph, deps: &[String], deps_dir: &Path, target: &str) -> Vec<String> {
     let mut args = Vec::new();
-    for dep in deps {
+    for dep in topological(graph).iter().filter(|dep| deps.contains(dep)) {
         let node = &graph.nodes[dep.as_str()];
         args.push("--extern".to_owned());
         args.push(format!(
@@ -411,6 +414,41 @@ pub(crate) fn transitive_deps(graph: &Graph) -> BTreeMap<String, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dependency's interface is passed before those of its dependents,
+    /// whatever their names.
+    #[test]
+    fn externs_are_passed_in_dependency_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = tmp.path().join("rene.ncl");
+        std::fs::write(
+            &manifest,
+            r#"{ package.name = "app", dependencies = { alpha.path = "alpha", base.path = "base" } }"#,
+        )
+        .unwrap();
+        std::fs::create_dir(tmp.path().join("alpha")).unwrap();
+        std::fs::write(
+            tmp.path().join("alpha/rene.ncl"),
+            r#"{ package.name = "alpha", dependencies.base.path = "../base" }"#,
+        )
+        .unwrap();
+        std::fs::create_dir(tmp.path().join("base")).unwrap();
+        std::fs::write(
+            tmp.path().join("base/rene.ncl"),
+            r#"{ package.name = "base" }"#,
+        )
+        .unwrap();
+        let graph = crate::resolve::load_graph(&crate::manifest::load(&manifest).unwrap()).unwrap();
+        let cone = &transitive_deps(&graph)["app"];
+        assert_eq!(cone, &["alpha", "base"]);
+        let args = extern_args(&graph, cone, Path::new("deps"), "x86_64-unknown-linux-gnu");
+        let names: Vec<&str> = args
+            .chunks(2)
+            .filter(|pair| pair[0] == "--extern")
+            .map(|pair| pair[1].split_once('=').unwrap().0)
+            .collect();
+        assert_eq!(names, ["base", "alpha"]);
+    }
 
     /// A worker's input ownership must survive its caller's graph and runtime
     /// handles, then release promptly even while the cache stays open.

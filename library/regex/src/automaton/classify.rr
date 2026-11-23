@@ -7,7 +7,7 @@ import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::automaton::explore::Explored;
+import regex::automaton::explore::Explored;
 
 // `into` with `from` among the sources of `target`.
 fn entered(into: [List<u32>; ?], target: i64, from: u32) -> [List<u32>; ?] {

@@ -8,7 +8,7 @@
 import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
 import std::option::Option;
-import std::regex::automaton::explore::Explored;
+import regex::automaton::explore::Explored;
 
 /// The states of an automaton under their final numbers.
 pub struct Arranged {

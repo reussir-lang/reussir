@@ -1,4 +1,4 @@
-// Unit suite and coverage-guided fuzz driver for `std::regex::tree`: the
+// Unit suite and coverage-guided fuzz driver for `regex::tree`: the
 // regex a caller builds and its translation to a regex over bytes.
 // The tests match byte strings against a translated regex with a small
 // matcher that takes derivatives of the tree as it stands; it is slow and
@@ -8,11 +8,11 @@
 // Fuzz targets compare every operator, over random sets of characters and
 // over random sets of bytes, with what membership in the sets says.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_tree %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: fuzz{{[/\\]}}regex_tree
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin tree %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}tree
 
-// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_tree%exe_ext -runs=0 | %FileCheck %s
-// RUN: %std_rene_build/fuzz/regex_tree%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/tree%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/tree%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
 // CHECK:      regex tree/builder: unit
 // CHECK-NEXT: regex tree/characters: unit
@@ -23,10 +23,10 @@
 // CHECK-NEXT: regex tree/byte operators (fuzz):
 
 import std::collections::pure::list::List;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::char_set::CharSet;
-import std::regex::tree::ByteRegex;
-import std::regex::tree::Regex;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::char_set::CharSet;
+import regex::tree::ByteRegex;
+import regex::tree::Regex;
 import std::string::String;
 import std::text::Text;
 import test::domain::char_domain;

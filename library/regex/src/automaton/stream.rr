@@ -1,13 +1,13 @@
 //! The matches of a text, pulled one after another.
 
 import core::intrinsic::array;
-import std::regex::automaton::Automaton;
-import std::regex::automaton::Found;
-import std::regex::automaton::Match;
-import std::regex::automaton::Matches;
-import std::regex::automaton::Reading;
-import std::regex::automaton::encoding;
-import std::regex::automaton::scan;
+import regex::automaton::Automaton;
+import regex::automaton::Found;
+import regex::automaton::Match;
+import regex::automaton::Matches;
+import regex::automaton::Reading;
+import regex::automaton::encoding;
+import regex::automaton::scan;
 import std::text::TextView;
 
 impl Matches {

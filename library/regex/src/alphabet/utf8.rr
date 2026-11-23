@@ -12,7 +12,7 @@
 import std::collections::pure::list::List;
 import std::collections::pure::wavlmap::Iter;
 import std::collections::pure::wavlmap::Step;
-import std::regex::alphabet::char_set::CharSet;
+import regex::alphabet::char_set::CharSet;
 
 /// The bytes from `start` to `end`, both included.
 pub struct [value] Utf8Range {

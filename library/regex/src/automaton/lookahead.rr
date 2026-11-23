@@ -28,14 +28,14 @@ import std::collections::cow::vec::Vec;
 import std::collections::pure::hashmap::HashMap;
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::byte_classes::ByteClasses;
-import std::regex::automaton::arrange::Arranged;
-import std::regex::automaton::encoding;
-import std::regex::automaton::native;
-import std::regex::automaton::shuffle;
-import std::regex::automaton::vectors;
-import std::regex::automaton::vectors::Four;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::automaton::arrange::Arranged;
+import regex::automaton::encoding;
+import regex::automaton::native;
+import regex::automaton::shuffle;
+import regex::automaton::vectors;
+import regex::automaton::vectors::Four;
 
 /// The words, vectors and tables of the runs of an automaton, one run
 /// added after another. The lookup tables and the shuffle tables are shared

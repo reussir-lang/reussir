@@ -1,4 +1,4 @@
-// Unit suite and coverage-guided fuzz driver for `std::regex::alphabet`: the
+// Unit suite and coverage-guided fuzz driver for `regex::alphabet`: the
 // sets of bytes and of characters, and the division of the bytes into the
 // classes that a group of sets cannot tell apart.
 // Unit cases cover `Bits` across its words, `CharSet` beyond ASCII and under
@@ -8,11 +8,11 @@
 // check that classes are disjoint, cover every byte, and make up each set
 // they were refined with.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_alphabet %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: fuzz{{[/\\]}}regex_alphabet
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin alphabet %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}alphabet
 
-// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_alphabet%exe_ext -runs=0 | %FileCheck %s
-// RUN: %std_rene_build/fuzz/regex_alphabet%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/alphabet%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/alphabet%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
 // CHECK:      regex alphabet/bits: unit
 // CHECK-NEXT: regex alphabet/char set: unit
@@ -26,10 +26,10 @@ import std::collections::pure::list::List;
 import std::collections::pure::wavlmap::Iter;
 import std::collections::pure::wavlmap::Step;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::byte_classes::ByteClasses;
-import std::regex::alphabet::char_set::CharSet;
-import std::regex::alphabet::char_set::Span;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::alphabet::char_set::CharSet;
+import regex::alphabet::char_set::Span;
 import test::domain::char_domain;
 import test::domain::tuple2;
 import test::domain::tuple3;

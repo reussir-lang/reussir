@@ -21,11 +21,11 @@ import std::collections::pure::list::List;
 import std::hash::Hash;
 import std::hash::Hasher;
 import std::option::Option;
-import std::regex::alphabet::byte_classes::ByteClasses;
-import std::regex::automaton::TooManyStates;
-import std::regex::node::Node;
-import std::regex::node::Nodes;
-import std::regex::tree::ByteRegex;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::automaton::TooManyStates;
+import regex::node::Node;
+import regex::node::Nodes;
+import regex::tree::ByteRegex;
 import std::result::Result;
 
 /// The states of a list of rules as the search found them.

@@ -11,11 +11,11 @@ import core::ptr;
 import core::ptr::Generic;
 import core::ptr::PtrArithFlag;
 import std::option::Option;
-import std::regex::automaton::Automaton;
-import std::regex::automaton::Found;
-import std::regex::automaton::Match;
-import std::regex::automaton::encoding;
-import std::regex::automaton::native;
+import regex::automaton::Automaton;
+import regex::automaton::Found;
+import regex::automaton::Match;
+import regex::automaton::encoding;
+import regex::automaton::native;
 import std::text::TextView;
 
 impl Automaton {

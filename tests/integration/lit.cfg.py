@@ -188,6 +188,12 @@ config.substitutions.append((
     r'%std_rene_build',
     sh_path(os.path.join(config.test_exec_root, 'std-rene-build')),
 ))
+# The regex library's integration executables share a build directory of
+# their own in the same way.
+config.substitutions.append((
+    r'%regex_rene_build',
+    sh_path(os.path.join(config.test_exec_root, 'regex-rene-build')),
+))
 linkage_check_prefixes = (
     '--check-prefixes=CHECK,CHECK-COFF'
     if _target_is_windows

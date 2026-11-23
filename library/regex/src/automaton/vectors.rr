@@ -7,8 +7,8 @@
 
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::automaton::ByteRange;
+import regex::alphabet::bits::Bits;
+import regex::automaton::ByteRange;
 
 /// The four bytes that the vectors of a run repeat.
 pub struct [value] Four {

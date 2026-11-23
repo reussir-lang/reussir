@@ -1,4 +1,4 @@
-// Unit suite and coverage-guided fuzz driver for `std::regex::automaton`:
+// Unit suite and coverage-guided fuzz driver for `regex::automaton`:
 // the states and transitions of a list of rules.
 // Unit cases build the automata of small lexers and check their size, their
 // transitions on chosen strings, the rule that wins, a start state that is
@@ -17,11 +17,11 @@
 // and the fold and the stream from that place with one longest match after
 // another.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_automaton %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: fuzz{{[/\\]}}regex_automaton
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin automaton %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}automaton
 
-// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_automaton%exe_ext -runs=0 | %FileCheck %s
-// RUN: %std_rene_build/fuzz/regex_automaton%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/automaton%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/automaton%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
 // CHECK:      regex automaton/a lexer: unit
 // CHECK-NEXT: regex automaton/characters: unit
@@ -40,16 +40,16 @@
 import core::simd;
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::char_set::CharSet;
-import std::regex::automaton::Automaton;
-import std::regex::automaton::ByteRange;
-import std::regex::automaton::Found;
-import std::regex::automaton::Match;
-import std::regex::automaton::Run;
-import std::regex::automaton::State;
-import std::regex::tree::ByteRegex;
-import std::regex::tree::Regex;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::char_set::CharSet;
+import regex::automaton::Automaton;
+import regex::automaton::ByteRange;
+import regex::automaton::Found;
+import regex::automaton::Match;
+import regex::automaton::Run;
+import regex::automaton::State;
+import regex::tree::ByteRegex;
+import regex::tree::Regex;
 import std::result::Result;
 import std::string::String;
 import std::text::Text;
