@@ -13,11 +13,11 @@
 
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::char_set::CharSet;
-import std::regex::alphabet::utf8::Utf8Range;
-import std::regex::alphabet::utf8::Utf8Sequence;
-import std::regex::alphabet::utf8::sequences;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::char_set::CharSet;
+import regex::alphabet::utf8::Utf8Range;
+import regex::alphabet::utf8::Utf8Sequence;
+import regex::alphabet::utf8::sequences;
 import std::text::Text;
 
 /// A regex whose leaves are sets of bytes and sets of characters.

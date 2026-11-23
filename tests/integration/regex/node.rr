@@ -1,4 +1,4 @@
-// Unit suite and coverage-guided fuzz driver for `std::regex::node`: regexes
+// Unit suite and coverage-guided fuzz driver for `regex::node`: regexes
 // as nodes of a table, and their derivatives.
 // Unit cases spell out the rewrite rules on sets and the two fixed nodes,
 // and follow the derivatives of a small lexer until no new node appears.
@@ -6,11 +6,11 @@
 // derivative of its node with a small matcher on the tree, which rewrites
 // nothing. The other checks the laws that make equal regexes one node.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_node %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: fuzz{{[/\\]}}regex_node
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin node %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}node
 
-// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_node%exe_ext -runs=0 | %FileCheck %s
-// RUN: %std_rene_build/fuzz/regex_node%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/node%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/node%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
 // CHECK:      regex node/rewrite rules: unit
 // CHECK-NEXT: regex node/derivatives of a lexer: unit
@@ -18,14 +18,14 @@
 // CHECK-NEXT: regex node/equal regexes are one node (fuzz):
 
 import std::collections::pure::list::List;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::byte_classes::ByteClasses;
-import std::regex::alphabet::char_set::CharSet;
-import std::regex::node::Node;
-import std::regex::node::Nodes;
-import std::regex::node::refine;
-import std::regex::tree::ByteRegex;
-import std::regex::tree::Regex;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::alphabet::char_set::CharSet;
+import regex::node::Node;
+import regex::node::Nodes;
+import regex::node::refine;
+import regex::tree::ByteRegex;
+import regex::tree::Regex;
 import test::domain::char_domain;
 import test::domain::tuple2;
 import test::domain::tuple3;

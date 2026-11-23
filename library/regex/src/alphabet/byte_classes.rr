@@ -2,7 +2,7 @@
 
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
+import regex::alphabet::bits::Bits;
 
 /// The bytes divided into classes: disjoint sets that together hold every
 /// byte, in the order of their smallest members. The number of a class is

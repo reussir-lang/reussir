@@ -1,15 +1,15 @@
-// Unit suite and coverage-guided fuzz driver for `std::regex::alphabet::utf8`:
+// Unit suite and coverage-guided fuzz driver for `regex::alphabet::utf8`:
 // the UTF-8 encodings of a set of characters as sequences of byte ranges.
 // Unit cases spell out the sequences of small sets and of every character.
 // The fuzz target checks, for random sets, that the sequences are in order,
 // that each is exactly the encodings of a stretch of members, and that
 // together they hold as many strings as the set has members.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin regex_utf8 %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: fuzz{{[/\\]}}regex_utf8
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin utf8 %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}utf8
 
-// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/regex_utf8%exe_ext -runs=0 | %FileCheck %s
-// RUN: %std_rene_build/fuzz/regex_utf8%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/utf8%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/utf8%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
 // CHECK:      regex utf8/small sets: unit
 // CHECK-NEXT: regex utf8/across lengths: unit
@@ -18,11 +18,11 @@
 
 import std::collections::pure::list::List;
 import std::option::Option;
-import std::regex::alphabet::char_set::CharSet;
-import std::regex::alphabet::char_set::Span;
-import std::regex::alphabet::utf8::Utf8Range;
-import std::regex::alphabet::utf8::Utf8Sequence;
-import std::regex::alphabet::utf8::fold_sequences;
+import regex::alphabet::char_set::CharSet;
+import regex::alphabet::char_set::Span;
+import regex::alphabet::utf8::Utf8Range;
+import regex::alphabet::utf8::Utf8Sequence;
+import regex::alphabet::utf8::fold_sequences;
 import test::domain::char_domain;
 import test::domain::tuple2;
 import test::expect::Outcome;
@@ -122,7 +122,7 @@ fn test_every() -> Outcome {
         List::Cons { four(r(0xF4, 0xF4), r(0x80, 0x8F), tail, tail), List::Nil } } } } } } } } };
     expect(same(sequences(CharSet::full()), wanted), "the sequences of every character")
         .and_then(|| expect(
-            same(std::regex::alphabet::utf8::sequences(CharSet::full()), wanted),
+            same(regex::alphabet::utf8::sequences(CharSet::full()), wanted),
             "the list of the sequences of every character"
         ))
 }

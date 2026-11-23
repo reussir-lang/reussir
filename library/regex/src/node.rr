@@ -19,9 +19,9 @@ import std::collections::pure::list::List;
 import std::hash::Hash;
 import std::hash::Hasher;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::alphabet::byte_classes::ByteClasses;
-import std::regex::tree::ByteRegex;
+import regex::alphabet::bits::Bits;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::tree::ByteRegex;
 
 /// A regex of a table of nodes. Two nodes of one table are equal when the
 /// rewrite rules make their regexes the same.

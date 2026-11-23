@@ -2,12 +2,12 @@
 
 import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
-import std::regex::alphabet::byte_classes::ByteClasses;
-import std::regex::automaton::Automaton;
-import std::regex::automaton::arrange::Arranged;
-import std::regex::automaton::columns::Columns;
-import std::regex::automaton::encoding;
-import std::regex::automaton::lookahead::LoopOptimizer;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::automaton::Automaton;
+import regex::automaton::arrange::Arranged;
+import regex::automaton::columns::Columns;
+import regex::automaton::encoding;
+import regex::automaton::lookahead::LoopOptimizer;
 
 /// The automaton of the states `arranged`, with the columns `shared` and
 /// the runs `runs`, over the classes of bytes `sets`.

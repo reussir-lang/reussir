@@ -3,12 +3,12 @@
 
 import core::intrinsic::array;
 import std::option::Option;
-import std::regex::alphabet::bits::Bits;
-import std::regex::automaton::Automaton;
-import std::regex::automaton::Run;
-import std::regex::automaton::State;
-import std::regex::automaton::encoding;
-import std::regex::automaton::vectors::stretches;
+import regex::alphabet::bits::Bits;
+import regex::automaton::Automaton;
+import regex::automaton::Run;
+import regex::automaton::State;
+import regex::automaton::encoding;
+import regex::automaton::vectors::stretches;
 
 impl Automaton {
     /// The state before any byte.
