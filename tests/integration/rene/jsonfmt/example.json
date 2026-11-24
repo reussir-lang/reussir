@@ -1,0 +1,8 @@
+{"name":"réussir","version":[0,1,0],
+  "tags" : [ ] , "meta":{},
+ "numbers":[-0, 3.25, 1e10, -12.5E-3, 6.02e+23],
+   "escapes": "tab\t quote\" slash\/ \u00e9 \\",
+ "flags":{"debug":true,"release":false,"target":null},
+ "matrix":[[1,2,3],[4,5,6],[7,8,9]],
+ "packages":[{"name":"std","path":"library/std","features":["regex","format","collections"]},{"name":"test","path":"library/test","features":[]}]
+}
