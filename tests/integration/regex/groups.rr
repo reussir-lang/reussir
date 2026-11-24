@@ -1,0 +1,268 @@
+// Unit suite and coverage-guided fuzz driver for `regex::groups`: the
+// bytes of a match that each marked part of its rule took.
+// Unit cases say what is refused: a misplaced group, and parts that need
+// more states than the limit, and how the states grow with the parts.
+// The fuzz target builds two random rules with groups over `a`, `b` and
+// a character of two bytes, and compares what is refused with the trees.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %regex_rene_build --profile fuzz --bin groups %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}groups
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %regex_rene_build/fuzz/groups%exe_ext -runs=0 | %FileCheck %s
+// RUN: %regex_rene_build/fuzz/groups%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      regex groups/what is refused: unit
+// CHECK-NEXT: regex groups/the states of many parts: unit
+// CHECK-NEXT: regex groups/what is refused & the trees (fuzz):
+
+import regex::groups::Groups;
+import regex::groups::Refused;
+import regex::tree::Regex;
+import std::collections::pure::list::List;
+import std::result::Result;
+import std::text::Text;
+import test::domain::tuple2;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+// ------------------------------ The oracle ------------------------------
+
+// The number of groups in `regex`.
+fn marks(regex: Regex) -> u64 {
+    match regex {
+        Group(inner) => 1 + marks(inner),
+        Concat(a, b) => marks(a) + marks(b),
+        Union(a, b) => marks(a) + marks(b),
+        Intersect(a, b) => marks(a) + marks(b),
+        Star(inner) => marks(inner),
+        Plus(inner) => marks(inner),
+        Not(inner) => marks(inner),
+        // A set, the empty string or nothing.
+        _ => 0
+    }
+}
+
+// Whether `regex` has a misplaced group: one under something other than
+// parts one after another and groups.
+fn hidden(regex: Regex) -> bool {
+    match regex {
+        Group(inner) => hidden(inner),
+        Concat(a, b) => hidden(a) || hidden(b),
+        // Anything else.
+        _ => marks(regex) > 0
+    }
+}
+
+fn rules1(a: Regex) -> List<Regex> {
+    List::Cons { a, List::Nil }
+}
+
+fn rules2(a: Regex, b: Regex) -> List<Regex> {
+    List::Cons { a, rules1(b) }
+}
+
+// ------------------------------ Unit cases ------------------------------
+
+fn digits() -> Regex {
+    Regex::range(48, 57).plus()
+}
+
+fn letters() -> Regex {
+    Regex::range(97, 122).plus()
+}
+
+fn a() -> Regex {
+    Regex::byte(97)
+}
+
+fn b() -> Regex {
+    Regex::byte(98)
+}
+
+fn word(string: str) -> Regex {
+    Regex::literal(Text::from_str(string))
+}
+
+// Three numbers with a dash between them.
+fn date() -> Regex {
+    digits().group().then(Regex::byte(45)).then(digits().group()).then(Regex::byte(45)).then(digits().group())
+}
+
+// 0 for a `Groups`, 1 for too many states with this limit, and 2 with the
+// rule added for a group that is misplaced.
+fn refusal(rules: List<Regex>, limit: u64) -> u64 {
+    match Groups::build(rules, limit) {
+        Ok(_) => 0,
+        Err(refused) => match refused {
+            TooManyStates(error) => if error.limit == limit { 1 } else { 1000 },
+            Misplaced(rule) => 2 + (rule as u64)
+        }
+    }
+}
+
+// The number of states of the parts of `rules`, or 0 when they are
+// refused.
+fn states_of(rules: List<Regex>) -> u64 {
+    match Groups::build(rules, 100000) {
+        Ok(groups) => groups.states(),
+        Err(_) => 0
+    }
+}
+
+// A misplaced group is refused, with the rule that has it; so are rules
+// whose parts need more states than the limit.
+fn test_refused() -> Outcome {
+    let under_not = letters().group().not();
+    let under_and = letters().group().then(digits()).and(Regex::any_char().star());
+    let deep = digits().then(a().then(b().group().not()));
+    let fine = letters().and(word("if").not()).group();
+    should_be(refusal(rules1(under_not), 400), 2)
+        .and_then(|| should_be(refusal(rules2(fine, under_and), 400), 3))
+        .and_then(|| should_be(refusal(List::Cons { fine, rules2(date(), deep) }, 400), 4))
+        .and_then(|| should_be(refusal(rules1(fine), 400), 0))
+        .and_then(|| should_be(refusal(rules1(a().group().or(b())), 400), 2))
+        .and_then(|| should_be(refusal(rules1(a().group().star()), 400), 2))
+        .and_then(|| should_be(refusal(rules1(a().group().plus()), 400), 2))
+        // The parts of the date have nine states with the dead one.
+        .and_then(|| should_be(states_of(rules1(date())), 9))
+        .and_then(|| should_be(refusal(rules1(date()), 3), 1))
+        .and_then(|| should_be(refusal(rules1(date()), 8), 1))
+        .and_then(|| should_be(refusal(rules1(date()), 9), 0))
+        // Without a group no part is read with, and the dead state is all.
+        .and_then(|| should_be(states_of(rules1(digits().then(letters()))), 1))
+        .and_then(|| should_be(refusal(rules1(digits().then(letters())), 0), 0))
+}
+
+// `count` parts `piece`, each a group, with `between` between them.
+fn row(count: u64, piece: Regex, between: Regex) -> Regex {
+    let (_, all) = while [left = count, all = piece.group()] (left > 1) {
+        (left - 1, piece.group().then(between).then(all))
+    };
+    all
+}
+
+// The parts from each part on have an automaton. Fields with a mark
+// between them are in a state of the fields after them once a mark is
+// read, and need three states for each field. Parts `a+` with nothing
+// between them have a state for every number of them that have begun,
+// from each part on, and their states grow with the square of their
+// number: what the limit is there for.
+fn test_growth() -> Outcome {
+    let field = Regex::byte(59).not().and(Regex::range(0, 255)).star();
+    let fields = |count: u64| states_of(rules1(row(count, field, Regex::byte(59))));
+    let pluses = |count: u64| row(count, a().plus(), Regex::epsilon());
+    should_be(fields(4), 11)
+        .and_then(|| should_be(fields(8), 23))
+        .and_then(|| should_be(fields(16), 47))
+        .and_then(|| should_be(states_of(rules1(pluses(4))), 11))
+        .and_then(|| should_be(states_of(rules1(pluses(8))), 37))
+        .and_then(|| should_be(states_of(rules1(pluses(16))), 137))
+        .and_then(|| should_be(refusal(rules1(pluses(16)), 136), 1))
+        .and_then(|| should_be(refusal(rules1(pluses(16)), 137), 0))
+}
+
+// ----------------------- Fuzz: what is refused against the trees -----------------------
+
+// The two regexes on top of the stack, combined into one.
+fn combine(stack: List<Regex>, both: (Regex, Regex) -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, below) => match below {
+            Cons(under, rest) => List::Cons { both(under, top), rest },
+            Nil => stack
+        },
+        Nil => stack
+    }
+}
+
+// The regex on top of the stack, changed.
+fn change(stack: List<Regex>, one: Regex -> Regex) -> List<Regex> {
+    match stack {
+        Cons(top, rest) => List::Cons { one(top), rest },
+        Nil => stack
+    }
+}
+
+// One step of a small program that builds regexes with groups on a
+// stack. Groups and parts one after another come most often.
+fn step(stack: List<Regex>, op: u8) -> List<Regex> {
+    match op % 24 {
+        0 => List::Cons { a(), stack },
+        1 => List::Cons { b(), stack },
+        2 => List::Cons { a().or(b()), stack },
+        3 => List::Cons { Regex::epsilon(), stack },
+        4 => List::Cons { Regex::char('é'), stack },
+        5 => List::Cons { word("aa"), stack },
+        6 => List::Cons { word("ab"), stack },
+        7 => List::Cons { word("aab"), stack },
+        8 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        9 => combine(stack, |first: Regex, second: Regex| first.then(second)),
+        10 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        11 => combine(stack, |first: Regex, second: Regex| first.or(second)),
+        12 => combine(stack, |first: Regex, second: Regex| Regex::Union { first, second }),
+        13 => change(stack, |inner: Regex| inner.star()),
+        14 => change(stack, |inner: Regex| inner.plus()),
+        15 => change(stack, |inner: Regex| inner.optional()),
+        16 => change(stack, |inner: Regex| inner.group()),
+        17 => change(stack, |inner: Regex| inner.group()),
+        18 => change(stack, |inner: Regex| inner.group()),
+        19 => change(stack, |inner: Regex| inner.star().group()),
+        20 => combine(stack, |first: Regex, second: Regex| first.group().then(second)),
+        21 => combine(stack, |first: Regex, second: Regex| first.and(second)),
+        22 => change(stack, |inner: Regex| inner.not()),
+        // 23: any character.
+        _ => List::Cons { Regex::any_char(), stack }
+    }
+}
+
+// The regex a program builds: whatever is left on the stack, one after
+// another.
+fn rule_of(ops: List<u8>) -> Regex {
+    let stack = ops.fold_left(List::Nil, |stack: List<Regex>, op: u8| step(stack, op));
+    stack.fold_left(Regex::epsilon(), |all: Regex, regex: Regex| regex.then(all))
+}
+
+// The first of `rules`, numbered from `rule`, with a misplaced group, as
+// `refusal` numbers it; 0 when there is none.
+fn hides(rules: List<Regex>, rule: u64) -> u64 {
+    match rules {
+        Nil => 0,
+        Cons(regex, _) if hidden(regex) => 2 + rule,
+        Cons(_, rest) => hides(rest, rule + 1)
+    }
+}
+
+// What is refused of two rules against the trees.
+fn fuzz_refused(input: (List<u8>, List<u8>)) -> Outcome {
+    let (first, second) = input;
+    let rules = rules2(rule_of(first), rule_of(second));
+    let hid = hides(rules, 0);
+    match Groups::build(rules, 300) {
+        Err(refused) => match refused {
+            // Too many states for this test: nothing to compare.
+            TooManyStates(_) => expect(hid == 0, "too many states is said before a misplaced group"),
+            Misplaced(rule) => should_be(2 + (rule as u64), hid)
+        },
+        Ok(_) => should_be(hid, 0)
+    }
+}
+
+fn suite() -> TestTree {
+    TestTree::group("regex groups")
+        .with_case("what is refused", test_refused)
+        .with_case("the states of many parts", test_growth)
+        .with_fuzz(
+            "what is refused & the trees (fuzz)",
+            tuple2(u8_domain().list_with_len(0, 12), u8_domain().list_with_len(0, 12)),
+            fuzz_refused
+        )
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

@@ -1,0 +1,104 @@
+//! The groups of a match: the bytes of it that each marked part of its
+//! rule took.
+//!
+//! A rule marks parts of itself as groups with `Regex::group`. An
+//! automaton does not know of them: it finds the matches of the rules
+//! without the marks. The groups are asked for afterwards, of the bytes
+//! of one match, which are known to match the rule from the first to the
+//! last:
+//!
+//! ```text
+//! rule      ([0-9]+) "-" ([0-9]+) "-" ([0-9]+)
+//! text      2026-11-19 at noon
+//! match     ----------                from 0 to 10
+//! group 1   ----                      from 0 to 4
+//! group 2        --                   from 5 to 7
+//! group 3           --                from 8 to 10
+//! ```
+//!
+//! The groups are found by reading, not by trying. For `first rest`, the
+//! automaton of `first` reads on, and at every place where it accepts the
+//! automaton of `rest` begins anew. Only parts one after another are
+//! asked about: a rule with a group under anything else is refused.
+//!
+//! The automata are one table for all parts of all rules, of no more
+//! states than the limit given to `Groups::build`; that limit is not the
+//! limit of the automaton of the rules, which is built apart. The parts
+//! from each part on have an automaton, and these share their states
+//! where a part has ended before the next goes on: sixteen fields with a
+//! mark between them need 47 states. Where it has not, they share few,
+//! and the states grow with the square of the parts: `a+` sixteen times
+//! in a row needs 137.
+//!
+//! - `program`: the automata that the rules are read with.
+//! - `table`: the automata of the parts, in one table.
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::automaton::TooManyStates;
+import regex::node::refine;
+import regex::tree::Regex;
+import std::result::Result;
+
+mod program;
+mod table;
+
+/// The automata that find the groups of a match, for every rule.
+/// `Groups::build` makes it.
+pub struct Program {
+    // The automata, as `table` lays them out.
+    next: [u32; ?],
+    classes: [u8; 256],
+    starts: [u32; ?],
+    shift: u64,
+    states: u64
+}
+
+/// What finds the groups of the matches of some rules.
+pub struct [value] Groups {
+    program: Program
+}
+
+/// Why rules have no `Groups`.
+pub enum [value] Refused {
+    /// The automata of the parts need more states than the limit.
+    TooManyStates(TooManyStates),
+    /// The rule with this number has a group under something other than
+    /// parts one after another and groups.
+    Misplaced(u32)
+}
+
+impl Groups {
+    /// What finds the groups of the matches of `rules`. The search for
+    /// the states of the automata of the parts, all together, gives up
+    /// when it has found more than `limit` of them.
+    pub fn build(rules: List<Regex>, limit: u64) -> Result<Groups, Refused> {
+        match program::misplaced(rules, 0) {
+            Some(rule) => Result::Err { Refused::Misplaced { rule } },
+            None => {
+                let asked = program::ask(rules);
+                let sets = rules.fold_left(ByteClasses::whole(), |sets: ByteClasses, rule: Regex| refine(sets, rule.to_bytes()));
+                match table::build(asked.parts.reverse(), sets, limit) {
+                    Err(error) => Result::Err { Refused::TooManyStates { error } },
+                    Ok(table) => {
+                        let program = Program {
+                            next: table.next,
+                            classes: table.classes,
+                            starts: table.starts,
+                            shift: table.shift,
+                            states: table.states
+                        };
+                        Result::Ok { Groups { program } }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The number of states of the automata of the parts, the dead state
+    /// included.
+    pub fn states(self: Self) -> u64 {
+        self.program.states
+    }
+}
