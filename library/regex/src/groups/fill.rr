@@ -1,0 +1,174 @@
+//! Asking the questions of a rule of the bytes of a match.
+//!
+//! The answers are written into the words of a `Groups`, where the
+//! questions also keep the beginnings of their automata:
+//!
+//! ```text
+//! registers    step    marks              one list      the other
+//! 1 each       1       1 for each state   2 for each    2 for each
+//! ```
+//!
+//! The beginnings of an automaton that are alive are a list, the one
+//! whose answer counts first. A beginning is two words: the cell of its
+//! state, and the place where it began. A byte moves each of them to its
+//! next state, in that order, into the other list; one that comes to the
+//! dead state is left out, and so is one that comes to a state where
+//! another stands already, so a list has no more beginnings than there
+//! are states. A state is marked with the number of the step in which it
+//! was come to. The steps are numbered on from match to match, so the
+//! marks are never cleared.
+//!
+//! The words are read and written with `array::get` and `array::set`,
+//! which test their place. The bytes of the match are read through a
+//! pointer: a place that is read is not before the beginning of the match
+//! and is before its end, and `Groups::fill` asks no question of a match
+//! that is not inside the text.
+
+import core::intrinsic::array;
+import core::ptr::Generic;
+import regex::automaton::Match;
+import regex::automaton::native;
+import regex::groups::Groups;
+import regex::groups::Program;
+import regex::groups::program;
+
+/// The place of a group that is absent: no byte has this index.
+pub fn absent() -> u64 {
+    0xFFFFFFFFFFFFFFFF
+}
+
+fn accepts(cell: u32) -> bool {
+    (cell & 1) != 0
+}
+
+impl Program {
+    // The number of words that the groups of a match need.
+    fn room(self: Self) -> u64 {
+        self.registers + 1 + 5 * self.states
+    }
+
+    // The cell after `cell` on `byte`. The dead state leads to itself.
+    fn step(self: Self, cell: u32, byte: u8) -> u32 {
+        array::get(self.next, ((cell & 0xFFFFFFFE) + (array::get(self.classes, byte as i64) as u32)) as i64)
+    }
+
+    // Where the state of `cell` is marked.
+    fn mark(self: Self, cell: u32) -> i64 {
+        (self.registers + 1 + ((cell as u64) >> self.shift)) as i64
+    }
+
+    // The word `at` of the questions.
+    fn word(self: Self, at: u64) -> u64 {
+        array::get(self.code, at as i64)
+    }
+
+    // Where the first part of the bytes of the question `at` ends: the
+    // last place up to which its automaton matches, with the automaton of
+    // the other parts matching from there to the end. That automaton
+    // begins anew at every place where the first one accepts, and a later
+    // beginning goes before an earlier one.
+    fn split(self: Self, bytes: ConstPtr<Generic>, work: [u64; ?], at: u64) -> [u64; ?] {
+        let from = array::get(work, self.word(at + 1) as i64);
+        let to = array::get(work, self.word(at + 2) as i64);
+        let fills = self.word(at + 3) as i64;
+        if from == absent() || to == absent() { array::set(work, fills, absent()) } else {
+            let first = array::get(self.starts, self.word(at + 4) as i64);
+            let begins = array::get(self.starts, self.word(at + 5) as i64);
+            let counter = self.registers as i64;
+            let listed = self.registers + 1 + self.states;
+            // The first part may have no bytes.
+            let (work, alive) = if accepts(first) {
+                (array::set(array::set(work, listed as i64, begins as u64), (listed + 1) as i64, from), 1)
+            } else {
+                (work, 0)
+            };
+            let before = array::get(work, counter);
+            let (work, place, _, alive, here, _, steps, _) = while [
+                work = work,
+                place = from,
+                cell = first,
+                alive = (alive as u64),
+                here = listed,
+                there = listed + 2 * self.states,
+                steps = before,
+                going = true
+            ] (going) {
+                // With the first automaton dead, one beginning that is
+                // left is the answer: the bytes are known to match.
+                if place >= to || (cell == 0 && alive <= 1) { (work, place, cell, alive, here, there, steps, false) } else {
+                    let byte = native::byte_at(bytes, place);
+                    let cell = self.step(cell, byte);
+                    let steps = steps + 1;
+                    let (work, moved) = if accepts(cell) {
+                        let work = array::set(work, self.mark(begins), steps);
+                        (array::set(array::set(work, there as i64, begins as u64), (there + 1) as i64, place + 1), 1)
+                    } else {
+                        (work, 0)
+                    };
+                    let (work, moved, _) = while [work = work, moved = (moved as u64), index = (0 as u64)] (index < alive) {
+                        let began = array::get(work, (here + 2 * index + 1) as i64);
+                        let next = self.step(array::get(work, (here + 2 * index) as i64) as u32, byte);
+                        if next == 0 || array::get(work, self.mark(next)) == steps { (work, moved, index + 1) } else {
+                            let work = array::set(work, self.mark(next), steps);
+                            let work = array::set(work, (there + 2 * moved) as i64, next as u64);
+                            (array::set(work, (there + 2 * moved + 1) as i64, began), moved + 1, index + 1)
+                        }
+                    };
+                    (work, place + 1, cell, moved, there, here, steps, true)
+                }
+            };
+            let work = array::set(work, counter, steps);
+            let found = if place < to {
+                if alive == 1 {
+                    array::get(work, (here + 1) as i64)
+                } else {
+                    absent()
+                }
+            } else {
+                ended(work, here, alive)
+            };
+            array::set(work, fills, found)
+        }
+    }
+}
+
+// Where the first beginning of the `alive` ones at `here` began that is
+// in a state that accepts, or no place.
+fn ended(work: [u64; ?], here: u64, alive: u64) -> u64 {
+    let (_, found) = while [index = (0 as u64), found = absent()] (index < alive && found == absent()) {
+        if accepts(array::get(work, (here + 2 * index) as i64) as u32) {
+            (index + 1, array::get(work, (here + 2 * index + 1) as i64))
+        } else {
+            (index + 1, found)
+        }
+    };
+    found
+}
+
+impl Groups {
+    // The groups of the match `found` in the `length` bytes at `bytes`,
+    // which the caller keeps readable for the call. No byte is read for
+    // a match that is not inside the bytes, or whose rule the questions
+    // do not have, and it has no groups.
+    fn filled(self: Self, bytes: ConstPtr<Generic>, length: u64, found: Match) -> Groups {
+        let program = self.program;
+        let work = self.work;
+        let rule = (found.rule as u64) * 4;
+        let inside = found.start <= found.end && found.end <= length;
+        if !inside || rule >= array::dim(program.rules, 0) { Groups { program, work, rule: found.rule, count: 0, spans: 0 } } else {
+            // The whole match is the first two registers.
+            let work = array::set(array::set(work, 0, found.start), 1, found.end);
+            let end = array::get(program.rules, (rule + 1) as i64);
+            let (_, work) = while [at = array::get(program.rules, rule as i64), work = work] (at < end) {
+                (at + program::width(), program.split(bytes, work, at))
+            };
+            Groups {
+                work,
+                rule: found.rule,
+                count: array::get(program.rules, (rule + 2) as i64) as u32,
+                spans: array::get(program.rules, (rule + 3) as i64),
+                program
+            }
+        }
+    }
+}
