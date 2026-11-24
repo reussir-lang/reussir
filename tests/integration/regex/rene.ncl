@@ -17,6 +17,7 @@
   targets = {
     alphabet = { kind = 'executable, path = "alphabet.rr", fuzzer = true },
     automaton = { kind = 'executable, path = "automaton.rr", fuzzer = true },
+    lexer = { kind = 'executable, path = "lexer.rr", fuzzer = true },
     node = { kind = 'executable, path = "node.rr", fuzzer = true },
     tree = { kind = 'executable, path = "tree.rr", fuzzer = true },
     utf8 = { kind = 'executable, path = "utf8.rr", fuzzer = true },
