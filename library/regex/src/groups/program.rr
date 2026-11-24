@@ -21,7 +21,8 @@
 //! ```
 //!
 //! A register of a part that the bytes did not come through holds no
-//! place, and so do the registers that its questions fill.
+//! place, and so do the registers that its questions fill. The groups
+//! of a repetition are asked of its last time.
 //!
 //! A question is six words: what it asks, the registers of the beginning
 //! and of the end of its bytes, the first register that it fills, and
@@ -47,6 +48,17 @@ pub fn splits() -> u64 {
 /// one that the question fills, holds their beginning.
 pub fn chooses() -> u64 {
     1
+}
+
+/// Where the last time of a repetition begins, with the automaton
+/// `first` of what is repeated; no place when there are no bytes.
+pub fn repeats() -> u64 {
+    2
+}
+
+/// The same for once or more: with no bytes, the one time has none.
+pub fn repeats_once() -> u64 {
+    3
 }
 
 /// The number of words of a question.
@@ -98,14 +110,16 @@ fn groups_of(regex: Regex) -> u64 {
     }
 }
 
-// Whether `regex` has a group that no question finds: only parts one
-// after another, branches and groups are asked about.
+// Whether `regex` has a group under a complement or an intersection:
+// the bytes that match one do not come through what is inside it.
 fn misplaces(regex: Regex) -> bool {
     match regex {
         Group(inner) => misplaces(inner),
         Concat(first, second) => misplaces(first) || misplaces(second),
         Union(first, second) => misplaces(first) || misplaces(second),
-        // Anything else has no group inside, or one that is misplaced.
+        Star(inner) => misplaces(inner),
+        Plus(inner) => misplaces(inner),
+        // A complement or an intersection, or what has no group.
         _ => groups_of(regex) > 0
     }
 }
@@ -249,9 +263,19 @@ impl Asked {
                 let (asked, one) = asked.ask(chooses(), from, to, which, all.len());
                 asked.spare(all.len() - 1).each(all, one, to)
             },
+            Star(inner) if groups_of(inner) > 0 => self.times(repeats(), inner, from, to),
+            Plus(inner) if groups_of(inner) > 0 => self.times(repeats_once(), inner, from, to),
             // Nothing else has a group inside that is not misplaced.
             _ => self
         }
+    }
+
+    // The questions of a repetition of `inner`: where its last time
+    // begins, and the questions of that time.
+    fn times(self: Self, what: u64, inner: Regex, from: u64, to: u64) -> Asked {
+        let (asked, body) = self.reads(List::Cons { inner.to_bytes(), List::Nil });
+        let (asked, last) = asked.ask(what, from, to, body, 0);
+        asked.part(inner, last, to)
     }
 
     // The questions of `branches`, each with its bytes from its own

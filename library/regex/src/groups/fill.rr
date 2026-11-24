@@ -86,6 +86,61 @@ impl Program {
         work
     }
 
+    // Where the last time of the repetition of the question `at` begins.
+    // The automaton of what is repeated begins anew at every place where
+    // it accepts, after the beginning that goes on: a time takes as many
+    // bytes as it can. A time has a byte at least: a beginning is moved
+    // by a byte before it can end, and at the end the one that has just
+    // begun comes after the one whose end it began at, which accepts.
+    fn repeat(self: Self, bytes: ConstPtr<Generic>, work: [u64; ?], at: u64) -> [u64; ?] {
+        let from = array::get(work, self.word(at + 1) as i64);
+        let to = array::get(work, self.word(at + 2) as i64);
+        let fills = self.word(at + 3) as i64;
+        if from == absent() || to == absent() { array::set(work, fills, absent()) } else {
+            if from == to {
+                // No times, or one time of no bytes.
+                array::set(work, fills, if self.word(at) == program::repeats_once() { from } else { absent() })
+            } else {
+                let begins = array::get(self.starts, self.word(at + 4) as i64);
+                let counter = self.registers as i64;
+                let listed = self.registers + 1 + self.states;
+                let work = array::set(array::set(work, listed as i64, begins as u64), (listed + 1) as i64, from);
+                let before = array::get(work, counter);
+                let (work, _, alive, here, _, steps) = while [
+                    work = work,
+                    place = from,
+                    alive = (1 as u64),
+                    here = listed,
+                    there = listed + 2 * self.states,
+                    steps = before
+                ] (place < to && alive > 0) {
+                    let byte = native::byte_at(bytes, place);
+                    let steps = steps + 1;
+                    let (work, moved, _) = while [work = work, moved = (0 as u64), index = (0 as u64)] (index < alive) {
+                        let began = array::get(work, (here + 2 * index + 1) as i64);
+                        let next = self.step(array::get(work, (here + 2 * index) as i64) as u32, byte);
+                        if next == 0 || array::get(work, self.mark(next)) == steps { (work, moved, index + 1) } else {
+                            let work = array::set(work, self.mark(next), steps);
+                            let work = array::set(work, (there + 2 * moved) as i64, next as u64);
+                            let work = array::set(work, (there + 2 * moved + 1) as i64, began);
+                            // A time can end here, and the next one begin.
+                            if accepts(next) && array::get(work, self.mark(begins)) != steps {
+                                let work = array::set(work, self.mark(begins), steps);
+                                let work = array::set(work, (there + 2 * moved + 2) as i64, begins as u64);
+                                (array::set(work, (there + 2 * moved + 3) as i64, place + 1), moved + 2, index + 1)
+                            } else {
+                                (work, moved + 1, index + 1)
+                            }
+                        }
+                    };
+                    (work, place + 1, moved, there, here, steps)
+                };
+                let work = array::set(work, counter, steps);
+                array::set(work, fills, ended(work, here, alive))
+            }
+        }
+    }
+
     // The word `at` of the questions.
     fn word(self: Self, at: u64) -> u64 {
         array::get(self.code, at as i64)
@@ -189,10 +244,15 @@ impl Groups {
             let work = array::set(array::set(work, 0, found.start), 1, found.end);
             let end = array::get(program.rules, (rule + 1) as i64);
             let (_, work) = while [at = array::get(program.rules, rule as i64), work = work] (at < end) {
-                let work = if program.word(at) == program::splits() {
+                let what = program.word(at);
+                let work = if what == program::splits() {
                     program.split(bytes, work, at)
                 } else {
-                    program.choose(bytes, work, at)
+                    if what == program::chooses() {
+                        program.choose(bytes, work, at)
+                    } else {
+                        program.repeat(bytes, work, at)
+                    }
                 };
                 (at + program::width(), work)
             };
