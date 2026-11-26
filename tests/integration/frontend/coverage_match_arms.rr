@@ -1,0 +1,37 @@
+// Each arm of a `match` gets a counter with the span of its arm body. An arm
+// that the decision tree copies into two regions has the same span in both,
+// and llvm-cov adds the counts of regions with the same span.
+
+// RUN: %rrc %s --emit mlir --instrument-coverage -o %t.mlir
+// RUN: %reussir-opt %t.mlir --reussir-instrument-coverage --mlir-print-local-scope -o %t.cov.mlir
+// RUN: %FileCheck %s --check-prefix=SIZE < %t.cov.mlir
+// RUN: %FileCheck %s --check-prefix=BOTH < %t.cov.mlir
+
+pub enum Shape { Dot, Line(i64) }
+
+// SIZE: name = "_RC4size", regions = [{counter = 0 : i32, span = loc("{{[^"]*}}":[[#@LINE+4]]:5 to [[#@LINE+7]]:6)},
+// SIZE-SAME: {counter = 1 : i32, span = loc("{{[^"]*}}":[[#@LINE+4]]:23 to :24)},
+// SIZE-SAME: {counter = 2 : i32, span = loc("{{[^"]*}}":[[#@LINE+4]]:27 to :32)}]
+pub fn size(s: Shape) -> i64 {
+    match s {
+        Shape::Dot => 0,
+        Shape::Line(n) => n + 1
+    }
+}
+
+// The regions of `a` cover the arms under them. The arm `(_, false)` is in
+// both regions of `a`.
+// BOTH: name = "_RC4both", regions = [{counter = 0 : i32, span = loc("{{[^"]*}}":[[#@LINE+8]]:5 to [[#@LINE+12]]:6)},
+// BOTH-SAME: {counter = 1 : i32, span = loc("{{[^"]*}}":[[#@LINE+8]]:25 to [[#@LINE+9]]:24)},
+// BOTH-SAME: {counter = 2 : i32, span = loc("{{[^"]*}}":[[#@LINE+8]]:23 to [[#@LINE+9]]:27)},
+// BOTH-SAME: {counter = 3 : i32, span = loc("{{[^"]*}}":[[#@LINE+6]]:25 to :26)},
+// BOTH-SAME: {counter = 4 : i32, span = loc("{{[^"]*}}":[[#@LINE+6]]:23 to :24)},
+// BOTH-SAME: {counter = 5 : i32, span = loc("{{[^"]*}}":[[#@LINE+6]]:26 to :27)},
+// BOTH-SAME: {counter = 6 : i32, span = loc("{{[^"]*}}":[[#@LINE+4]]:23 to :24)}]
+pub fn both(a: bool, b: bool) -> i64 {
+    match (a, b) {
+        (true, true) => 1,
+        (_, false) => 2,
+        (false, true) => 3
+    }
+}
