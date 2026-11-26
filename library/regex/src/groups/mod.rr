@@ -16,48 +16,124 @@
 //! group 3           --                from 8 to 10
 //! ```
 //!
+//! ```text
+//! match (Automaton::build(rules.map(|rule: Regex| rule.to_bytes()), 100), Groups::build(rules, 100)) {
+//!     (Ok(automaton), Ok(groups)) => match automaton.matches(input, 0).next() {
+//!         (_, Matched(found)) => groups.fill(input, found).get(1),
+//!         ...
+//! ```
+//!
+//! Where the bytes of a match can be shared out in more than one way, the
+//! parts that come one after another, however `then` nests them, take
+//! theirs from the first on: each takes as many bytes as it can with the
+//! parts after it still matching the rest. That is the rule of POSIX, as
+//! Sulzmann and Lu's parsing with derivatives defines it, and it holds
+//! for every part, with a group or without one:
+//!
+//! ```text
+//! rule      (a | ab) (c | bcd) (d*)
+//! text      abcd
+//! groups    ab, c and d            not a, bcd and no bytes
+//! ```
+//!
 //! The groups are found by reading, not by trying. For `first rest`, the
 //! automaton of `first` reads on, and at every place where it accepts the
-//! automaton of `rest` begins anew. Only parts one after another are
-//! asked about: a rule with a group under anything else is refused.
+//! automaton of `rest` begins anew. Of the beginnings that come to one
+//! state the last is kept, and the last one that accepts at the end is
+//! where `first` ends:
 //!
-//! The automata are one table for all parts of all rules, of no more
-//! states than the limit given to `Groups::build`; that limit is not the
-//! limit of the automaton of the rules, which is built apart. The parts
-//! from each part on have an automaton, and these share their states
-//! where a part has ended before the next goes on: sixteen fields with a
-//! mark between them need 47 states. Where it has not, they share few,
-//! and the states grow with the square of the parts: `a+` sixteen times
-//! in a row needs 137.
+//! ```text
+//! parts     [0-9]+   then   "-" [0-9]+ "-" [0-9]+
+//! bytes     2  0  2  6  -  1  1  -  1  9
+//! first      ^  ^  ^  ^  x              accepts after every digit, and
+//!                                       is dead after the dash
+//! rest       x  x  x  ^-----            begins after every digit; only
+//!                                       the beginning at 4 has a dash
+//! ```
 //!
-//! - `program`: the automata that the rules are read with.
+//! With `first` dead and one beginning left, that one is the answer, and
+//! the rest of the bytes is not read. No byte is tried and taken back, so
+//! what is inside a group, and beside it, may be any regex, with
+//! complements and intersections. Only parts one after another are asked
+//! about: a rule with a group under anything else is refused.
+//!
+//! The groups of a match cost one reading of its bytes for every place
+//! between two parts that is asked for, times the beginnings that are
+//! alive, which are no more than the states of the automata. Those are
+//! one table for all parts of all rules, of no more states than the limit
+//! given to `Groups::build`; that limit is not the limit of the automaton
+//! of the rules, which is built apart. The parts from each part on have
+//! an automaton, and these share their states where a part has ended
+//! before the next goes on: sixteen fields with a mark between them need
+//! 47 states. Where it has not, they share few, and the states grow with
+//! the square of the parts: `a+` sixteen times in a row needs 137.
+//!
+//! A `Groups` holds the questions and the words that they are answered
+//! in. `fill` writes the answer into those words and gives the `Groups`
+//! back, so one serves all the matches of a text, and nothing is
+//! allocated for a match as long as no other copy of it is kept.
+//!
+//! - `program`: the questions of the rules, in the order they are asked.
 //! - `table`: the automata of the parts, in one table.
+//! - `fill`: asking the questions of the bytes of a match.
 
+import core::intrinsic::array;
 import std::collections::pure::list::List;
 import std::option::Option;
 import regex::alphabet::byte_classes::ByteClasses;
+import regex::automaton::Match;
 import regex::automaton::TooManyStates;
+import regex::groups::fill::absent;
 import regex::node::refine;
 import regex::tree::Regex;
 import std::result::Result;
+import std::text::TextView;
 
+mod fill;
 mod program;
 mod table;
 
-/// The automata that find the groups of a match, for every rule.
-/// `Groups::build` makes it.
+/// The questions that say the groups of a match, for every rule, and the
+/// automata that answer them. `Groups::build` makes it.
 pub struct Program {
+    // The questions, six words each, the rules and the spans of the
+    // groups, as `program` lays them out.
+    code: [u64; ?],
+    rules: [u64; ?],
+    spans: [u64; ?],
     // The automata, as `table` lays them out.
     next: [u32; ?],
     classes: [u8; 256],
     starts: [u32; ?],
     shift: u64,
-    states: u64
+    states: u64,
+    // The most registers that a rule has.
+    registers: u64
 }
 
-/// What finds the groups of the matches of some rules.
+/// The groups of a match: for each, where it begins and where it ends, or
+/// that it is absent. Group 0 is the whole match, and the others are
+/// numbered in the order they begin in, in the rule that matched.
 pub struct [value] Groups {
-    program: Program
+    program: Program,
+    // The registers of the questions, and after them what answering them
+    // needs: `fill` has the layout.
+    work: [u64; ?],
+    // The rule of the match, the number of its groups, the whole match
+    // counted, and where its spans begin.
+    rule: u32,
+    count: u32,
+    spans: u64
+}
+
+/// What a group took of a match.
+pub enum [value] Taken {
+    /// The index of the first byte of the group, and the index of the
+    /// byte after it.
+    Span(u64, u64),
+    /// The bytes of the match did not come through the group, or the
+    /// rule has no such group.
+    Absent
 }
 
 /// Why rules have no `Groups`.
@@ -70,9 +146,9 @@ pub enum [value] Refused {
 }
 
 impl Groups {
-    /// What finds the groups of the matches of `rules`. The search for
-    /// the states of the automata of the parts, all together, gives up
-    /// when it has found more than `limit` of them.
+    /// What says the groups of the matches of `rules`, with no match
+    /// yet. The search for the states of the automata of the parts, all
+    /// together, gives up when it has found more than `limit` of them.
     pub fn build(rules: List<Regex>, limit: u64) -> Result<Groups, Refused> {
         match program::misplaced(rules, 0) {
             Some(rule) => Result::Err { Refused::Misplaced { rule } },
@@ -82,18 +158,62 @@ impl Groups {
                 match table::build(asked.parts.reverse(), sets, limit) {
                     Err(error) => Result::Err { Refused::TooManyStates { error } },
                     Ok(table) => {
+                        let code = asked.code;
+                        let rules = asked.rules;
+                        let spans = asked.spans;
                         let program = Program {
+                            code: array::tabulate<[u64; ?]>(code.len(), |at: i64| code.get_or(at as u64, 0)),
+                            rules: array::tabulate<[u64; ?]>(rules.len(), |at: i64| rules.get_or(at as u64, 0)),
+                            spans: array::tabulate<[u64; ?]>(spans.len(), |at: i64| spans.get_or(at as u64, 0)),
                             next: table.next,
                             classes: table.classes,
                             starts: table.starts,
                             shift: table.shift,
-                            states: table.states
+                            states: table.states,
+                            registers: asked.most
                         };
-                        Result::Ok { Groups { program } }
+                        Result::Ok { Groups { work: array::splat<[u64; ?]>(program.room(), 0), program, rule: 0, count: 0, spans: 0 } }
                     }
                 }
             }
         }
+    }
+
+    /// The groups of the match `found` in `input`, which is a match of
+    /// the rules that `self` was built from. For any other `found` the
+    /// groups say nothing that holds, and there are none when it is not
+    /// inside the input or its rule is not one of the rules.
+    pub fn fill(self: Self, input: TextView, found: Match) -> Groups {
+        let filled = self.filled(input.unsafe_data_ptr(), input.len(), found);
+        // The length is asked for again so that the last use of `input`
+        // comes after its bytes are read through the pointer.
+        let count = if found.end <= input.len() {
+            filled.count
+        } else {
+            0
+        };
+        Groups { program: filled.program, work: filled.work, rule: filled.rule, count, spans: filled.spans }
+    }
+
+    /// The number of groups of the rule that matched, the whole match
+    /// counted; 0 before any match.
+    pub fn len(self: Self) -> u64 {
+        self.count as u64
+    }
+
+    /// The rule that matched.
+    pub fn rule(self: Self) -> u32 {
+        self.rule
+    }
+
+    /// The group `group` of the match.
+    pub fn get(self: Self, group: u64) -> Taken {
+        if group < (self.count as u64) {
+            let at = (self.spans + 2 * group) as i64;
+            let start = array::get(self.work, array::get(self.program.spans, at) as i64);
+            let end = array::get(self.work, array::get(self.program.spans, at + 1) as i64);
+            if start == absent() || end == absent() { Taken::Absent } else { Taken::Span { start, end } }
+        } else { Taken::Absent }
     }
 
     /// The number of states of the automata of the parts, the dead state

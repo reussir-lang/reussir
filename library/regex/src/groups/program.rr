@@ -1,31 +1,62 @@
-//! The automata that the groups of the rules are found with.
+//! The questions of the rules, in the order they are asked.
 //!
-//! The groups of a rule are found where its parts that come one after
-//! another end. For every such part but the last, with a group in it or
-//! after it, two automata are read with: that of the part alone, and that
-//! of the parts after it. The parts inside a group are asked for in the
-//! same way.
+//! A question is asked of a stretch of bytes that is known to match a
+//! part of a rule, and says where the parts inside it are. The places are
+//! kept in registers: the first two are the beginning and the end of the
+//! match, and every question fills one more, which the questions after it
+//! read. A group is two registers, known when the questions are written:
 //!
 //! ```text
 //! rule      ([0-9]+) "-" ([0-9]+)
 //!
-//! [0-9]+    and   "-" [0-9]+
-//! "-"       and   [0-9]+
+//! r2        where [0-9]+ ends in the bytes from r0 to r1, with
+//!           "-" [0-9]+ matching the rest
+//! r3        where "-" ends in the bytes from r2 to r1, with [0-9]+
+//!           matching the rest
+//! group 1   from r0 to r2
+//! group 2   from r3 to r1
 //! ```
 //!
-//! An automaton is that of a list of regexes without groups, and says the
+//! A question is six words: what it asks, the registers of the beginning
+//! and of the end of its bytes, the register that it fills, and two more
+//! that are automata, by their numbers in the table of `table`. An
+//! automaton is that of a list of regexes without groups, and says the
 //! earliest of them that matches; a part of a rule is a list of one.
 
+import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
 import std::option::Option;
 import regex::tree::ByteRegex;
 import regex::tree::Regex;
 
-/// The automata of a list of rules.
+/// Where the first of two parts ends: the automaton `first` matches up
+/// to there and the automaton `second` from there on.
+pub fn splits() -> u64 {
+    0
+}
+
+/// The number of words of a question.
+pub fn width() -> u64 {
+    6
+}
+
+/// The questions of a list of rules.
 pub struct Asked {
-    /// The lists of regexes that are read with, each an automaton, the
-    /// last one first.
-    pub parts: List<List<ByteRegex>>
+    pub code: Vec<u64>,
+    /// Four words for each rule: where its questions begin and where they
+    /// end, the number of its groups, the whole match counted, and where
+    /// its spans begin.
+    pub rules: Vec<u64>,
+    /// Two registers for each group of each rule: where it begins and
+    /// where it ends.
+    pub spans: Vec<u64>,
+    /// The lists of regexes that the questions read with, each an
+    /// automaton, the last one first, and their number.
+    pub parts: List<List<ByteRegex>>,
+    pub count: u64,
+    // The registers of the rule in hand, and the most that a rule has.
+    registers: u64,
+    pub most: u64
 }
 
 // A part of parts that come one after another: the part alone and the
@@ -53,7 +84,7 @@ fn groups_of(regex: Regex) -> u64 {
     }
 }
 
-// Whether `regex` has a group that no automaton finds: only parts one
+// Whether `regex` has a group that no question finds: only parts one
 // after another, and groups, are asked about.
 fn misplaces(regex: Regex) -> bool {
     match regex {
@@ -107,35 +138,91 @@ fn pieces(parts: List<Regex>) -> List<Piece> {
 
 impl Asked {
     fn new() -> Asked {
-        Asked { parts: List::Nil }
+        Asked { code: Vec::new(), rules: Vec::new(), spans: Vec::new(), parts: List::Nil, count: 0, registers: 2, most: 2 }
     }
 
-    // One more automaton, that of `regexes`.
-    fn reads(self: Self, regexes: List<ByteRegex>) -> Asked {
-        Asked { parts: List::Cons { regexes, self.parts } }
+    // One more automaton, that of `regexes`, and its number.
+    fn reads(self: Self, regexes: List<ByteRegex>) -> (Asked, u64) {
+        let asked = Asked {
+            code: self.code,
+            rules: self.rules,
+            spans: self.spans,
+            parts: List::Cons { regexes, self.parts },
+            count: self.count + 1,
+            registers: self.registers,
+            most: self.most
+        };
+        (asked, self.count)
     }
 
-    // The automata of `regex`.
-    fn part(self: Self, regex: Regex) -> Asked {
+    // One more question about the bytes from the register `from` to the
+    // register `to`, and the register that it fills.
+    fn ask(self: Self, what: u64, from: u64, to: u64, first: u64, second: u64) -> (Asked, u64) {
+        let fills = self.registers;
+        let asked = Asked {
+            code: self.code.push(what).push(from).push(to).push(fills).push(first).push(second),
+            rules: self.rules,
+            spans: self.spans,
+            parts: self.parts,
+            count: self.count,
+            registers: fills + 1,
+            most: self.most
+        };
+        (asked, fills)
+    }
+
+    // One more group of the rule in hand: the bytes from the register
+    // `from` to the register `to`.
+    fn group(self: Self, from: u64, to: u64) -> Asked {
+        Asked {
+            code: self.code,
+            rules: self.rules,
+            spans: self.spans.push(from).push(to),
+            parts: self.parts,
+            count: self.count,
+            registers: self.registers,
+            most: self.most
+        }
+    }
+
+    // The rule in hand is done: its questions began at `began` and its
+    // spans at `spans`.
+    fn close(self: Self, began: u64, spans: u64) -> Asked {
+        Asked {
+            rules: self.rules.push(began).push(self.code.len()).push((self.spans.len() - spans) / 2).push(spans),
+            code: self.code,
+            spans: self.spans,
+            parts: self.parts,
+            count: self.count,
+            registers: 2,
+            most: if self.registers > self.most { self.registers } else { self.most }
+        }
+    }
+
+    // The questions of `regex`, whose bytes are from the register `from`
+    // to the register `to`. The groups are met in the order they begin in.
+    fn part(self: Self, regex: Regex, from: u64, to: u64) -> Asked {
         match regex {
-            Group(inner) => self.part(inner),
-            Concat(_, _) => self.parts(pieces(flat(regex, List::Nil))),
+            Group(inner) => self.group(from, to).part(inner, from, to),
+            Concat(_, _) => self.parts(pieces(flat(regex, List::Nil)), from, to),
             // Nothing else has a group inside that is not misplaced.
             _ => self
         }
     }
 
-    // The automata of `pieces`, which come one after another. Where the
-    // parts without a group after the last group end changes no group,
-    // and is not asked.
-    fn parts(self: Self, pieces: List<Piece>) -> Asked {
+    // The questions of `pieces`, which come one after another in the bytes
+    // from the register `from` to the register `to`. Where the parts
+    // without a group after the last group end changes no group, and is
+    // not asked.
+    fn parts(self: Self, pieces: List<Piece>, from: u64, to: u64) -> Asked {
         match pieces {
             Cons(first, rest) if first.groups > 0 => match rest {
-                Nil => self.part(first.regex),
+                Nil => self.part(first.regex, from, to),
                 Cons(next, _) => {
-                    let asked = self.reads(List::Cons { first.alone, List::Nil });
-                    let asked = asked.reads(List::Cons { next.onward, List::Nil });
-                    asked.part(first.regex).parts(rest)
+                    let (asked, head) = self.reads(List::Cons { first.alone, List::Nil });
+                    let (asked, tail) = asked.reads(List::Cons { next.onward, List::Nil });
+                    let (asked, between) = asked.ask(splits(), from, to, head, tail);
+                    asked.part(first.regex, from, between).parts(rest, between, to)
                 }
             },
             // No part is left, or none with a group.
@@ -144,7 +231,11 @@ impl Asked {
     }
 }
 
-/// The automata of `rules`, none of which has a misplaced group.
+/// The questions of `rules`, none of which has a misplaced group.
 pub fn ask(rules: List<Regex>) -> Asked {
-    rules.fold_left(Asked::new(), |asked: Asked, rule: Regex| asked.part(rule))
+    rules.fold_left(Asked::new(), |asked: Asked, rule: Regex| {
+        let began = asked.code.len();
+        let spans = asked.spans.len();
+        asked.group(0, 1).part(rule, 0, 1).close(began, spans)
+    })
 }
