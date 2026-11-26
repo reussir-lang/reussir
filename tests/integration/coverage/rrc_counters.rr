@@ -1,6 +1,7 @@
 // With `--instrument-coverage`, each function gets a counter for its entry and
 // one for each branch, and InstrProfilingLoweringPass gives the counters and
-// the profile data records. Without the flag, the output has no counters.
+// the profile data records. The module also gets the coverage mapping. Without
+// the flag, the output has no counters and no mapping.
 // RUN: %rrc %s --instrument-coverage --emit llvm-ir -o %t.ll
 // RUN: %FileCheck %s < %t.ll
 // RUN: %rrc %s --emit llvm-ir -o %t.plain.ll
@@ -9,9 +10,13 @@
 // CHECK-DAG: @{{"?}}__profc_{{[^ ]*}}8classify{{"?}} = {{.*}}global [3 x i64] zeroinitializer
 // CHECK-DAG: @{{"?}}__profd_{{[^ ]*}}8classify{{"?}} = {{.*}}global
 // CHECK-DAG: @{{"?}}__profc_{{[^ ]*}}5entry{{"?}} = {{.*}}global [1 x i64] zeroinitializer
+// CHECK-DAG: @__covrec_{{[0-9A-F]+}}u = linkonce_odr hidden constant
+// CHECK-DAG: @__llvm_coverage_mapping = private constant
 // CHECK-NOT: call void @llvm.instrprof.increment
 // PLAIN-NOT: __prof
 // PLAIN-NOT: llvm.instrprof
+// PLAIN-NOT: __covrec_
+// PLAIN-NOT: __llvm_coverage_mapping
 
 fn classify(x: u64) -> u64 {
     if x > 4 {

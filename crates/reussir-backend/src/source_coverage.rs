@@ -8,14 +8,17 @@ use melior::ir::Module;
 use melior::pass::{Pass, PassManager};
 use reussir_backend_sys as sys;
 
-/// Runs `reussir-instrument-coverage` over `module`. It adds the counter
-/// increments and the `reussir.coverage.map` attribute of each function. Call
-/// before [`crate::pipeline::run_lowering_pipeline`], so that the pass sees
-/// the module before inlining and optimization.
+/// Runs `reussir-instrument-coverage` and then `reussir-emit-coverage-mapping`
+/// over `module`. They add the counter increments and the coverage mapping.
+/// Call before [`crate::pipeline::run_lowering_pipeline`], so that the passes
+/// see the module before inlining and optimization.
 pub fn instrument_module(context: &Context, module: &mut Module) -> Result<(), String> {
     let manager = PassManager::new(context);
-    // SAFETY: the factory returns a new pass, and the manager owns it.
-    manager.add_pass(unsafe { Pass::from_raw(sys::reussirCreateInstrumentCoveragePass()) });
+    // SAFETY: each factory returns a new pass, and the manager owns it.
+    unsafe {
+        manager.add_pass(Pass::from_raw(sys::reussirCreateInstrumentCoveragePass()));
+        manager.add_pass(Pass::from_raw(sys::reussirCreateEmitCoverageMappingPass()));
+    }
     manager
         .run(module)
         .map_err(|e| format!("source coverage instrumentation failed: {e}"))
