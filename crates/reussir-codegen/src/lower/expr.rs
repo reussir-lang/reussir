@@ -4052,8 +4052,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         ty: Ty<'tcx>,
     ) -> Result<Region<'c>> {
         // The yield has the location of the branch. A branch with no other op,
-        // such as a variable, then keeps its source span.
-        let loc = self.location(e.span);
+        // such as a variable, then keeps its source span. A branch with no
+        // span keeps the location of the `if`.
+        let loc = e
+            .span
+            .map_or_else(|| self.loc(), |span| self.location(Some(span)));
         let block = Block::new(&[]);
         // Lower the branch in a nested scope over the same environment: it sees
         // the outer locals and region, and any bindings it adds are rewound when
