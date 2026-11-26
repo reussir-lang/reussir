@@ -100,6 +100,9 @@ MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks);
 // Adds source-based coverage counters and the `reussir.coverage.map`
 // attribute to each function. Run it on frontend IR, before inlining.
 MlirPass reussirCreateInstrumentCoveragePass(void);
+// Writes the `reussir.coverage.map` attributes as the LLVM coverage mapping
+// globals. Run it immediately after the instrumentation pass.
+MlirPass reussirCreateEmitCoverageMappingPass(void);
 
 //===----------------------------------------------------------------------===//
 // Upstream passes used by the pipeline
