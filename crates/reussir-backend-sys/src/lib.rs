@@ -248,6 +248,9 @@ unsafe extern "C" {
     /// Adds source-based coverage counters and the `reussir.coverage.map`
     /// attribute to each function. Run it on frontend IR, before inlining.
     pub fn reussirCreateInstrumentCoveragePass() -> MlirPass;
+    /// Writes the `reussir.coverage.map` attributes as the LLVM coverage
+    /// mapping globals. Run it immediately after the instrumentation pass.
+    pub fn reussirCreateEmitCoverageMappingPass() -> MlirPass;
 
     //==-- Upstream passes used by the pipeline --==//
 

@@ -1,4 +1,5 @@
 add_mlir_library(MLIRReussirSourceCoverage
+  EmitCoverageMapping.cpp
   InstrumentCoverage.cpp
 
   DEPENDS
@@ -8,6 +9,7 @@ add_mlir_library(MLIRReussirSourceCoverage
   Core
   ProfileData
   Support
+  TargetParser
 
   LINK_LIBS PUBLIC
   MLIRReussir

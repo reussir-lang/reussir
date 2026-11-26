@@ -436,4 +436,27 @@ def ReussirInstrumentCoveragePass
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// EmitCoverageMapping
+//===----------------------------------------------------------------------===//
+def ReussirEmitCoverageMappingPass
+    : Pass<"reussir-emit-coverage-mapping", "::mlir::ModuleOp"> {
+  let summary = "write the source coverage mapping as LLVM globals";
+  let description = [{
+    `reussir-emit-coverage-mapping` reads and removes the
+    `reussir.coverage.map` attribute of each function. It writes the globals
+    that clang writes for `-fcoverage-mapping`: a `__covrec_<name hash>u`
+    record for each function, and the `__llvm_coverage_mapping` header with
+    the file names. `llvm::coverage::CoverageMappingWriter` encodes the code
+    regions and the branch regions. The section names come from the
+    `llvm.target_triple` of the module. `llvm.used` keeps the globals. Run
+    the pass immediately after `reussir-instrument-coverage`.
+  }];
+  let options = [Option<"compilationDir", "compilation-dir", "std::string",
+                        /*default=*/"",
+                        "The directory of relative file names (the default "
+                        "is the current directory)">];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // REUSSIR_TRANSFORMATION_PASSES_TD
