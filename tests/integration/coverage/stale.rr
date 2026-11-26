@@ -1,0 +1,22 @@
+// A profile of an earlier version of the source is stale. The hash of a
+// function changes with its regions, so llvm-cov reports a hash mismatch for
+// the changed function and keeps the counts of the functions that did not
+// change. Both versions build from one path, so the file names agree.
+
+// REQUIRES: profile-runtime
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: cp %S/Inputs/stale_v1.rr %t/stale.rr
+// RUN: %rrc %t/stale.rr --package-name stale --instrument-coverage --emit executable --relocation-mode pic -o %t/v1.exe %rrc_linker
+// RUN: env LLVM_PROFILE_FILE=%t/v1.profraw %t/v1.exe
+// RUN: %llvm-profdata merge -sparse %t/v1.profraw -o %t/v1.profdata
+// RUN: %llvm-cov report %t/v1.exe -instr-profile %t/v1.profdata 2>&1 | %FileCheck %s --check-prefix=FRESH
+// FRESH-NOT: mismatched data
+// FRESH: TOTAL
+
+// RUN: cp %S/Inputs/stale_v2.rr %t/stale.rr
+// RUN: %rrc %t/stale.rr --package-name stale --instrument-coverage --emit executable --relocation-mode pic -o %t/v2.exe %rrc_linker
+// RUN: %llvm-cov report %t/v2.exe -instr-profile %t/v1.profdata 2>&1 | %FileCheck %s --check-prefix=STALE
+// RUN: %llvm-cov export -format=text %t/v2.exe -instr-profile %t/v1.profdata 2>/dev/null | %FileCheck %s --check-prefix=EXPORT --implicit-check-not=_RNvC5stale7changed
+// STALE: warning: 1 functions have mismatched data
+// EXPORT-DAG: "count":1,{{[^}]*}}"name":"_RNvC5stale5entry"
+// EXPORT-DAG: "name":"{{[^"]*}}_RNvC5stale4same"

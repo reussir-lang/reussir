@@ -1,0 +1,37 @@
+// A build in several codegen units gives one coverage mapping header in each
+// unit. A function record is in the home unit of its function only, so the
+// units together hold the records of one unit, each record one time. All
+// functions are public, so their PGO names do not change with the units.
+
+// RUN: %rrc %s --package-name units --instrument-coverage --emit llvm-ir -o %t.ll
+// RUN: %rrc %s --package-name units --instrument-coverage --emit llvm-ir --codegen-units 3 -o %t.split.ll
+// RUN: %FileCheck %s < %t.split.0.ll
+// RUN: %FileCheck %s < %t.split.1.ll
+// RUN: %FileCheck %s < %t.split.2.ll
+// CHECK: @__llvm_coverage_mapping = private constant
+// CHECK-NOT: @__llvm_coverage_mapping =
+
+// RUN: grep '^@__covrec_' %t.ll | sort > %t.records
+// RUN: cat %t.split.0.ll %t.split.1.ll %t.split.2.ll | grep '^@__covrec_' | sort > %t.split.records
+// RUN: diff %t.records %t.split.records
+
+pub fn fib(n: u64) -> u64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+pub fn twice(n: u64) -> u64 {
+    n + n
+}
+
+pub fn clamp(n: u64) -> u64 {
+    if n > 100 { 100 } else { n }
+}
+
+pub fn half(n: u64) -> u64 {
+    n / 2
+}
+
+#[main]
+pub fn entry() {
+    let n = clamp(twice(fib(10))) + half(7);
+}

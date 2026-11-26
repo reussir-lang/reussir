@@ -1,0 +1,22 @@
+// The report of a build in several codegen units is the report of one unit:
+// the same lines, regions and counts.
+
+// REQUIRES: profile-runtime
+// RUN: %rrc %S/units.rr --package-name units --instrument-coverage --emit executable --relocation-mode pic -o %t.1.exe %rrc_linker
+// RUN: %rrc %S/units.rr --package-name units --instrument-coverage --emit executable --relocation-mode pic --codegen-units 3 -o %t.3.exe %rrc_linker
+// RUN: env LLVM_PROFILE_FILE=%t.1.profraw %t.1.exe
+// RUN: env LLVM_PROFILE_FILE=%t.3.profraw %t.3.exe
+// RUN: %llvm-profdata merge -sparse %t.1.profraw -o %t.1.profdata
+// RUN: %llvm-profdata merge -sparse %t.3.profraw -o %t.3.profdata
+// RUN: %llvm-cov show %t.1.exe -instr-profile=%t.1.profdata %S/units.rr > %t.1.show
+// RUN: %llvm-cov show %t.3.exe -instr-profile=%t.3.profdata %S/units.rr > %t.3.show
+// RUN: diff %t.1.show %t.3.show
+
+// Each function has one record, with the count of its entry.
+// RUN: %llvm-cov export -format=text %t.3.exe -instr-profile=%t.3.profdata | %FileCheck %s
+// CHECK-DAG: "count":177,{{[^}]*}}"name":"_RNvC5units3fib"
+// CHECK-DAG: "count":1,{{[^}]*}}"name":"_RNvC5units5twice"
+// CHECK-DAG: "count":1,{{[^}]*}}"name":"_RNvC5units5clamp"
+// CHECK-DAG: "count":1,{{[^}]*}}"name":"_RNvC5units4half"
+// CHECK-DAG: "count":1,{{[^}]*}}"name":"_RNvC5units5entry"
+// CHECK-DAG: "functions":{"count":5,"covered":5
