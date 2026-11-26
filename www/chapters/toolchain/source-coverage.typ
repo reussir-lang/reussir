@@ -63,9 +63,9 @@ and writes the report to stdout:
 rene coverage [OPTIONS] <TARGET> [CORPUS]... -- [LLVM_COV_ARGS]...
 ```
 
-`TARGET` is an executable target of the manifest with `fuzzer = true`.
-`CORPUS` is a list of corpus directories or input files. The command does
-these steps:
+`TARGET` is a fuzz target: an executable target of the manifest, with
+`fuzzer = true` in the target or in the profile. `CORPUS` is a list of corpus
+directories or input files. The command does these steps:
 
 + It builds the target as `rene build --instrument-coverage --bin <TARGET>`
   does.
@@ -90,8 +90,8 @@ rene coverage suite corpus --llvm-cov show -- -format=html -output-dir=coverage-
 rene coverage suite corpus --llvm-cov export -- -format=lcov > suite.lcov
 ```
 
-The merged profile stays beside the executable, as
-`<build-dir>/<profile>/coverage/<TARGET>.profdata`. You can give it to
+The merged profile stays beside the executable, as `<executable>.profdata`
+(for example `reussir-build/dev/coverage/suite.profdata`). You can give it to
 `llvm-cov` again with other options. Each run removes the raw profiles of the
 previous run. Thus the report shows only the corpus of the last run.
 
@@ -108,7 +108,9 @@ before the build. If a tool is missing, the command stops before it compiles.
 number, the number that did not execute (the `Missed` column), and the
 percentage that executed (the `Cover` column, or `Executed` for functions).
 
-`llvm-cov show` writes each source line with its execution count:
+`llvm-cov show` writes each source line with its execution count. In this
+part of a `show` report, the corpus runs `small_label` three times, and it
+does not run `large_label`:
 
 ```
    11|      3|fn small_label(byte: u8) -> u64 {
@@ -146,8 +148,7 @@ profiles.fuzz = {
 == Limits
 
 - A function with no source location gets no counters.
-- Each region has its own counter. Thus a coverage build is slower and larger
-  than a normal build.
+- The counters make a coverage build slower and larger than a normal build.
 - Use `llvm-profdata` and `llvm-cov` of the LLVM version that Reussir uses.
   Tools of a different version can fail to read the raw profile or the
   coverage mapping.
