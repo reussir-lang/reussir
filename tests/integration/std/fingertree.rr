@@ -29,6 +29,7 @@
 // CHECK-NEXT: fingertree/take drop: unit
 // CHECK-NEXT: fingertree/exhaustive measures: unit
 // CHECK-NEXT: fingertree/api extras: unit
+// CHECK-NEXT: fingertree/equality of shapes: unit
 // CHECK-NEXT: fingertree/invariants: unit
 // CHECK-NEXT: fingertree/sequence model & invariants (fuzz):
 // CHECK-NEXT: fingertree/split, concat, take & drop (fuzz):
@@ -472,6 +473,20 @@ fn test_exhaustive_measures() -> Outcome {
         .and_then(|| expect(verify_all_measured_splits(0, 128, tree), "verify_all_measured_splits failed"))
 }
 
+// Equal sequences built in different ways can have different tree shapes.
+// Each unequal tree has the same length and differs in one value.
+fn test_equality_of_shapes() -> Outcome {
+    let by_snoc = build(0, 40, empty_tree());
+    let by_concat = build(0, 17, empty_tree()).concat(build(17, 40, empty_tree()));
+    let by_cons = by_snoc.fold_right(empty_tree(), |x, tree : FingerTree<i32>| tree.cons(x));
+    expect(by_snoc == by_concat && by_concat == by_snoc, "snoc and concat builds should be equal")
+        .and_then(|| expect(by_cons == by_snoc, "cons and snoc builds should be equal"))
+        .and_then(|| expect(by_snoc != by_concat.set(0, -1), "first values differ"))
+        .and_then(|| expect(by_snoc != by_cons.set(20, -1), "middle values differ"))
+        .and_then(|| expect(by_concat.set(39, -1) != by_snoc, "last values differ"))
+        .and_then(|| expect(by_snoc.set(39, -1) == by_cons.set(39, -1), "same edit should be equal"))
+}
+
 fn test_api_extras() -> Outcome {
     let tree = build(0, 10, empty_tree());
     expect(tree.clear().is_empty(), "clear should be empty")
@@ -846,6 +861,7 @@ fn suite() -> TestTree {
         .with_case("take drop", test_take_drop)
         .with_case("exhaustive measures", test_exhaustive_measures)
         .with_case("api extras", test_api_extras)
+        .with_case("equality of shapes", test_equality_of_shapes)
         .with_case("invariants", test_invariants)
         .with_fuzz(
             "sequence model & invariants (fuzz)",
