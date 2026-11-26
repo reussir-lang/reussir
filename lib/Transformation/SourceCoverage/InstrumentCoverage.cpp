@@ -31,6 +31,7 @@
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
+#include <mlir/Interfaces/LoopLikeInterface.h>
 #include <mlir/Pass/Pass.h>
 
 namespace reussir {
@@ -210,6 +211,27 @@ private:
   llvm::SmallVector<MappingRegion> regions;
 };
 
+/// Returns true when `region` is a region of a loop and has the span of the
+/// loop. All the ops of the loop of a builtin, such as `array::fold`, have
+/// the span of the call. A counter of that loop counts the elements, not the
+/// calls.
+bool hasSpanOfLoop(mlir::Region &region) {
+  mlir::Operation *loop = region.getParentOp();
+  if (!llvm::isa<mlir::LoopLikeOpInterface>(loop))
+    return false;
+  auto span = loop->getLoc()->findInstanceOf<mlir::FileLineColRange>();
+  if (!span)
+    return false;
+  // Compare the bounds. Two equal spans can be different attributes, for
+  // example `1:2 to :3` and `1:2 to 1:3`.
+  auto bounds = [](mlir::FileLineColRange range) {
+    return std::tuple(range.getStartLine(), range.getStartColumn(),
+                      range.getEndLine(), range.getEndColumn());
+  };
+  mlir::FileLineColRange own = regionSpan(region, span.getFilename());
+  return own && bounds(own) == bounds(span);
+}
+
 /// Gives a counter to each region of `op` that can run a different number of
 /// times than `op`. A region that runs exactly once each time `op` runs has
 /// the count of the parent region.
@@ -222,7 +244,8 @@ void instrumentRegionBranch(CoverageMap &map,
   op.getRegionInvocationBounds(
       llvm::SmallVector<mlir::Attribute>(op->getNumOperands()), bounds);
   for (auto [region, bound] : llvm::zip_equal(op->getRegions(), bounds))
-    if (bound.getLowerBound() != 1 || bound.getUpperBound() != 1u)
+    if ((bound.getLowerBound() != 1 || bound.getUpperBound() != 1u) &&
+        !hasSpanOfLoop(region))
       map.addRegion(region);
 }
 
