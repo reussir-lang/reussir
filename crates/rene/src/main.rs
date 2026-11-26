@@ -15,12 +15,14 @@
 //! stops after the bake and prints the library directories to pass to
 //! `rrc --polyffi-libdir` by hand. `rene inspect` reports the source graph as
 //! JSON; `rene clean` deletes the build directory unless another instance
-//! holds it.
+//! holds it. `rene coverage` builds a fuzz target with coverage, runs it over
+//! a corpus, and reports the source coverage with `llvm-cov`.
 //!
 //! Progress goes to stderr via `tracing`; stdout carries only the final
 //! machine-readable listing. Exit 0 on success, 1 on a failed command, 2 on
 //! a usage error.
 
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -29,7 +31,7 @@ use palc::Parser;
 
 use rene::Error;
 use rene::db::{self, BuildDir, CleanOutcome};
-use rene::{compile, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
+use rene::{compile, coverage, deps, exec, fresh, manifest, new, plan, pool, resolve, rt};
 
 /// The default build directory name, next to the manifest.
 const BUILD_DIR: &str = "reussir-build";
@@ -85,6 +87,7 @@ struct Location {
 enum Command {
     Build(BuildArgs),
     Clean(CleanArgs),
+    Coverage(CoverageArgs),
     Inspect(InspectArgs),
     New(NewArgs),
 }
@@ -190,6 +193,46 @@ struct BuildArgs {
     instrument_coverage: bool,
 }
 
+/// Report the source coverage of a fuzz target: build it with coverage, run
+/// it one time over each corpus input (`-runs=0`), merge the raw profiles
+/// with `llvm-profdata`, and write the `llvm-cov` report to stdout. The
+/// merged profile stays beside the executable as `<executable>.profdata`.
+/// `REUSSIR_LLVM_PROFDATA`, `REUSSIR_LLVM_COV` and `REUSSIR_LLVM_CXXFILT`
+/// select the LLVM tools; otherwise rene finds them on `PATH`.
+#[derive(palc::Args)]
+struct CoverageArgs {
+    #[command(flatten)]
+    location: Location,
+
+    /// The fuzz target: an executable target of the manifest.
+    target: String,
+
+    /// The corpus directories or input files.
+    corpus: Vec<PathBuf>,
+
+    /// The build profile, as for `rene build`.
+    #[arg(long, default_value = "dev")]
+    profile: String,
+
+    /// The linker that rrc's link step uses, as for `rene build`.
+    #[arg(long)]
+    linker: Option<PathBuf>,
+
+    /// How many compile processes may run at once, as for `rene build`.
+    #[arg(short = 'j', long = "jobs")]
+    jobs: Option<std::num::NonZeroUsize>,
+
+    /// The `llvm-cov` command that writes the report: `report` (a summary
+    /// for each file), `show` (each line with its count), or `export`
+    /// (JSON).
+    #[arg(long, value_enum, value_name = "COMMAND", default_value_t = coverage::LlvmCov::Report)]
+    llvm_cov: coverage::LlvmCov,
+
+    /// More arguments for `llvm-cov`, after `--`.
+    #[arg(last = true)]
+    llvm_cov_args: Vec<OsString>,
+}
+
 /// Delete the build directory, unless another rene is using it.
 #[derive(palc::Args)]
 struct CleanArgs {
@@ -289,6 +332,7 @@ fn main() -> ExitCode {
         match cli.command {
             Command::Build(args) => build(&args, color).await,
             Command::Clean(args) => clean(&args.location),
+            Command::Coverage(args) => run_coverage(args, color).await,
             Command::Inspect(args) => inspect(&args, color).await,
             Command::New(args) => new::run(&new::Options {
                 path: args.path,
@@ -373,6 +417,15 @@ fn locate_manifest(flag: &Option<PathBuf>) -> Result<PathBuf, Error> {
 }
 
 async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
+    // Stdout carries the artifact listing, one path per target, in the
+    // order they were declared (or selected).
+    for product in build_products(args, color).await? {
+        println!("{}", product.path.display());
+    }
+    Ok(())
+}
+
+async fn build_products(args: &BuildArgs, color: bool) -> Result<Vec<compile::Product>, Error> {
     let location = &args.location;
     let manifest_path = locate_manifest(&location.manifest_path)?;
     let loaded = manifest::load(&manifest_path)?;
@@ -449,7 +502,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
         for libdir in artifacts.libdirs() {
             println!("{}", libdir.display());
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // One pool for the whole build: `-j` admission over the main event
@@ -543,12 +596,40 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
         args.bins.iter().chain(&args.libs).collect()
     };
     products.sort_by_key(|product| order.iter().position(|name| **name == product.name));
-    // Stdout carries the artifact listing, one path per target, in the
-    // order they were declared (or selected).
-    for product in &products {
-        println!("{}", product.path.display());
-    }
-    Ok(())
+    Ok(products)
+}
+
+/// `rene coverage`: the coverage build of one fuzz target, then its run,
+/// merge, and report.
+async fn run_coverage(args: CoverageArgs, color: bool) -> Result<(), Error> {
+    // Find the tools first. Thus a missing tool stops the command before the build.
+    let tools = coverage::Tools::find()?;
+    let build = BuildArgs {
+        location: args.location,
+        profile: args.profile,
+        bins: vec![args.target.clone()],
+        libs: Vec::new(),
+        target: None,
+        linker: args.linker,
+        jobs: args.jobs,
+        token_reuse_remarks: false,
+        instrument_coverage: true,
+    };
+    let executable = build_products(&build, color)
+        .await?
+        .into_iter()
+        .find(|product| product.name == args.target)
+        .ok_or(Error::MissingPlannedTarget { name: args.target })?
+        .path;
+    coverage::report(
+        &tools,
+        &executable,
+        &args.corpus,
+        &coverage::Profiles::new(&executable),
+        args.llvm_cov,
+        &args.llvm_cov_args,
+    )
+    .await
 }
 
 /// `rene inspect`: report the recorded source graph as JSON on stdout. By
