@@ -8,6 +8,8 @@
   = Language Reference
   - #chapter("chapters/language/syntax.typ")[Syntax]
   - #chapter("chapters/language/reference-capabilities.typ")[Reference Capabilities]
+  = Toolchain
+  - #chapter("chapters/toolchain/source-coverage.typ")[Source-Based Code Coverage]
   = Development Guide
   - #chapter("chapters/development/compilation-process.typ")[Compilation Process]
   - #chapter("chapters/development/closures.typ")[Closures]
