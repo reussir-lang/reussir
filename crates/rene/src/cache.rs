@@ -66,6 +66,7 @@ pub(crate) fn sync_tree(root: &Path) -> compcache::Result<u64> {
 /// Library inputs, independent of project output locations and runtime bake
 /// instances. Static-library flags cover optimization, sanitizers, target CPU
 /// and features, reuse ABI, and layout settings; link-only flags are excluded.
+/// Only a coverage build also depends on where its sources are.
 #[derive(Serialize)]
 struct Recipe {
     compiler: String,
@@ -78,6 +79,10 @@ struct Recipe {
     flags: Vec<String>,
     reports: bool,
     upstream: BTreeMap<String, String>,
+    /// The source directory of a coverage build. Its coverage mapping names
+    /// the source files by path, so other source copies cannot share it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage_sources: Option<PathBuf>,
 }
 
 pub(crate) struct Request {
@@ -133,6 +138,7 @@ impl Request {
                 &plan::transitive_deps(graph)[name],
                 opts.target,
             ),
+            coverage_sources: opts.profile.variant().coverage.then(|| source_root.clone()),
         };
         Ok(Self {
             key: Key::from_serde("rene-bundled-library-v0", &recipe)?,
