@@ -7,14 +7,16 @@
 // RUN: %llvm-cov export -format=lcov %t.exe -instr-profile=%t.profdata | %FileCheck %s --check-prefix=LINES
 
 // The counter of a closure body counts the runs of the closure, not its
-// creations. `entry` makes each closure one time. The closures run 0 times,
-// 1 time and 4 times. The combinators get the closures as arguments and call
-// them. Counter 0 counts the entry of `entry`, and counters 1 to 3 count the
-// closure bodies in the order of the source.
+// creations. `entry` makes each of the first three closures one time. They
+// run 0 times, 1 time and 4 times. The fourth closure runs 2 times, and
+// each run makes the fifth closure, which runs 3 times. The combinators get
+// the closures as arguments and call them. Counter 0 counts the entry of
+// `entry`, and counters 1 to 5 count the closure bodies in the order of the
+// source.
 
 // COUNTS-LABEL: 5entry:
 // COUNTS: Function count: 1
-// COUNTS-NEXT: Block counts: [0, 1, 4]
+// COUNTS-NEXT: Block counts: [0, 1, 4, 2, 6]
 
 enum Choice {
     No,
@@ -43,4 +45,11 @@ pub fn entry() {
     let many = apply_n(4, 0, |x : i64|
         // LINES: DA:[[# @LINE + 1]],4{{$}}
         x + 3);
+    let nested = apply_n(2, 0, |x : i64| {
+        // LINES: DA:[[# @LINE + 1]],2{{$}}
+        let y = x + 1;
+        apply_n(3, y, |z : i64|
+            // LINES: DA:[[# @LINE + 1]],6{{$}}
+            z + 1)
+    });
 }
