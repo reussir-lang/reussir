@@ -58,13 +58,15 @@ mlir::FileLineColRange unite(mlir::FileLineColRange lhs,
 /// Returns a null range when no such op has a span. An op with the location
 /// of the parent op of `region` is a part of that op, such as the `else`
 /// that the frontend makes for an `if`, or a loop that the lowering makes
-/// for a call. Such an op is not in the span.
-mlir::FileLineColRange regionSpan(mlir::Region &region, mlir::StringAttr file) {
+/// for a call. Such an op is not in the span, unless `withParentOps` is set.
+mlir::FileLineColRange regionSpan(mlir::Region &region, mlir::StringAttr file,
+                                  bool withParentOps = false) {
   mlir::Location parent = region.getParentOp()->getLoc();
   mlir::FileLineColRange result;
   region.walk([&](mlir::Operation *op) {
     auto span = op->getLoc()->findInstanceOf<mlir::FileLineColRange>();
-    if (!span || span.getFilename() != file || op->getLoc() == parent)
+    if (!span || span.getFilename() != file ||
+        (!withParentOps && op->getLoc() == parent))
       return;
     result = result ? unite(result, span) : span;
   });
@@ -134,8 +136,9 @@ public:
   /// Adds a counter at the start of the entry block of `region`. Its code
   /// region is the span of the ops in `region`. Returns the counter, or
   /// nothing when no op in `region` has a span in the file of the function.
-  std::optional<uint32_t> addRegion(mlir::Region &region) {
-    mlir::FileLineColRange span = regionSpan(region, file);
+  std::optional<uint32_t> addRegion(mlir::Region &region,
+                                    bool withParentOps = false) {
+    mlir::FileLineColRange span = regionSpan(region, file, withParentOps);
     if (!span)
       return std::nullopt;
     uint32_t counter = addCounter(region.front(), span);
@@ -256,7 +259,9 @@ void instrumentRegionBranch(CoverageMap &map,
 /// Gives a counter to the body of `op`. The body runs each time that the
 /// program calls the closure, not when the program makes the closure.
 void instrumentClosure(CoverageMap &map, ReussirClosureCreateOp op) {
-  map.addRegion(op.getBody());
+  // The body runs apart from the op that makes the closure. Thus the ops of
+  // the body count, also when they have the location of that op.
+  map.addRegion(op.getBody(), /*withParentOps=*/true);
 }
 
 /// Returns true when `outer` contains `inner`.
