@@ -28,7 +28,7 @@
     heap = { kind = 'executable, path = "heap.rr", fuzzer = true },
     intmap = { kind = 'executable, path = "intmap.rr", fuzzer = true },
     list = { kind = 'executable, path = "list.rr", fuzzer = true },
-    option = { kind = 'executable, path = "option.rr" },
+    option = { kind = 'executable, path = "option.rr", fuzzer = true },
     random = { kind = 'executable, path = "random.rr" },
     rtqueue = { kind = 'executable, path = "rtqueue.rr" },
     string = { kind = 'executable, path = "string.rr", fuzzer = true },
