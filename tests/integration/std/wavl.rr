@@ -2,11 +2,12 @@
 // set (`WavlSet`) and map (`WavlMap`).
 // Unit cases cover basic operations, ascending/descending iteration,
 // persistence, ordered neighbour/window queries, set/map algebra,
-// higher-order transforms, pseudorandom churn, logarithmic rank balance, and
-// the map's walker and iterator.
+// higher-order transforms, pseudorandom churn, logarithmic rank balance, the
+// map's walker and iterator, and each way a submap or subset query fails.
 // Fuzz targets exercise arbitrary operation streams, neighbour/range queries,
-// algebra, and transforms against sorted-list reference models, and a walker
-// against the map operations.
+// algebra, and transforms against sorted-list reference models, a walker
+// against the map operations, and the submap, subset and disjointness
+// queries against the last write of each key.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin wavl %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}wavl
@@ -28,11 +29,13 @@
 // CHECK-NEXT: wavl/balance: unit
 // CHECK-NEXT: wavl/map walker: unit
 // CHECK-NEXT: wavl/map iterator: unit
+// CHECK-NEXT: wavl/relations: unit
 // CHECK-NEXT: wavl/set insert/remove/pop/take model & rank balance (fuzz):
 // CHECK-NEXT: wavl/set algebra, neighbours, range & transforms (fuzz):
 // CHECK-NEXT: wavl/map operations, model & rank balance (fuzz):
 // CHECK-NEXT: wavl/map algebra, neighbours, range & transforms (fuzz):
 // CHECK-NEXT: wavl/map walker against map operations (fuzz):
+// CHECK-NEXT: wavl/relations against the last write of each key (fuzz):
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
@@ -51,7 +54,9 @@ import std::option::Option;
 import test::domain::i64_domain;
 import test::domain::tuple2;
 import test::domain::tuple3;
+import test::expect::Outcome;
 import test::expect::expect;
+import test::expect::should_be;
 import test::fuzz::fuzz_init;
 import test::tree::TestTree;
 
@@ -862,6 +867,117 @@ fn apply_walker_ops(
     }
 }
 
+fn test_relations() -> Outcome {
+    let small : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(3, 30);
+    let large = small.insert(2, 20);
+    let raised = small.insert(3, 31);
+    let moved : WavlMap<i64, i64> = WavlMap::new().insert(1, 10).insert(4, 30);
+    let flags : WavlMap<i64, bool> = WavlMap::new().insert(1, true).insert(2, false)
+        .insert(3, true);
+    let empty : WavlMap<i64, i64> = WavlMap::new();
+    let at_most = |mine : i64, theirs : i64| mine <= theirs;
+    let set : WavlSet<i64> = WavlSet::new().insert(1).insert(2).insert(3);
+    let other : WavlSet<i64> = WavlSet::new().insert(1).insert(2).insert(4);
+    let pair : WavlSet<i64> = WavlSet::new().insert(1).insert(2);
+    let none : WavlSet<i64> = WavlSet::new();
+    expect(small.is_proper_submap_by(large, at_most), "a smaller map")
+        .and_then(|| expect(!small.is_proper_submap_by(small, at_most), "a map of the same size"))
+        .and_then(|| expect(!large.is_proper_submap_by(small, at_most), "a larger map"))
+        .and_then(|| expect(!raised.is_submap_by(large, at_most), "a value that the predicate rejects"))
+        .and_then(|| expect(
+            raised.is_submap_by(large, |mine : i64, theirs : i64| mine >= theirs),
+            "a value that another predicate accepts"
+        ))
+        .and_then(|| expect(!moved.is_submap_by(large, at_most), "a key that the other map does not have"))
+        .and_then(|| expect(
+            small.is_proper_submap_by(flags, |ignored : i64, flag : bool| flag),
+            "values of another type"
+        ))
+        .and_then(|| expect(
+            !large.is_submap_by(flags, |ignored : i64, flag : bool| flag),
+            "a value of another type that the predicate rejects"
+        ))
+        .and_then(|| expect(!raised.is_submap(large) && !raised.is_proper_submap(large), "a changed value"))
+        .and_then(|| expect(!small.is_submap(moved), "a map of the same size with another key"))
+        .and_then(|| expect(
+            empty.is_proper_submap(small) && empty.is_submap(empty) && !empty.is_proper_submap(empty),
+            "the empty map"
+        ))
+        .and_then(|| expect(small != raised && small != moved, "maps of the same size"))
+        .and_then(|| expect(!empty.contains_value(0), "a value in the empty map"))
+        .and_then(|| expect(
+            !set.is_subset(other) && !set.is_superset(other)
+                && !set.is_proper_subset(other) && !set.is_proper_superset(other),
+            "sets of the same size with another element"
+        ))
+        .and_then(|| expect(set != other && !set.equals(other), "sets that are not equal"))
+        .and_then(|| expect(
+            pair.is_proper_subset(other) && !pair.is_superset(other) && !other.is_proper_subset(pair),
+            "a smaller set"
+        ))
+        .and_then(|| expect(!pair.is_disjoint(set) && WavlSet::singleton(9).is_disjoint(set), "the smaller set as the receiver"))
+        .and_then(|| expect(
+            none.is_proper_subset(set) && set.is_proper_superset(none) && none == none
+                && none.is_disjoint(none),
+            "the empty set"
+        ))
+}
+
+// The value that the last write leaves at `key` in a map that
+// `build_map_from_vecs` builds from values that are not negative. The
+// result is -1 when no write has the key.
+fn last_write(keys : Vec<i64>, vals : Vec<i64>, key : i64) -> i64 {
+    let n = if keys.len() < vals.len() { keys.len() } else { vals.len() };
+    let (_, found) = while [i = (0 as u64), found = (-1 as i64)] (i < n) {
+        (i + 1, if keys.get(i).unwrap_or(0) == key { vals.get(i).unwrap_or(0) } else { found })
+    };
+    found
+}
+
+// Checks the queries on two maps, and on the sets of their keys, against
+// the last write of each key. The domain gives keys from 0 to 7.
+fn fuzz_relations(input : ((Vec<i64>, Vec<i64>), (Vec<i64>, Vec<i64>))) -> Outcome {
+    let (left, right) = input;
+    let (k1, v1) = left;
+    let (k2, v2) = right;
+    let m1 = build_map_from_vecs(k1, v1, 0, WavlMap::new());
+    let m2 = build_map_from_vecs(k2, v2, 0, WavlMap::new());
+    let s1 = WavlSet::from_list(m1.keys());
+    let s2 = WavlSet::from_list(m2.keys());
+    let (_, n1, n2, submap, submap_le, subset, disjoint) = while [
+        key = (0 as i64), n1 = (0 as u64), n2 = (0 as u64), submap = true,
+        submap_le = true, subset = true, disjoint = true
+    ] (key < 8) {
+        let x = last_write(k1, v1, key);
+        let y = last_write(k2, v2, key);
+        (
+            key + 1,
+            if x < 0 { n1 } else { n1 + 1 },
+            if y < 0 { n2 } else { n2 + 1 },
+            submap && (x < 0 || x == y),
+            submap_le && (x < 0 || y >= 0 && x <= y),
+            subset && (x < 0 || y >= 0),
+            disjoint && (x < 0 || y < 0)
+        )
+    };
+    let at_most = |mine : i64, theirs : i64| mine <= theirs;
+    should_be(m1.len(), n1)
+        .and_then(|| should_be(m2.len(), n2))
+        .and_then(|| should_be(m1.is_submap(m2), submap))
+        .and_then(|| should_be(m1.is_proper_submap(m2), submap && n1 < n2))
+        .and_then(|| should_be(m1.is_submap_by(m2, at_most), submap_le))
+        .and_then(|| should_be(m1.is_proper_submap_by(m2, at_most), submap_le && n1 < n2))
+        .and_then(|| should_be(m1 == m2, submap && n1 == n2))
+        .and_then(|| should_be(m1.is_disjoint(m2), disjoint))
+        .and_then(|| should_be(s1.is_subset(s2), subset))
+        .and_then(|| should_be(s1.is_proper_subset(s2), subset && n1 < n2))
+        .and_then(|| should_be(s2.is_superset(s1), subset))
+        .and_then(|| should_be(s2.is_proper_superset(s1), subset && n1 < n2))
+        .and_then(|| should_be(s1 == s2, subset && n1 == n2))
+        .and_then(|| should_be(s1.is_disjoint(s2), disjoint))
+        .and_then(|| should_be(s2.is_disjoint(s1), disjoint))
+}
+
 fn suite() -> TestTree {
     TestTree::group("wavl")
         .with_case("set basics", || {
@@ -1254,6 +1370,7 @@ fn suite() -> TestTree {
                 "map iterator failed"
             )
         })
+        .with_case("relations", test_relations)
         .with_fuzz(
             "set insert/remove/pop/take model & rank balance (fuzz)",
             i64_domain().in_range(-200, 200).vec().max_len(48),
@@ -1447,6 +1564,20 @@ fn suite() -> TestTree {
                     "Walker diverged from the WavlMap operations or violated rank balance"
                 )
             }
+        )
+        .with_fuzz(
+            "relations against the last write of each key (fuzz)",
+            tuple2(
+                tuple2(
+                    i64_domain().in_range(0, 7).vec().max_len(10),
+                    i64_domain().in_range(0, 2).vec().max_len(10)
+                ),
+                tuple2(
+                    i64_domain().in_range(0, 7).vec().max_len(10),
+                    i64_domain().in_range(0, 2).vec().max_len(10)
+                )
+            ),
+            fuzz_relations
         )
 }
 

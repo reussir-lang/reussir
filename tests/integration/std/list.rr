@@ -2,7 +2,8 @@
 // singly linked `List`.
 // Unit cases cover every public method on small fixed lists, plus sorting of
 // fixed, pseudorandom, and equal-key inputs and selection of every rank of
-// pseudorandom, ascending, and descending lists, and equality and hashing
+// pseudorandom, ascending, and descending lists and of a list whose first
+// pivot is poor, and equality and hashing
 // of lists up to 100000 elements. Fuzz targets check the queries and
 // transforms against a `Vec` model, equality and hashing of two lists, `sort` against an
 // insertion-sort model on both shared and uniquely owned lists, and sort
@@ -33,6 +34,7 @@
 // CHECK-NEXT: list/sort: unit
 // CHECK-NEXT: list/sort stability: unit
 // CHECK-NEXT: list/kth_min and kth_max: unit
+// CHECK-NEXT: list/kth_min and kth_max after a poor pivot: unit
 // CHECK-NEXT: list/eq: unit
 // CHECK-NEXT: list/hash: unit
 // CHECK-NEXT: list/queries & transforms against vector model (fuzz):
@@ -305,6 +307,21 @@ fn test_kth() -> Outcome {
         ))
 }
 
+// The list 0, n - 1, n - 2, ..., 2, 1. The median of its first, middle and
+// last elements is 1. Thus the first partition removes only two elements,
+// and the next pivot is a median of medians.
+fn poor_pivot_list(n : i64) -> List<i64> {
+    let (_, out) = while [i = (1 as i64), out = List::Nil] (i < n) {
+        (i + 1, List::Cons { i, out })
+    };
+    List::Cons { 0, out }
+}
+
+fn test_kth_poor_pivot() -> Outcome {
+    let l = poor_pivot_list(40);
+    expect(ranks_agree(l, l.sort(), 0, 40), "ranks of a list whose first pivot is poor")
+}
+
 fn test_eq() -> Outcome {
     let long = pseudorandom_list(100000, 7, List::Nil);
     expect(sample_list() == list3(3, 1, 2), "equal elements")
@@ -512,6 +529,7 @@ fn suite() -> TestTree {
         .with_case("sort", test_sort)
         .with_case("sort stability", test_sort_stability)
         .with_case("kth_min and kth_max", test_kth)
+        .with_case("kth_min and kth_max after a poor pivot", test_kth_poor_pivot)
         .with_case("eq", test_eq)
         .with_case("hash", test_hash)
         .with_fuzz(
