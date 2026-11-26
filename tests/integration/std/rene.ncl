@@ -29,7 +29,7 @@
     intmap = { kind = 'executable, path = "intmap.rr", fuzzer = true },
     list = { kind = 'executable, path = "list.rr", fuzzer = true },
     option = { kind = 'executable, path = "option.rr", fuzzer = true },
-    random = { kind = 'executable, path = "random.rr" },
+    random = { kind = 'executable, path = "random.rr", fuzzer = true },
     rtqueue = { kind = 'executable, path = "rtqueue.rr", fuzzer = true },
     string = { kind = 'executable, path = "string.rr", fuzzer = true },
     test_cli = { kind = 'executable, path = "test_cli.rr" },
