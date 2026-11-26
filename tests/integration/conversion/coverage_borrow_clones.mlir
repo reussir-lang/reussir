@@ -61,6 +61,15 @@ module {
     reussir.rc.dec(%xs : !L)
     return %found : i1
   } loc(unknown)
+
+  // The last use of the list goes through the traversal entry.
+  // CHECK-LABEL: func.func @last_search(
+  // CHECK: call @mem.borrowed_1.entry_1(
+  func.func @last_search(%xs: !L) -> i1 {
+    %key = arith.constant -1 : i64
+    %r = func.call @mem(%key, %xs) : (i64, !L) -> i1
+    return %r : i1
+  } loc(unknown)
 }
 
 // CHECK: llvm.mlir.global linkonce_odr hidden constant @__covrec_
@@ -73,3 +82,9 @@ module {
 // CHECK-NEXT: llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: llvm.call_intrinsic "llvm.instrprof.increment"
 // CHECK: call @mem.borrowed_1(
+
+// The entry gets a new body with no counter. It calls the original or the
+// borrowed clone, so each call counts one time.
+// CHECK-LABEL: func.func private @mem.borrowed_1.entry_1(
+// CHECK-NOT: llvm.instrprof.increment
+// CHECK: return
