@@ -53,14 +53,26 @@ void addCanonicalizerWithoutRegionSimplification(mlir::OpPassManager &pm) {
   pm.addPass(mlir::createCanonicalizerPass(config));
 }
 
+// Whether `op` is a counter increment of source coverage, or gives values only
+// to these increments.
+bool countsCoverageOnly(mlir::Operation *op) {
+  return isCoverageIncrement(op) ||
+         (!op->use_empty() &&
+          llvm::all_of(op->getUsers(), isCoverageIncrement));
+}
+
 // Whether the callable region holds at most `limit` operations, counted
 // recursively through nested regions. The walk stops as soon as the limit
-// is crossed, so a query costs O(limit) however large the callee is.
+// is crossed, so a query costs O(limit) however large the callee is. The count
+// does not include source coverage, so that coverage does not change which
+// calls the pass inlines.
 bool calleeIsSmall(mlir::Region *callable, unsigned limit) {
   if (!callable)
     return false;
   unsigned count = 0;
-  auto result = callable->walk([&](mlir::Operation *) {
+  auto result = callable->walk([&](mlir::Operation *op) {
+    if (countsCoverageOnly(op))
+      return mlir::WalkResult::advance();
     return ++count > limit ? mlir::WalkResult::interrupt()
                            : mlir::WalkResult::advance();
   });
