@@ -137,6 +137,18 @@ pub(crate) fn backend_module<'c>(
         "reussir.drop_order",
         StringAttribute::new(context, drop_order.as_str()).into(),
     );
+    if let Some(options) = sancov {
+        reussir_backend::sancov::prepare_module_scope(context, &mut module, options)?;
+    } else if cli.instrument_coverage {
+        // Source coverage alone uses the same scope flags, with no fuzzing default.
+        // A `.mlir` dump keeps the scope for the compile that resumes it.
+        let scope = SanCovOptions {
+            include: cli.sancov_include.clone(),
+            exclude: cli.sancov_exclude.clone(),
+            ..SanCovOptions::default()
+        };
+        reussir_backend::sancov::prepare_module_scope(context, &mut module, &scope)?;
+    }
     // A `.mlir` dump is the module as it stands, before the lowering pipeline.
     // Source coverage makes its regions from the locations, so keep them.
     if target == Stage::Mlir {
@@ -193,9 +205,6 @@ pub(crate) fn backend_module<'c>(
         transform_scripts: parse_transform_scripts(&cli.transform_script)?,
         ..LoweringOptions::default()
     };
-    if let Some(options) = sancov {
-        reussir_backend::sancov::prepare_module_scope(context, &mut module, options)?;
-    }
     if cli.instrument_coverage {
         tracing::debug!("instrumenting for source coverage");
         reussir_backend::source_coverage::instrument_module(context, &mut module)?;
