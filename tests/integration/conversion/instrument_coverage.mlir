@@ -7,7 +7,7 @@
 // CHECK-DAG: llvm.mlir.global private constant @__profn_count("count")
 // CHECK-DAG: llvm.mlir.global private constant @__profn_a.rr_helper("a.rr:helper")
 
-module {
+module attributes {reussir.coverage.include = []} {
   // CHECK-LABEL: func.func @choose(
   // CHECK-SAME: reussir.coverage.map = {counters = 3 : i32, hash = [[HASH:-?[0-9]+]] : i64, name = "choose",
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":1:1 to 7:2)}, {counter = 1 : i32, span = loc("a.rr":3:5 to :10)}, {counter = 2 : i32, span = loc("a.rr":5:5 to :10)}]}
@@ -85,6 +85,14 @@ module {
     return %x : i64 loc(unknown)
   } loc(unknown)
 
+  // CHECK-LABEL: func.func @excluded(
+  // CHECK-NOT: reussir.coverage.map
+  // CHECK-NOT: llvm.instrprof.increment
+  // CHECK: return
+  func.func @excluded(%x: i64) -> i64 attributes {reussir.coverage = false} {
+    return %x : i64 loc("a.rr":20:3 to 20:9)
+  } loc("a.rr":19:1 to 21:2)
+
   // CHECK: func.func private @external(i64) -> i64{{$}}
-  func.func private @external(i64) -> i64 loc("a.rr":19:1 to 19:20)
+  func.func private @external(i64) -> i64 loc("a.rr":22:1 to 22:20)
 }
