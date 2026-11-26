@@ -8,6 +8,7 @@ import std::console::Color;
 import std::format::Display;
 import std::format::Options;
 import std::format::BreakSpec;
+import std::format::Chunk;
 import std::format::Field;
 import std::format::Fields;
 import std::format::PrintSuccess;
@@ -157,6 +158,41 @@ fn strings_and_traits() {
     check(result.and_then(|n: i32| Result::Ok { n * 2 }).unwrap_or(0) == 6);
 }
 
+fn combinators() {
+    let items = three("a".fmt(), "b".fmt(), "c".fmt());
+    expect(std::format::concat(items), 80, "abc");
+    expect(std::format::concat(List::Nil), 0, "");
+    expect(std::format::join(", ".fmt(), items), 80, "a, b, c");
+    expect(std::format::join(", ".fmt(), List::Nil), 0, "");
+    expect(std::format::parens("x".fmt()), 80, "(x)");
+    expect(std::format::brackets("x".fmt()), 80, "[x]");
+    expect(std::format::braces("x".fmt()), 80, "{x}");
+    expect(std::format::comma_list(items), 80, "a, b, c");
+    expect(std::format::comma_list(items), 4, "a,\nb, c");
+    expect(std::format::comma_list(items), 3, "a,\nb,\nc");
+    expect(std::format::block(List::Nil, 4), 80, "{}");
+    expect(std::format::block(two("x;".fmt(), "y;".fmt()), 2), 80, "{\n  x;\n  y;\n}");
+    let indented = "a".fmt().append(Format::Break { BreakSpec {
+        flat: " ", before: "", after: "", offset: 2 } }).append("b".fmt()).group();
+    expect(indented, 1, "a\n  b");
+    let outdented = "a".fmt().append(Format::Break { BreakSpec {
+        flat: " ", before: "", after: "", offset: -3 } }).append("b".fmt()).nest(2).group();
+    expect(outdented, 1, "a\nb");
+    expect(generic("x".fmt().group()), 80, "x");
+    let none: Option<i32> = Option::None;
+    expect(none.fmt(), 80, "None");
+    expect((255 as u8).fmt(), 80, "255");
+    expect((65535 as u16).fmt(), 80, "65535");
+    expect(((0 as i16) - 32767 - 1).fmt(), 80, "-32768");
+    expect(((0 as i32) - 2147483647 - 1).fmt(), 80, "-2147483648");
+    let chunks = "ab".fmt().append(Format::Hardline).render(Options::default()).chunks();
+    check(chunks.len() == 2);
+    match chunks.head().unwrap_or_panic() {
+        Chunk::Text(_, start, end) => check(start == 0 && end == 2),
+        _ => core::intrinsic::panic::panic()
+    };
+}
+
 fn deep() {
     let (_, doc) = while [i = (0 as i32), doc = "x".fmt()] (i < 10000) {
         (i + 1, doc.group().nest(0))
@@ -254,6 +290,7 @@ pub fn main() {
     groups();
     records();
     strings_and_traits();
+    combinators();
     deep();
     ansi();
     match "format tests passed\n".fmt().dump_stdout(Options::default()) {
