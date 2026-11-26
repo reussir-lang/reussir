@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libc.workspace = true
 libfuzzer-sys.workspace = true
 mutatis.workspace = true
 thiserror.workspace = true

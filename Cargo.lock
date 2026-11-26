@@ -3541,6 +3541,7 @@ dependencies = [
 name = "reussir-fuzzer"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "libfuzzer-sys",
  "mutatis",
  "thiserror 2.0.18",

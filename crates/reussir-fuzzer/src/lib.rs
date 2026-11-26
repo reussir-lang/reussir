@@ -14,7 +14,7 @@
 //! ```
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::ffi::c_void;
+use std::ffi::{c_int, c_void};
 
 pub use libfuzzer_sys;
 pub use mutatis;
@@ -23,6 +23,7 @@ mod budget;
 #[cfg(windows)]
 mod coff_sections;
 pub mod mutator;
+mod profile;
 mod selection;
 pub mod spec;
 
@@ -38,6 +39,10 @@ pub type DropTreeFn = unsafe extern "C" fn(*mut c_void);
 /// Function pointer that executes one suite-level byte buffer against a bridged
 /// Reussir `TestTree` (consuming one reference to `tree`).
 pub type RunFuzzFn = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
+
+/// Function pointer that writes the source coverage profile: the
+/// `__llvm_profile_write_file` function of the profile runtime.
+pub type WriteProfileFn = unsafe extern "C" fn() -> c_int;
 
 struct RawRegistration {
     tree: usize,
@@ -165,13 +170,18 @@ impl Drop for FuzzSession {
     }
 }
 
-/// Initializes libFuzzer and the registered Reussir [`FuzzSession`].
+/// Initializes libFuzzer and the registered Reussir [`FuzzSession`]. With
+/// `write_profile`, the harness also writes the profile on a crash.
 #[doc(hidden)]
 pub fn libfuzzer_initialize(
     argc: *const isize,
     argv: *const *const *const u8,
     init_fn: unsafe extern "C" fn(),
+    write_profile: Option<WriteProfileFn>,
 ) -> isize {
+    if let Some(write_profile) = write_profile {
+        profile::write_on_panic(write_profile);
+    }
     libfuzzer_sys::initialize(argc, argv);
     let session = match FuzzSession::initialize(init_fn) {
         Ok(session) => session,
@@ -231,6 +241,7 @@ pub fn libfuzzer_test_one_input(bytes: &[u8]) -> libfuzzer_sys::Corpus {
         // Run unit test cases once on the first invocation so deterministic cases in
         // a mixed TestTree are always exercised.
         if !UNIT_CASES_CHECKED.replace(true) {
+            profile::write_on_crash_signal();
             for (idx, case) in session.spec().cases.iter().enumerate() {
                 if case.input.is_unit() && session.selects_case(idx) {
                     let buf = (idx as u64).to_le_bytes();
@@ -300,6 +311,10 @@ pub fn libfuzzer_custom_mutator(
 /// `rust_fuzzer_test_input`, and `LLVMFuzzerCustomMutator`) for a fuzzed
 /// Reussir static library target.
 ///
+/// A link with the profile runtime of source-based code coverage gives its
+/// `__llvm_profile_write_file` as `write_profile`. The harness then writes the
+/// profile when libFuzzer stops the process on a crash.
+///
 /// The crate invoking this macro should be compiled with `#![no_main]` so
 /// libFuzzer supplies the process `main` entrypoint.
 #[macro_export]
@@ -308,6 +323,15 @@ macro_rules! fuzz_target {
         $crate::fuzz_target!(reussir_fuzz_init);
     };
     ($init:ident) => {
+        $crate::fuzz_target!(@define $init, ::core::option::Option::None);
+    };
+    ($init:ident, write_profile = $write_profile:path) => {
+        $crate::fuzz_target!(
+            @define $init,
+            ::core::option::Option::Some($write_profile as $crate::WriteProfileFn)
+        );
+    };
+    (@define $init:ident, $write_profile:expr) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn LLVMFuzzerInitialize(
             argc: *const isize,
@@ -316,7 +340,7 @@ macro_rules! fuzz_target {
             unsafe extern "C" {
                 fn $init();
             }
-            $crate::libfuzzer_initialize(argc, argv, $init)
+            $crate::libfuzzer_initialize(argc, argv, $init, $write_profile)
         }
 
         #[unsafe(no_mangle)]
