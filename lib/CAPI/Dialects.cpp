@@ -38,6 +38,7 @@
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/Func/TransformOps/FuncTransformOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h>
 #include <mlir/Dialect/Linalg/TransformOps/DialectExtension.h>
 #include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
@@ -100,6 +101,9 @@ void populateReussirRegistry(mlir::DialectRegistry &registry) {
   // separately registered extension; without it the inliner pass resolves no
   // `func.call` sites and silently inlines nothing.
   mlir::func::registerInlinerExtension(registry);
+  // The inliner does not inline a callee that holds LLVM operations, such as
+  // the counter increments of source coverage, without this interface.
+  mlir::LLVM::registerInlinerInterface(registry);
 
   // Range proofs used by Reussir operation speculation (for example, bounded
   // array indices) should be available in the frontend as well as reussir-opt.

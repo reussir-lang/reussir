@@ -882,6 +882,49 @@ mod tests {
     }
 
     #[test]
+    fn default_inliner_inlines_callees_with_coverage_increments() {
+        let context = crate::context();
+        let source = r#"
+            module {
+              llvm.mlir.global private constant @__profn_helper("helper") {addr_space = 0 : i32}
+              func.func private @helper(%x: i32) -> i32 {
+                %name = llvm.mlir.addressof @__profn_helper : !llvm.ptr
+                %hash = llvm.mlir.constant(1234 : i64) : i64
+                %num = llvm.mlir.constant(1 : i32) : i32
+                %index = llvm.mlir.constant(0 : i32) : i32
+                llvm.call_intrinsic "llvm.instrprof.increment"(%name, %hash, %num, %index)
+                    : (!llvm.ptr, i64, i32, i32) -> ()
+                %one = arith.constant 1 : i32
+                %r = arith.addi %x, %one : i32
+                func.return %r : i32
+              }
+              func.func @left(%x: i32) -> i32 {
+                %r = func.call @helper(%x) : (i32) -> i32
+                func.return %r : i32
+              }
+              func.func @right(%x: i32) -> i32 {
+                %r = func.call @helper(%x) : (i32) -> i32
+                func.return %r : i32
+              }
+            }
+        "#;
+        let mut module = Module::parse(&context, source).expect("module should parse");
+        let manager = PassManager::new(&context);
+        lowering_pipeline!(manager, module: sys::reussirCreateDefaultInlinerPass(););
+        manager.run(&mut module).expect("inliner should succeed");
+        // Both callers count for the helper, which the inliner then removes.
+        let rendered = module.as_operation().to_string();
+        assert!(!rendered.contains("@helper"), "{rendered}");
+        assert_eq!(
+            rendered
+                .matches("llvm.mlir.addressof @__profn_helper")
+                .count(),
+            2,
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn lowers_sync_critical_section_through_c_api_pipeline() {
         let context = crate::context();
         let source = r#"
