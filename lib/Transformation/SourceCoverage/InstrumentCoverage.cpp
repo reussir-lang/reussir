@@ -26,6 +26,7 @@
 #include <llvm/Support/xxhash.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
@@ -111,6 +112,18 @@ public:
   void addCodeRegion(uint32_t counter, mlir::FileLineColRange span) {
     regions.push_back({span, {{"counter", counter}}});
   }
+
+  /// Adds a branch region for the condition at `span`. `trueCounter` counts
+  /// the true results, and `falseCounter` counts the false results.
+  void addBranchRegion(uint32_t trueCounter, uint32_t falseCounter,
+                       mlir::FileLineColRange span) {
+    regions.push_back(
+        {span,
+         {{"true_counter", trueCounter}, {"false_counter", falseCounter}}});
+  }
+
+  /// Returns the source file of the function.
+  mlir::StringAttr getFile() const { return file; }
 
   /// Adds a counter at the start of the entry block of `region`. Its code
   /// region is the span of the ops in `region`. Returns the counter, or
@@ -203,11 +216,77 @@ void instrumentRegionBranch(CoverageMap &map,
     map.addRegion(region);
 }
 
+/// Returns true when `outer` contains `inner`.
+bool contains(mlir::FileLineColRange outer, mlir::FileLineColRange inner) {
+  return outer.getFilename() == inner.getFilename() &&
+         std::pair(outer.getStartLine(), outer.getStartColumn()) <=
+             std::pair(inner.getStartLine(), inner.getStartColumn()) &&
+         std::pair(inner.getEndLine(), inner.getEndColumn()) <=
+             std::pair(outer.getEndLine(), outer.getEndColumn());
+}
+
+/// Returns the span of the condition of `op` in `file`, or a null range. The
+/// op that makes the condition must be in the span of `op`. If the condition
+/// is in a variable, it has no span.
+mlir::FileLineColRange conditionSpan(mlir::scf::IfOp op,
+                                     mlir::StringAttr file) {
+  auto span = op.getLoc()->findInstanceOf<mlir::FileLineColRange>();
+  mlir::Operation *condition = op.getCondition().getDefiningOp();
+  if (!span || span.getFilename() != file || !condition ||
+      condition->getLoc() == op.getLoc())
+    return {};
+  auto result = condition->getLoc()->findInstanceOf<mlir::FileLineColRange>();
+  if (!result || !contains(span, result))
+    return {};
+  return result;
+}
+
+/// Returns the span of the ops in `branch` of `op` that are in `file`. An op
+/// with the location of `op` is a part of `op`, such as the `false` of
+/// `a && b` or an empty `else`. Such an op is not in the span.
+mlir::FileLineColRange branchSpan(mlir::scf::IfOp op, mlir::Region &branch,
+                                  mlir::StringAttr file) {
+  mlir::FileLineColRange result;
+  branch.walk([&](mlir::Operation *inner) {
+    auto span = inner->getLoc()->findInstanceOf<mlir::FileLineColRange>();
+    if (!span || span.getFilename() != file || inner->getLoc() == op.getLoc())
+      return;
+    result = result ? unite(result, span) : span;
+  });
+  return result;
+}
+
+/// Gives a counter to each branch of `op`. When the condition has a span, a
+/// branch region counts it. Then each branch gets a counter, also a branch
+/// with no span. A branch with no span gets no code region.
+void instrumentIf(CoverageMap &map, mlir::scf::IfOp op) {
+  mlir::FileLineColRange condition = conditionSpan(op, map.getFile());
+  if (!condition || op.getElseRegion().empty()) {
+    instrumentRegionBranch(map, op);
+    return;
+  }
+  auto addBranch = [&](mlir::Region &branch) {
+    mlir::FileLineColRange span = branchSpan(op, branch, map.getFile());
+    uint32_t counter = map.addCounter(
+        branch.front(), span ? mlir::Location(span) : op.getLoc());
+    if (span)
+      map.addCodeRegion(counter, span);
+    return counter;
+  };
+  uint32_t trueCounter = addBranch(op.getThenRegion());
+  uint32_t falseCounter = addBranch(op.getElseRegion());
+  map.addBranchRegion(trueCounter, falseCounter, condition);
+}
+
 /// Adds the counters of `op` to `map`. Add a case here for an op that needs
 /// different counters. A case returns `skip` to keep the walk out of the
 /// regions of the op.
 mlir::WalkResult instrumentOp(CoverageMap &map, mlir::Operation *op) {
   return llvm::TypeSwitch<mlir::Operation *, mlir::WalkResult>(op)
+      .Case<mlir::scf::IfOp>([&](auto ifOp) {
+        instrumentIf(map, ifOp);
+        return mlir::WalkResult::advance();
+      })
       .Case<mlir::RegionBranchOpInterface>([&](auto branch) {
         instrumentRegionBranch(map, branch);
         return mlir::WalkResult::advance();
