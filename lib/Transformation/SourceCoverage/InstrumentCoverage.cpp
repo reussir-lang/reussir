@@ -204,10 +204,15 @@ void instrumentRegionBranch(CoverageMap &map,
 }
 
 /// Adds the counters of `op` to `map`. Add a case here for an op that needs
-/// different counters.
-void instrumentOp(CoverageMap &map, mlir::Operation *op) {
-  llvm::TypeSwitch<mlir::Operation *>(op).Case<mlir::RegionBranchOpInterface>(
-      [&](auto branch) { instrumentRegionBranch(map, branch); });
+/// different counters. A case returns `skip` to keep the walk out of the
+/// regions of the op.
+mlir::WalkResult instrumentOp(CoverageMap &map, mlir::Operation *op) {
+  return llvm::TypeSwitch<mlir::Operation *, mlir::WalkResult>(op)
+      .Case<mlir::RegionBranchOpInterface>([&](auto branch) {
+        instrumentRegionBranch(map, branch);
+        return mlir::WalkResult::advance();
+      })
+      .Default([](mlir::Operation *) { return mlir::WalkResult::advance(); });
 }
 
 /// Returns the PGO name of `function`, as `llvm::getPGOFuncName` makes it.
@@ -257,7 +262,7 @@ void instrumentFunction(mlir::func::FuncOp function,
     return;
   CoverageMap map(function, span);
   function.walk<mlir::WalkOrder::PreOrder>(
-      [&](mlir::Operation *op) { instrumentOp(map, op); });
+      [&](mlir::Operation *op) { return instrumentOp(map, op); });
   std::string pgoName = pgoFuncName(function, span.getFilename().getValue());
   map.emit(profileNameGlobal(symbols, pgoName), pgoName);
 }
