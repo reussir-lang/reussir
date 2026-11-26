@@ -4,6 +4,9 @@
 // - `rene` and `rrc --emit executable --fuzzer` instrument the target and its
 //   dependencies with SanitizerCoverage and link the generated `reussir-fuzzer`
 //   (`libfuzzer-sys` + `mutatis`) harness automatically.
+// - The `library` group tests the `test` library: unit cases with fixed
+//   values, and fuzz targets for the laws of its domains, projections and
+//   byte encoding.
 //
 // UNSUPPORTED: windows
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin test_fuzz
@@ -14,16 +17,258 @@
 // RUN: env REUSSIR_FUZZ_FILTER=arithmetic %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
 // RUN: env REUSSIR_FUZZ_FILTER=strings %std_rene_build/fuzz/test_fuzz -runs=64 -seed=12345 -artifact_prefix=%t.
 // RUN: %not env REUSSIR_FUZZ_FILTER=broken %std_rene_build/fuzz/test_fuzz -runs=256 -seed=7 -artifact_prefix=%t. 2>&1 | %FileCheck %s --check-prefix=FAIL
+// RUN: env REUSSIR_FUZZ_FILTER=library %std_rene_build/fuzz/test_fuzz -runs=512 -seed=12345 -artifact_prefix=%t.
 
+import core::intrinsic::array;
 import std::collections::cow::vec::Vec;
+import std::format::Format;
+import std::format::Options;
+import std::option::Option;
 import std::string::String;
+import std::text::Text;
 import test::domain::alphanumeric;
+import test::domain::char_domain;
+import test::domain::f64_domain;
 import test::domain::i64_domain;
+import test::domain::in_range;
+import test::domain::string;
+import test::domain::text;
 import test::domain::tuple2;
+import test::domain::tuple3;
+import test::domain::tuple4;
+import test::domain::u8_domain;
+import test::domain::u64_domain;
+import test::expect::Outcome;
 import test::expect::expect;
+import test::expect::fail;
+import test::expect::pass;
 import test::expect::should_be;
+import test::expect::should_satisfy;
 import test::fuzz::fuzz_init;
+import test::spec::ByteCursor;
+import test::spec::Charset;
+import test::spec::IntWidth;
+import test::spec::empty_bytes;
+import test::spec::f32_from_bits;
+import test::spec::f32_to_bits;
+import test::spec::f64_from_bits;
+import test::spec::f64_to_bits;
+import test::spec::format_f32;
+import test::spec::format_f64;
+import test::spec::project_f64;
+import test::spec::project_i64;
+import test::spec::project_u64;
+import test::spec::write_u8;
+import test::spec::write_u16_le;
+import test::spec::write_u32_le;
+import test::spec::write_u64_le;
+import test::tree::Case;
+import test::tree::CaseResult;
 import test::tree::TestTree;
+
+fn renders(doc: Format, expected: str) -> bool {
+    doc.render(Options::default()).to_plain_string().eq_str(expected)
+}
+
+fn all_bytes(t: Text, keep: u8 -> bool) -> bool {
+    let (_, all) = while [i = (0 as u64), all = true] (i < t.len()) {
+        (i + 1, all && keep(t.byte_at(i)))
+    };
+    all
+}
+
+fn is_identifier_byte(b: u8) -> bool {
+    (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95
+}
+
+fn is_pass_result(result: CaseResult) -> bool {
+    match result {
+        Pass => true,
+        Fail(_, _) => false,
+        MalformedInput => false
+    }
+}
+
+fn charset_at(index: i64) -> Charset {
+    match index {
+        0 => Charset::Ascii,
+        1 => Charset::AsciiPrintable,
+        2 => Charset::Alphanumeric,
+        3 => Charset::Alpha,
+        4 => Charset::Digits,
+        5 => Charset::Identifier,
+        _ => Charset::Utf8
+    }
+}
+
+fn unit_int_widths() -> Outcome {
+    should_be(IntWidth::I8.signed_min(), -128)
+        .and_then(|| should_be(IntWidth::I16.signed_max(), 32767))
+        .and_then(|| should_be(IntWidth::I32.unsigned_max(), 4294967295))
+        .and_then(|| should_be(IntWidth::I64.signed_min(), (-9223372036854775807) - 1))
+        .and_then(|| should_be(IntWidth::I64.unsigned_max(), 0xffffffffffffffff))
+}
+
+fn unit_float_bits() -> Outcome {
+    expect(f64_to_bits(1.0) == 0x3ff0000000000000, "f64_to_bits(1.0)")
+        .and_then(|| expect(f64_from_bits(0xc004000000000000) == -2.5, "f64_from_bits gives -2.5"))
+        .and_then(|| expect(f32_to_bits(1.0 as f32) == 0x3f800000, "f32_to_bits(1.0)"))
+        .and_then(|| expect(f32_from_bits(0x40400000) == (3.0 as f32), "f32_from_bits gives 3.0"))
+}
+
+fn unit_projections() -> Outcome {
+    let nan = f64_from_bits(0x7ff8000000000000);
+    let inf = f64_from_bits(0x7ff0000000000000);
+    should_be(project_u64(15, 10, 20), 15)
+        .and_then(|| should_be(project_u64(25, 10, 20), 13))
+        .and_then(|| should_be(project_u64(7, 9, 9), 9))
+        .and_then(|| should_be(project_i64(-2, -3, 3), -2))
+        .and_then(|| should_be(project_i64(5, 4, 1), 4))
+        .and_then(|| expect(project_f64(2.0, 0, -1.0, 1.0, false, false) == -1.0, "2.0 goes to min"))
+        .and_then(|| expect(project_f64(nan, 0, -1.0, 1.0, false, false) == -1.0, "NaN goes to min"))
+        .and_then(|| expect(project_f64(inf, 0, -1.0, 1.0, false, true) == inf, "allowed Inf stays"))
+}
+
+fn unit_cursor() -> Outcome {
+    let cursor = ByteCursor::new(write_u64_le(empty_bytes(), 0x0807060504030201));
+    // Skip 1 byte and take 2: `slice_remaining` stops at the limit of `take`.
+    let middle = cursor.skip(1).and_then(|rest: ByteCursor| rest.take(2))
+        .map(|parts: (ByteCursor, ByteCursor)| {
+            let (head, _) = parts;
+            head.slice_remaining()
+        })
+        .unwrap_or(empty_bytes());
+    should_be(middle.len(), 2)
+        .and_then(|| expect(middle.get(0).unwrap_or(0) == 2 && middle.get(1).unwrap_or(0) == 3, "bytes"))
+        .and_then(|| expect(reads_back(cursor.read_u64_le(), 0x0807060504030201), "read_u64_le"))
+}
+
+fn unit_outcomes() -> Outcome {
+    let odd = should_satisfy(3 as i64, |n: i64| n % 2 == 0);
+    expect(should_satisfy(4 as i64, |n: i64| n % 2 == 0).is_pass(), "4 is even")
+        .and_then(|| match odd {
+            Pass => fail("3 is odd"),
+            Fail(message) => expect(renders(message, "predicate failed on: 3"), "message")
+        })
+        .and_then(|| expect(!fail("first").and_then(|| pass()).is_pass(), "first failure stays"))
+}
+
+fn unit_formats() -> Outcome {
+    let pair = tuple2(in_range(0, 9), text());
+    expect(renders(in_range(0, 9).format(7), "7"), "integer")
+        .and_then(|| expect(renders(text().format(Text::from_str("hi")), "\"hi\""), "text"))
+        .and_then(|| expect(renders(char_domain().format('x'), "'x'"), "char"))
+        .and_then(|| expect(renders(pair.format((3, Text::from_str("a"))), "(3, \"a\")"), "pair"))
+        .and_then(|| expect(renders(format_f64(1.5), "1.5"), "f64"))
+        .and_then(|| expect(renders(format_f32(0.25 as f32), "0.25"), "f32"))
+}
+
+fn unit_cases() -> Outcome {
+    let pair = Case::fuzz2(in_range(0, 9), in_range(10, 19), |a: i64, b: i64| expect(a > b, "a > b"));
+    let triple = Case::fuzz3(
+        in_range(1, 1), in_range(2, 2), in_range(3, 3),
+        |a: i64, b: i64, c: i64| should_be(a + b + c, 6)
+    );
+    // The first byte is not part of the input, so `run_cursor` starts after it.
+    let input = write_u64_le(write_u64_le(write_u8(empty_bytes(), 255), 3), 12);
+    let pair_result = match ByteCursor::new(input).skip(1) {
+        Option::None => CaseResult::MalformedInput,
+        Option::Some(cursor) => pair.run_cursor(cursor)
+    };
+    let shown = match pair_result {
+        Fail(original, _) => expect(renders(original, "(3, 12)"), "counterexample"),
+        Pass => fail("fuzz2 passes (3, 12)"),
+        MalformedInput => fail("fuzz2 rejects (3, 12)")
+    };
+    let tree = TestTree::group("built")
+        .with_test("unit", Case::unit(|| fail("map replaces this case")))
+        .with_test("triple", triple)
+        .map(|c: Case| if c.is_unit() { Case::unit(|| pass()) } else { c });
+    let unit_passes = match tree.prepare().run_bytes(write_u64_le(empty_bytes(), 0)) {
+        Option::None => false,
+        Option::Some(path_and_result) => {
+            let (_, result) = path_and_result;
+            is_pass_result(result)
+        }
+    };
+    let zeros = write_u64_le(write_u64_le(write_u64_le(empty_bytes(), 0), 0), 0);
+    shown.and_then(|| expect(is_pass_result(triple.run_bytes(zeros)), "fuzz3"))
+        .and_then(|| should_be(tree.count(), 2))
+        .and_then(|| expect(unit_passes, "map"))
+}
+
+fn fuzz_projections(input: (i64, i64, i64)) -> Outcome {
+    let (raw, a, b) = input;
+    let lo = if a < b { a } else { b };
+    let hi = if a < b { b } else { a };
+    let inside = raw >= lo && raw <= hi;
+    let signed = project_i64(raw, lo, hi);
+    // Add 20 to move the values into the range of `u64`.
+    let (u_raw, u_lo, u_hi) = ((raw + 20) as u64, (lo + 20) as u64, (hi + 20) as u64);
+    let unsigned = project_u64(u_raw, u_lo, u_hi);
+    expect(signed >= lo && signed <= hi, "project_i64 left [min, max]")
+        .and_then(|| expect(!inside || signed == raw, "project_i64 moved a value in [min, max]"))
+        .and_then(|| expect(unsigned >= u_lo && unsigned <= u_hi, "project_u64 left [min, max]"))
+        .and_then(|| expect(!inside || unsigned == u_raw, "project_u64 moved a value in [min, max]"))
+}
+
+fn fuzz_float_projection(input: (f64, u64, f64, f64)) -> Outcome {
+    let (raw, bits, a, b) = input;
+    let lo = if a < b { a } else { b };
+    let hi = if a < b { b } else { a };
+    let projected = project_f64(raw, bits, lo, hi, false, false);
+    expect(projected >= lo && projected <= hi, "project_f64 left [min, max]")
+}
+
+fn fuzz_non_positive(input: (i64, f64, u8)) -> Outcome {
+    let (i, x, u) = input;
+    expect(i <= 0 && x <= 0.0 && u == 0, "non_positive() gave a value above 0")
+}
+
+fn fuzz_charsets(input: (Charset, u64)) -> Outcome {
+    let (charset, word) = input;
+    let decoded = char_domain().with_charset(charset)
+        .decode_bytes(write_u32_le(empty_bytes(), word as u32));
+    expect(charset.contains(charset.map_word(word)), "map_word left the charset")
+        .and_then(|| expect(decoded.map(|ch: char| charset.contains(ch)).unwrap_or(false), "with_charset"))
+}
+
+fn fuzz_text(input: (Text, String, String)) -> Outcome {
+    let (printable, plain, name) = input;
+    let name_text = Text::from_string(name);
+    expect(printable.len() >= 1 && printable.len() <= 4, "text length left [1, 4]")
+        .and_then(|| expect(all_bytes(printable, |b: u8| b >= 32 && b <= 126), "printable()"))
+        .and_then(|| expect(all_bytes(Text::from_string(plain), |b: u8| b <= 127), "ascii()"))
+        .and_then(|| expect(name_text.len() == 3 && all_bytes(name_text, is_identifier_byte), "identifier()"))
+}
+
+fn fuzz_arrays(input: ([i64; ?], [u8; ?])) -> Outcome {
+    let (small, bytes) = input;
+    let n = array::dim(small, 0);
+    let (_, inside) = while [i = (0 as u64), inside = true] (i < n) {
+        let x = array::get(small, i as i64);
+        (i + 1, inside && x >= -3 && x <= 3)
+    };
+    expect(n >= 2 && n <= 5, "array_with_len length left [2, 5]")
+        .and_then(|| expect(inside, "array_with_len element left [-3, 3]"))
+        .and_then(|| expect(array::dim(bytes, 0) <= 16, "array() length above 16"))
+}
+
+fn reads_back<T: PartialEq>(read: Option<(T, ByteCursor)>, expected: T) -> bool {
+    read.map(|value_and_rest: (T, ByteCursor)| {
+        let (value, rest) = value_and_rest;
+        value == expected && rest.is_eof()
+    }).unwrap_or(false)
+}
+
+fn fuzz_word_round_trip(word: u64) -> Outcome {
+    let r64 = ByteCursor::new(write_u64_le(empty_bytes(), word)).read_u64_le();
+    let r32 = ByteCursor::new(write_u32_le(empty_bytes(), word as u32)).read_u32_le();
+    let r16 = ByteCursor::new(write_u16_le(empty_bytes(), word as u16)).read_u16_le();
+    expect(reads_back(r64, word), "u64 round trip")
+        .and_then(|| expect(reads_back(r32, word as u32), "u32 round trip"))
+        .and_then(|| expect(reads_back(r16, word as u16), "u16 round trip"))
+}
 
 fn suite() -> TestTree {
     let arithmetic = TestTree::group("arithmetic")
@@ -64,10 +309,48 @@ fn suite() -> TestTree {
             |x: i64| expect(x < 10, "expected < 10")
         );
 
+    let small = in_range(-20, 20);
+    let library = TestTree::group("library")
+        .with_case("int widths", unit_int_widths)
+        .with_case("float bits", unit_float_bits)
+        .with_case("projections", unit_projections)
+        .with_case("cursor reads", unit_cursor)
+        .with_case("outcomes", unit_outcomes)
+        .with_case("formats", unit_formats)
+        .with_case("cases built directly", unit_cases)
+        .with_fuzz("projections stay in range (fuzz)", tuple3(small, small, small), fuzz_projections)
+        .with_fuzz(
+            "float projection stays in range (fuzz)",
+            tuple4(f64_domain().any_float(), u64_domain(), f64_domain().any_float().finite(), f64_domain()),
+            fuzz_float_projection
+        )
+        .with_fuzz(
+            "non_positive (fuzz)",
+            tuple3(in_range(5, 10).non_positive(), f64_domain().non_positive(), u8_domain().non_positive()),
+            fuzz_non_positive
+        )
+        .with_fuzz("charsets (fuzz)", tuple2(in_range(0, 6).map_display(charset_at), u64_domain()), fuzz_charsets)
+        .with_fuzz(
+            "text domains (fuzz)",
+            tuple3(
+                text().printable().with_len_range(1, 4),
+                string().ascii().max_len(6),
+                string().identifier().with_len(3)
+            ),
+            fuzz_text
+        )
+        .with_fuzz(
+            "arrays (fuzz)",
+            tuple2(in_range(-3, 3).array_with_len(2, 5, 0), u8_domain().array(0)),
+            fuzz_arrays
+        )
+        .with_fuzz("byte words round trip (fuzz)", u64_domain(), fuzz_word_round_trip);
+
     TestTree::group("fuzz_suite")
         .with_group(arithmetic)
         .with_group(strings)
         .with_group(broken)
+        .with_group(library)
 }
 
 pub fn fuzz_entry() {
