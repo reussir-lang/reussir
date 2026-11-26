@@ -17,4 +17,5 @@ add_mlir_library(MLIRReussirSourceCoverage
   MLIRLLVMDialect
   MLIRSCFDialect
   MLIRPass
+  MLIRSCFDialect
 )
