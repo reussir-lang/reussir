@@ -97,6 +97,9 @@ MlirPass reussirCreateAcquireDropExpansionPass(bool expandDecrement,
 // Token reuse can optionally reuse tokens across function calls and emit one
 // structured optimization remark for every allocation/reuse decision.
 MlirPass reussirCreateTokenReusePass(bool reuseAcrossCall, bool emitRemarks);
+// Adds source-based coverage counters and the `reussir.coverage.map`
+// attribute to each function. Run it on frontend IR, before inlining.
+MlirPass reussirCreateInstrumentCoveragePass(void);
 
 //===----------------------------------------------------------------------===//
 // Upstream passes used by the pipeline

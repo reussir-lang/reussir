@@ -417,4 +417,23 @@ def ReussirBorrowSpecializationPass
                            "::mlir::LLVM::LLVMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// InstrumentCoverage
+//===----------------------------------------------------------------------===//
+def ReussirInstrumentCoveragePass
+    : Pass<"reussir-instrument-coverage", "::mlir::ModuleOp"> {
+  let summary = "add source-based coverage counters to functions";
+  let description = [{
+    `reussir-instrument-coverage` adds `llvm.instrprof.increment` counters to
+    each `func.func` that has a body, a `FileLineColRange` location, and
+    coverage enabled (`coverageEnabled`). Counter 0 counts the function
+    entry. Each region of an op that implements `RegionBranchOpInterface`
+    gets a counter at the start of its entry block when an op in the region
+    has a location. The pass writes the counters, the function hash and the
+    source span of each counter into the `reussir.coverage.map` attribute of
+    the function. Run it on frontend IR, before inlining.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // REUSSIR_TRANSFORMATION_PASSES_TD
