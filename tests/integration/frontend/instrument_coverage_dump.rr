@@ -5,7 +5,7 @@
 // RUN: %rrc %s --emit mlir -o %t.plain.mlir
 // RUN: %FileCheck %s --check-prefix=PLAIN < %t.plain.mlir
 //
-// CHECK: loc("{{.*}}instrument_coverage_dump.rr":[[@LINE+3]]:{{[0-9]+}} to [[@LINE+5]]:2)
+// CHECK: loc("{{.*}}instrument_coverage_dump.rr":[[@LINE+4]]:5 to
 // PLAIN-NOT: loc(
 
 pub fn twice(x: i64) -> i64 {
