@@ -1,0 +1,27 @@
+// REQUIRES: profile-runtime
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin --emit rri -o %t.core.rri
+// RUN: %rrc --package-root %S/../../../library/core/src --package-name core --builtin -o %t.core.o --relocation-mode pic
+// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri --emit rri -o %t.std.rri
+// RUN: %rrc --package-root %S/../../../library/std/src --package-name std --builtin --extern core=%t.core.rri -o %t.std.o --relocation-mode pic
+// RUN: %rrc %s --package-name closurestd --extern core=%t.core.rri --extern std=%t.std.rri --instrument-coverage --emit obj --relocation-mode pic -o %t.o
+// RUN: %cc -fprofile-instr-generate %t.o %t.std.o %t.core.o %S/Inputs/reussir_main.c -o %t.exe -L%library_path -lreussir_rt %rcgmp_runtime %rpath_flag %extra_sys_libs
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.exe
+// RUN: %llvm-profdata merge -sparse %t.profraw -o %t.profdata
+// RUN: %llvm-profdata show --counts --all-functions %t.profdata | %FileCheck %s
+
+// A closure that a std combinator calls counts its runs too. `Option::map`
+// does not call the closure for `None`, and calls it one time for `Some`.
+
+// CHECK-LABEL: 5entry:
+// CHECK: Function count: 1
+// CHECK-NEXT: Block counts: [0, 1]
+
+import std::option::Option;
+
+#[main]
+pub fn entry() {
+    let none : Option<i64> = Option::None;
+    let some : Option<i64> = Option::Some { 3 };
+    let a = none.map(|v : i64| v * 2);
+    let b = some.map(|v : i64| v + 1);
+}
