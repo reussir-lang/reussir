@@ -55,12 +55,16 @@ mlir::FileLineColRange unite(mlir::FileLineColRange lhs,
 }
 
 /// Returns the union of the spans of the ops in `region` that are in `file`.
-/// Returns a null range when no such op has a span.
+/// Returns a null range when no such op has a span. An op with the location
+/// of the parent op of `region` is a part of that op, such as the `else`
+/// that the frontend makes for an `if`, or a loop that the lowering makes
+/// for a call. Such an op is not in the span.
 mlir::FileLineColRange regionSpan(mlir::Region &region, mlir::StringAttr file) {
+  mlir::Location parent = region.getParentOp()->getLoc();
   mlir::FileLineColRange result;
   region.walk([&](mlir::Operation *op) {
     auto span = op->getLoc()->findInstanceOf<mlir::FileLineColRange>();
-    if (!span || span.getFilename() != file)
+    if (!span || span.getFilename() != file || op->getLoc() == parent)
       return;
     result = result ? unite(result, span) : span;
   });
