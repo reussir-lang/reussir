@@ -1,0 +1,39 @@
+// REQUIRES: profile-runtime
+// RUN: %rrc %s --package-name inlined --instrument-coverage --emit executable -o %t.exe
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.exe
+// RUN: %llvm-profdata merge -sparse %t.profraw -o %t.profdata
+// RUN: %llvm-profdata show --counts --function=helper %t.profdata | %FileCheck %s --check-prefix=PROFILE
+// RUN: %llvm-cov export -format=lcov %t.exe -instr-profile=%t.profdata | %FileCheck %s
+//
+// The inliner copies `helper` into `left` and `right` and removes it. The
+// program calls `left` three times and `right` two times. So `helper` runs
+// five times: three times with `x > 2`, and two times without. llvm-cov finds
+// the record of `helper` and its counts.
+
+// PROFILE: helper:
+// PROFILE: Counters: 3
+// PROFILE-NEXT: Function count: 5
+// PROFILE-NEXT: Block counts: [3, 2]
+// CHECK-DAG: FNDA:5,{{.*}}helper
+// CHECK-DAG: FNDA:3,{{.*}}left
+// CHECK-DAG: FNDA:2,{{.*}}right
+fn helper(x: i64) -> i64 {
+    if x > 2 { x * 2 } else { x + 1 }
+}
+
+pub fn left(x: i64) -> i64 {
+    helper(x)
+}
+
+pub fn right(x: i64) -> i64 {
+    helper(x + 1)
+}
+
+#[main]
+pub fn entry() {
+    let a = left(1);
+    let b = left(2);
+    let c = left(3);
+    let d = right(4);
+    let e = right(5);
+}

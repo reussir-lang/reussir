@@ -1,0 +1,35 @@
+// RUN: %rrc %s --package-name inlined --instrument-coverage --emit llvm-ir -o %t.ll
+// RUN: %FileCheck %s < %t.ll --implicit-check-not='define {{.*}}helper'
+// RUN: %rrc %s --package-name inlined --instrument-coverage --emit mlir-llvm -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=MLIR < %t.mlir --implicit-check-not='llvm.func {{.*}}helper'
+//
+// The MLIR inliner copies `helper` into both callers and removes it, as it
+// does without coverage. Both callers add to the three counters of `helper`,
+// so its counts are the sum over the two callers. The coverage record of
+// `helper` stays, with the name and the hash of its profile data.
+
+// CHECK-DAG: @__profc_[[HELPER:[^ ]*helper]] = private global [3 x i64] zeroinitializer
+// CHECK-DAG: @__profd_[[HELPER]] = private global {{.*}} { i64 [[NAME:-?[0-9]+]], i64 [[HASH:-?[0-9]+]],
+// CHECK-DAG: @__covrec_{{[0-9A-F]+}}u = linkonce_odr hidden constant <{ i64, i32, i64, i64, [{{[0-9]+}} x i8] }> <{ i64 [[NAME]], i32 {{[0-9]+}}, i64 [[HASH]],
+
+fn helper(x: i64) -> i64 {
+    if x > 2 { x * 2 } else { x + 1 }
+}
+
+// MLIR: llvm.func {{.*}}left(
+// MLIR: llvm.func {{.*}}right(
+// CHECK-LABEL: define {{.*}}left(
+// CHECK: store i64 {{.*}}, ptr @__profc_[[HELPER]],
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 1)
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 2)
+pub fn left(x: i64) -> i64 {
+    helper(x)
+}
+
+// CHECK-LABEL: define {{.*}}right(
+// CHECK: store i64 {{.*}}, ptr @__profc_[[HELPER]],
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 1)
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 2)
+pub fn right(x: i64) -> i64 {
+    helper(x + 1)
+}
