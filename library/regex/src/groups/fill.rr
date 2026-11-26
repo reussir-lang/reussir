@@ -57,6 +57,35 @@ impl Program {
         (self.registers + 1 + ((cell as u64) >> self.shift)) as i64
     }
 
+    // Which branch the bytes of the question `at` are of: the earliest
+    // whose regex matches them all, as the state says in which their
+    // automaton ends. The register of that branch holds their beginning,
+    // and those of the others no place.
+    fn choose(self: Self, bytes: ConstPtr<Generic>, work: [u64; ?], at: u64) -> [u64; ?] {
+        let from = array::get(work, self.word(at + 1) as i64);
+        let to = array::get(work, self.word(at + 2) as i64);
+        let fills = self.word(at + 3);
+        let count = self.word(at + 5);
+        let start = if from == absent() || to == absent() {
+            0
+        } else {
+            array::get(self.starts, self.word(at + 4) as i64)
+        };
+        let (cell, _) = while [cell = start, place = from] (cell != 0 && place < to) {
+            (self.step(cell, native::byte_at(bytes, place)), place + 1)
+        };
+        // No branch has the number `count`.
+        let taken = if accepts(cell) {
+            array::get(self.winners, ((cell as u64) >> self.shift) as i64) as u64
+        } else {
+            count
+        };
+        let (_, work) = while [branch = (0 as u64), work = work] (branch < count) {
+            (branch + 1, array::set(work, (fills + branch) as i64, if branch == taken { from } else { absent() }))
+        };
+        work
+    }
+
     // The word `at` of the questions.
     fn word(self: Self, at: u64) -> u64 {
         array::get(self.code, at as i64)
@@ -160,7 +189,12 @@ impl Groups {
             let work = array::set(array::set(work, 0, found.start), 1, found.end);
             let end = array::get(program.rules, (rule + 1) as i64);
             let (_, work) = while [at = array::get(program.rules, rule as i64), work = work] (at < end) {
-                (at + program::width(), program.split(bytes, work, at))
+                let work = if program.word(at) == program::splits() {
+                    program.split(bytes, work, at)
+                } else {
+                    program.choose(bytes, work, at)
+                };
+                (at + program::width(), work)
             };
             Groups {
                 work,

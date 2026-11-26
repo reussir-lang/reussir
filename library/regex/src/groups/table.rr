@@ -11,7 +11,8 @@
 //! ```
 //!
 //! A cell is the place of the row of a state, with the lowest bit set
-//! when the state accepts. A row is as long as the number of classes
+//! when the state accepts; `winners` has the earliest regex of its list
+//! that matches there. A row is as long as the number of classes
 //! rounded up to a power of two, two at least. The states from which no
 //! state that accepts is reached are one state, whose row is the first:
 //! its cell is 0, and all its cells are.
@@ -33,6 +34,9 @@ pub struct Table {
     pub classes: [u8; 256],
     /// The cell of the state that each automaton begins in.
     pub starts: [u32; ?],
+    /// For each row, the earliest regex that matches in its state; 0 in
+    /// a state that does not accept.
+    pub winners: [u32; ?],
     /// A row has `1 << shift` cells.
     pub shift: u64,
     /// The number of rows.
@@ -76,6 +80,9 @@ pub fn build(lists: List<List<ByteRegex>>, sets: ByteClasses, limit: u64) -> Res
                     }),
                     classes: array::tabulate<[u8; 256]>(|byte: i64| sets.class_index(byte as u8) as u8),
                     starts: array::tabulate<[u32; ?]>(begins.len(), |at: i64| cell_of.get_or(begins.get_or(at as u64, 0) as u64, 0)),
+                    winners: array::tabulate<[u32; ?]>(states, |row: i64| if row == 0 { 0 } else {
+                        winners.get_or(live.get_or((row - 1) as u64, 0), Option::None).unwrap_or(0)
+                    }),
                     shift,
                     states
                 } }

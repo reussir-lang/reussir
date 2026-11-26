@@ -36,6 +36,11 @@
 //! groups    ab, c and d            not a, bcd and no bytes
 //! ```
 //!
+//! Of the branches of a union, however `or` nests them, the earliest
+//! that matches the bytes is taken, and the groups of the others are
+//! absent. `optional` is the empty string first: a group that may be
+//! left out is absent where it has no bytes.
+//!
 //! The groups are found by reading, not by trying. For `first rest`, the
 //! automaton of `first` reads on, and at every place where it accepts the
 //! automaton of `rest` begins anew. Of the beginnings that come to one
@@ -52,14 +57,16 @@
 //! ```
 //!
 //! With `first` dead and one beginning left, that one is the answer, and
-//! the rest of the bytes is not read. No byte is tried and taken back, so
-//! what is inside a group, and beside it, may be any regex, with
-//! complements and intersections. Only parts one after another are asked
-//! about: a rule with a group under anything else is refused.
+//! the rest of the bytes is not read. The branches of a union are one
+//! automaton, which says the earliest of them that matches the bytes it
+//! has read. No byte is tried and taken back, so what is inside a group,
+//! and beside it, may be any regex, with complements and intersections.
+//! Only parts one after another and branches are asked about: a rule
+//! with a group under anything else is refused.
 //!
 //! The groups of a match cost one reading of its bytes for every place
-//! between two parts that is asked for, times the beginnings that are
-//! alive, which are no more than the states of the automata. Those are
+//! between two parts that is asked for and for every union with a group
+//! inside that they come through, times the beginnings that are alive, which are no more than the states of the automata. Those are
 //! one table for all parts of all rules, of no more states than the limit
 //! given to `Groups::build`; that limit is not the limit of the automaton
 //! of the rules, which is built apart. The parts from each part on have
@@ -105,6 +112,7 @@ pub struct Program {
     next: [u32; ?],
     classes: [u8; 256],
     starts: [u32; ?],
+    winners: [u32; ?],
     shift: u64,
     states: u64,
     // The most registers that a rule has.
@@ -141,7 +149,7 @@ pub enum [value] Refused {
     /// The automata of the parts need more states than the limit.
     TooManyStates(TooManyStates),
     /// The rule with this number has a group under something other than
-    /// parts one after another and groups.
+    /// parts one after another, branches and groups.
     Misplaced(u32)
 }
 
@@ -168,6 +176,7 @@ impl Groups {
                             next: table.next,
                             classes: table.classes,
                             starts: table.starts,
+                            winners: table.winners,
                             shift: table.shift,
                             states: table.states,
                             registers: asked.most
