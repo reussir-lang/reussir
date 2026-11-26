@@ -3973,13 +3973,16 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             if let Some(&value) = args.first() {
                 scope.vars.insert(state, value);
             }
+            // Each terminator has the span of its expression, not the span of
+            // the loop. This keeps the source span of each region correct.
+            let condition_loc = self.location(condition.span);
             let condition = self
                 .expr(&before, scope, condition)?
                 .ok_or_else(|| LoweringError("while condition produced no value".into()))?;
             let mut operands = vec![condition];
             operands.extend(args);
             before.append_operation(
-                OperationBuilder::new("scf.condition", loc)
+                OperationBuilder::new("scf.condition", condition_loc)
                     .add_operands(&operands)
                     .build()
                     .map_err(|e| LoweringError(e.to_string().into()))?,
@@ -3992,7 +3995,10 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                 scope.vars.insert(state, after.argument(0).unwrap().into());
             }
             let next = self.expr(&after, scope, body)?;
-            after.append_operation(scf::r#yield(&next.into_iter().collect::<Vec<_>>(), loc));
+            after.append_operation(scf::r#yield(
+                &next.into_iter().collect::<Vec<_>>(),
+                self.location(body.span),
+            ));
             Ok::<_, LoweringError>(())
         })?;
         let before_region = Region::new();

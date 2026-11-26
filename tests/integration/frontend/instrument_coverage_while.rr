@@ -1,0 +1,19 @@
+// RUN: %rrc %s --emit mlir --instrument-coverage -o %t.mlir
+// RUN: %reussir-opt %t.mlir --mlir-print-debuginfo --mlir-print-local-scope | %FileCheck %s
+//
+// The terminators of a loop have the spans of the condition and of the body.
+// The source coverage regions of the loop come from these spans.
+
+// CHECK-LABEL: func.func @{{.*}}count
+// CHECK: scf.while
+// CHECK: scf.condition({{.*}} loc("{{.*}}instrument_coverage_while.rr":[[@LINE+5]]:20 to :25)
+// CHECK: scf.yield {{.*}} loc("{{.*}}instrument_coverage_while.rr":[[@LINE+4]]:27 to [[@LINE+6]]:6)
+// CHECK: } loc("{{.*}}instrument_coverage_while.rr":[[@LINE+3]]:5 to [[@LINE+5]]:6)
+
+pub fn count(n: u64) -> u64 {
+    while [i = 0] (i < n) {
+        i + 1
+    }
+}
+
+extern "C" trampoline "count" = count;
