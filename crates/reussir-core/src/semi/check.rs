@@ -882,6 +882,9 @@ impl<'a, 'tcx> Elaborator<'a, 'tcx> {
         }
         let mut regions = Vec::new();
         for (source, predicate) in [(condition, true), (body, false)] {
+            // The state bindings of a region have the span of the condition or
+            // of the body, not the span of the loop.
+            let span = Some(source.span());
             let mark = self.vars.mark();
             let mut expressions = Vec::new();
             for (i, ((name, _), &ty)) in bindings.iter().zip(&field_types).enumerate() {
