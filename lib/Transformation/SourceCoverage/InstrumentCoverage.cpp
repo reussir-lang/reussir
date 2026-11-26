@@ -117,9 +117,9 @@ public:
   /// the true results, and `falseCounter` counts the false results.
   void addBranchRegion(uint32_t trueCounter, uint32_t falseCounter,
                        mlir::FileLineColRange span) {
-    regions.push_back({span,
-                       {{"true_counter", trueCounter},
-                        {"false_counter", falseCounter}}});
+    regions.push_back(
+        {span,
+         {{"true_counter", trueCounter}, {"false_counter", falseCounter}}});
   }
 
   /// Returns the source file of the function.
