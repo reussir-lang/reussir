@@ -1711,6 +1711,42 @@ fn bundled_core_is_baked_once_across_build_directories() {
     }
 }
 
+/// A coverage mapping names the source files by path, and each build
+/// directory has its own copy of the `core` sources. Thus each build
+/// directory compiles its own coverage build of `core`, and the normal build
+/// stays shared.
+#[cfg(unix)]
+#[test]
+fn bundled_core_coverage_builds_use_their_own_sources() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    package(&tmp, "demo");
+    let manifest = write_targets_manifest(&tmp);
+    let fakes = Fakes::new(&tmp);
+    let roots = ["first", "second"].map(|name| tmp.join(name));
+    for root in &roots {
+        for args in [&["build"][..], &["build", "--instrument-coverage"]] {
+            let out = fakes.rene(args, &manifest, root);
+            assert!(out.status.success(), "{}", stderr(&out));
+        }
+    }
+    let core_archives = |coverage: bool| -> Vec<String> {
+        fakes
+            .compiles()
+            .into_iter()
+            .filter(|l| l.contains("--package-name core") && l.contains("--emit staticlib"))
+            .filter(|l| l.contains("--instrument-coverage") == coverage)
+            .collect()
+    };
+    assert_eq!(core_archives(false).len(), 1);
+    let coverage = core_archives(true);
+    assert_eq!(coverage.len(), 2, "{coverage:#?}");
+    for (line, root) in coverage.iter().zip(&roots) {
+        let sources = format!("--package-root {}", root.join("core-src").display());
+        assert!(line.contains(&sources), "{line}");
+    }
+}
+
 #[cfg(unix)]
 fn dependency_record(build_dir: &Path, name: &str) -> rene::fresh::DepRecord {
     let dir = BuildDir::open(build_dir).unwrap();
