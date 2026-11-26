@@ -8,8 +8,9 @@
 // `from_raw`/`into_raw`).
 // Fuzz targets exercise stateful copy-on-write mutation streams against a
 // byte-list reference model, full Unicode scalar UTF-8 round-tripping,
-// concatenation/range monoid laws, and arbitrary byte-slice UTF-8 boundary
-// validation.
+// concatenation/range monoid laws, arbitrary byte-slice UTF-8 boundary
+// validation, the U+FFFD replacement of `TextView` display, and the
+// `std::format` combinators `concat`, `join` and `braces`.
 
 // RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin string %rrc_linker | %FileCheck %s --check-prefix=LISTING
 // LISTING: fuzz{{[/\\]}}string
@@ -24,19 +25,26 @@
 // CHECK-NEXT: string/ranges and raw roundtrip: unit
 // CHECK-NEXT: string/data pointers: unit
 // CHECK-NEXT: string/vector scans: unit
+// CHECK-NEXT: string/text variants: unit
 // CHECK-NEXT: string/cow operations & byte-list model (fuzz):
 // CHECK-NEXT: string/utf8 char roundtrip & scalar boundaries (fuzz):
 // CHECK-NEXT: string/concatenation monoid & range algebra (fuzz):
 // CHECK-NEXT: string/byte slicing & utf8 boundary validation (fuzz):
+// CHECK-NEXT: string/view display & replacement model (fuzz):
+// CHECK-NEXT: string/join & concat of rendered strings (fuzz):
 
 import std::collections::cow::vec::Vec;
 import std::collections::pure::list::List;
+import std::format::Display;
+import std::format::Format;
+import std::format::Options;
 import std::option::Option;
 import std::string::String;
 import std::text::Text;
 import std::text::TextView;
 import test::domain::char_domain;
 import test::domain::string;
+import test::domain::tuple2;
 import test::domain::tuple3;
 import test::domain::u64_domain;
 import test::domain::u8_domain;
@@ -291,6 +299,21 @@ fn test_vector_scans() -> Outcome {
         .and_then(|| expect(limited_high == 4.5 && kept == 9.0, "shared array left intact"))
         .and_then(|| should_be(twice_first, -6))
         .and_then(|| should_be(twice_last, 8))
+}
+
+// A literal and an owned text with the same bytes are equal in both orders.
+fn test_text_variants() -> Outcome {
+    let literal = Text::from_str("λx");
+    let owned = Text::from_string(String::from_str("λx"));
+    let other = Text::from_string(String::from_str("λy"));
+    let literal_first = byte_through(literal.unsafe_data_ptr(), 0);
+    expect(literal == owned && owned == literal, "literal and owned texts are equal")
+        .and_then(|| expect(!(literal == other) && !(other == literal), "different bytes are unequal"))
+        .and_then(|| expect(literal.to_string() == owned.to_string(), "to_string of both variants"))
+        .and_then(|| expect(literal.write(String::from_str(">"), 0, 2).eq_str(">λ"), "literal write"))
+        .and_then(|| expect(owned.write(String::new(), 2, 3).eq_str("x"), "owned write"))
+        .and_then(|| expect(Text::from_str("").is_empty() && !owned.is_empty(), "is_empty"))
+        .and_then(|| should_be(literal_first, 206))
 }
 
 // ------------------------------ Model helpers ------------------------------
@@ -776,6 +799,64 @@ fn fuzz_byte_slicing_boundaries(input : (String, u64, u64)) -> Outcome {
     )
 }
 
+// ------------- Fuzz 5: TextView display & U+FFFD replacement -------------
+
+fn render_plain(doc: Format) -> String {
+    doc.render(Options::default()).to_plain_string()
+}
+
+fn continuation_at(s: String, pos: u64) -> bool {
+    if pos < s.len() {
+        let b = s.byte_at(pos);
+        b >= 128 && b < 192
+    } else {
+        false
+    }
+}
+
+// Display writes one U+FFFD for each continuation byte at the start of a
+// view, and one U+FFFD for an incomplete character at its end.
+fn fuzz_view_display(input: (String, u64, u64)) -> Outcome {
+    let (s, i, j) = input;
+    match Text::from_string(s).view().slice_byte(i, j) {
+        Option::None => expect(i > j || j > s.len(), "slice_byte rejected bounds in range"),
+        Option::Some(view) => {
+            let start = while [p = i] (p < j && continuation_at(s, p)) { p + 1 };
+            let end = while [p = j] (p > start && continuation_at(s, p)) { p - 1 };
+            let (_, marked) = while [k = i, out = String::new()] (k < start) {
+                (k + 1, out.push_char('\u{fffd}'))
+            };
+            let body = if start < end { marked.push_string_range(s, start, end) } else { marked };
+            let expected = if end < j { body.push_char('\u{fffd}') } else { body };
+            expect(render_plain(view.fmt()) == expected, "TextView display differs from the model")
+        }
+    }
+}
+
+// --------------- Fuzz 6: join & concat of rendered strings ---------------
+
+fn fuzz_join_and_concat(input: (List<String>, String)) -> Outcome {
+    let (items, separator) = input;
+    let docs = items.map(|item: String| item.fmt());
+    let concatenated = items.fold_left(String::new(), |out: String, item: String| out.push_string(item));
+    let joined = match items {
+        List::Nil => String::new(),
+        List::Cons(first, rest) => rest.fold_left(first,
+            |out: String, item: String| out.push_string(separator).push_string(item))
+    };
+    let joined_doc = std::format::join(separator.fmt(), docs);
+    expect(render_plain(std::format::concat(docs)) == concatenated, "concat differs from the model")
+        .and_then(|| expect(render_plain(joined_doc) == joined, "join differs from the model"))
+        .and_then(|| expect(
+            render_plain(std::format::join(Format::Empty, docs)) == concatenated,
+            "join with an empty separator differs from concat"
+        ))
+        .and_then(|| expect(
+            render_plain(std::format::braces(joined_doc)) == String::from_str("{").push_string(joined).push_str("}"),
+            "braces differ from the model"
+        ))
+}
+
 fn suite() -> TestTree {
     TestTree::group("string")
         .with_case("build", test_build)
@@ -785,6 +866,7 @@ fn suite() -> TestTree {
         .with_case("ranges and raw roundtrip", test_ranges_and_raw)
         .with_case("data pointers", test_data_ptr)
         .with_case("vector scans", test_vector_scans)
+        .with_case("text variants", test_text_variants)
         .with_fuzz(
             "cow operations & byte-list model (fuzz)",
             tuple3(
@@ -816,6 +898,23 @@ fn suite() -> TestTree {
                 u64_domain().in_range_u64(0, 40)
             ),
             fuzz_byte_slicing_boundaries
+        )
+        .with_fuzz(
+            "view display & replacement model (fuzz)",
+            tuple3(
+                string().utf8().max_len(32),
+                u64_domain().in_range_u64(0, 40),
+                u64_domain().in_range_u64(0, 40)
+            ),
+            fuzz_view_display
+        )
+        .with_fuzz(
+            "join & concat of rendered strings (fuzz)",
+            tuple2(
+                string().utf8().max_len(12).list_with_len(0, 6),
+                string().utf8().max_len(4)
+            ),
+            fuzz_join_and_concat
         )
 }
 
