@@ -80,6 +80,10 @@ find_llvm_tool(llvm_dis_path llvm-dis)
 # The COFF comdat suite reads section characteristics (IMAGE_SCN_LNK_COMDAT)
 # off cross-compiled objects.
 find_llvm_tool(llvm_readobj_path llvm-readobj)
+# The source-based code coverage suite (coverage/) merges raw profiles with
+# llvm-profdata. It reads the coverage mapping with llvm-cov.
+find_llvm_tool(llvm_profdata_path llvm-profdata)
+find_llvm_tool(llvm_cov_path llvm-cov)
 
 # lldb drives the end-to-end debug-info suite (tests/integration/debuginfo):
 # it runs compiled executables under the debugger, with the Reussir formatters
