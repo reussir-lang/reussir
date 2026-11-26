@@ -1,0 +1,39 @@
+// REQUIRES: rustc-lto-link
+// UNSUPPORTED: windows
+// The coverage mapping stays in an executable that an LTO link makes. Its
+// globals are in `llvm.used`, so the LTO internalization and the section
+// garbage collection of the linker keep them. llvm-cov reads the mapping
+// with a profile that has no record of these functions, and shows them with
+// a count of zero.
+// RUN: printf 'unused\n1\n1\n0\n' > %t.proftext
+// RUN: %llvm-profdata merge %t.proftext -o %t.profdata
+
+// RUN: %rrc %s --instrument-coverage --emit executable --relocation-mode pic --codegen-units 2 --lto thin %rrc_linker -o %t.thin.exe
+// RUN: %llvm-readobj --sections %t.thin.exe | %FileCheck %s --check-prefix=SECTIONS
+// RUN: %llvm-cov export -format=lcov %t.thin.exe -instr-profile=%t.profdata | %FileCheck %s
+
+// RUN: %rrc %s --instrument-coverage --emit executable --relocation-mode pic --codegen-units 2 --lto fat %rrc_linker -o %t.fat.exe
+// RUN: %llvm-readobj --sections %t.fat.exe | %FileCheck %s --check-prefix=SECTIONS
+// RUN: %llvm-cov export -format=lcov %t.fat.exe -instr-profile=%t.profdata | %FileCheck %s
+
+// SECTIONS-DAG: Name: __llvm_prf_cnts
+// SECTIONS-DAG: Name: __llvm_prf_data
+// SECTIONS-DAG: Name: __llvm_covfun
+// SECTIONS-DAG: Name: __llvm_covmap
+
+// CHECK-DAG: FNDA:0,{{.*}}classify
+// CHECK-DAG: FNDA:0,{{.*}}entry
+
+fn classify(x: u64) -> u64 {
+    if x > 4 {
+        x * 10
+    } else {
+        x + 1
+    }
+}
+
+#[main]
+pub fn entry() {
+    let a = classify(1);
+    let c = classify(7);
+}
