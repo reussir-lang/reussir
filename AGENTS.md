@@ -51,6 +51,11 @@
   may refer to PRs or issues, and journal trees may also refer to session
   trees. Write for future developers and users who have no access to the
   conversation context.
+- Write new and changed journal trees and code comments in ASD-STE100
+  Simplified Technical English. Use the approved words with their approved
+  meanings, and use technical names (code identifiers among them) as they are.
+  Keep each sentence short: at most 20 words in a procedure and 25 in a
+  description. Use the active voice and one instruction in each sentence.
 - The comprehensive benchmark suite is at `reussir-lang/benchmark`. Report
   performance regressions when a patch affects code generation. Run relevant
   suites rather than making yourself or other developers wait for an excessive
