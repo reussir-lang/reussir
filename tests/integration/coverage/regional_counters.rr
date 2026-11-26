@@ -1,0 +1,19 @@
+// The body of a `regional` block runs once each time the function runs, so it
+// has no counter. `pick` has a counter for its entry and one for each branch
+// of the `if` in the block.
+// RUN: %rrc %s --instrument-coverage --emit llvm-ir -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+
+// CHECK-DAG: @{{"?}}__profc_{{[^ ]*}}4pick{{"?}} = {{.*}}global [3 x i64] zeroinitializer
+
+pub fn pick(x: u64) -> u64 {
+    regional {
+        if x > 1 {
+            x * 2
+        } else {
+            x + 1
+        }
+    }
+}
+
+extern "C" trampoline "regional_pick" = pick;
