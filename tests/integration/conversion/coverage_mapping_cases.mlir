@@ -39,3 +39,30 @@ module {
     return
   }
 }
+
+// -----
+
+// A gap region sets the high bit of its end column.
+
+// CHECK-LABEL: func.func @gap
+// CHECK: llvm.mlir.constant("\01\01\00\02\01\01\01\03\02\05\01\03\01\85\80\80\80\08")
+
+module {
+  func.func @gap() attributes {reussir.coverage.map = {
+      hash = 7 : i64, name = "gap", counters = 2 : i32,
+      regions = [{counter = 0 : i32, span = loc("d.rr":1:1 to 4:2)},
+                 {counter = 1 : i32, kind = "gap", span = loc("d.rr":2:3 to 3:5)}]}} {
+    return
+  }
+}
+
+// -----
+
+module {
+  // expected-error @+1 {{invalid 'reussir.coverage.map': expected no 'kind', or the kind "gap"}}
+  func.func @skipped() attributes {reussir.coverage.map = {
+      hash = 7 : i64, name = "skipped", counters = 1 : i32,
+      regions = [{counter = 0 : i32, kind = "skipped", span = loc("e.rr":1:1 to 2:2)}]}} {
+    return
+  }
+}

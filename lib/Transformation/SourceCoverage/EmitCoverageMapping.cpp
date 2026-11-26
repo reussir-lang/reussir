@@ -97,8 +97,14 @@ encodeFunction(mlir::Operation *function, mlir::Attribute attribute,
       std::optional<Counter> count = counter(entry, "counter");
       if (!count)
         return fail("a counter is not less than 'counters'");
-      mapping.push_back(CounterMappingRegion::makeRegion(
-          *count, file, startLine, startColumn, endLine, endColumn));
+      auto kind = entry.getAs<mlir::StringAttr>("kind");
+      if (kind && kind.getValue() != "gap")
+        return fail("expected no 'kind', or the kind \"gap\"");
+      mapping.push_back(
+          kind ? CounterMappingRegion::makeGapRegion(
+                     *count, file, startLine, startColumn, endLine, endColumn)
+               : CounterMappingRegion::makeRegion(
+                     *count, file, startLine, startColumn, endLine, endColumn));
       continue;
     }
     std::optional<Counter> trueCount = counter(entry, "true_counter");
