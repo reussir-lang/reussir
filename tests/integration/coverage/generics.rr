@@ -1,0 +1,62 @@
+// REQUIRES: profile-runtime
+// RUN: %rrc %s --package-name generics --instrument-coverage --emit obj --relocation-mode pic -o %t.o
+// RUN: %cc -fprofile-instr-generate %t.o %S/Inputs/reussir_main.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.exe
+// RUN: %llvm-profdata merge -sparse %t.profraw -o %t.profdata
+// RUN: %llvm-cov export %t.exe -instr-profile=%t.profdata -format=lcov > %t.lcov 2> %t.err
+// RUN: %FileCheck %s < %t.lcov
+// RUN: %FileCheck %s --check-prefix=ERR --allow-empty < %t.err
+// ERR-NOT: mismatched
+
+enum Value { Missing, Found(i64) }
+enum Env { Nil, Bind(i64, Value, Env) }
+
+// Each instance of `pick` has its own record and counts. The records start at
+// the same line, so llvm-cov shows them as instantiations of one function.
+// CHECK-DAG: FN:[[#PICK:]],_RINvC8generics4pickxE
+// CHECK-DAG: FN:[[#PICK]],_RINvC8generics4pickdE
+// CHECK-DAG: FN:[[#PICK]],_RINvC8generics4pickbE
+// CHECK-DAG: FNDA:2,_RINvC8generics4pickxE
+// CHECK-DAG: FNDA:1,_RINvC8generics4pickdE
+// CHECK-DAG: FNDA:1,_RINvC8generics4pickbE
+fn pick<T>(flag: bool, a: T, b: T) -> T {
+    if flag { a } else { b }
+}
+
+// The first search keeps `env`, so it runs in a borrowed clone of `lookup`.
+// The clone increments the counters of `lookup`. Each search visits three
+// cells, so `lookup` runs six times.
+// CHECK-DAG: FNDA:6,_RNvC8generics6lookup{{$}}
+fn lookup(env: Env, key: i64) -> Value {
+    match env {
+        Env::Nil => Value::Missing,
+        Env::Bind(k, value, tail) => if k == key { value } else { lookup(tail, key) }
+    }
+}
+
+// The file has eight records. The three instances of `pick` are one function,
+// so the file has six functions.
+// CHECK: FNF:6
+// CHECK-NEXT: FNH:6
+fn build(n: i64, tail: Env) -> Env {
+    if n == 0 { tail } else { build(n - 1, Env::Bind{n, Value::Found{n * 3}, tail}) }
+}
+
+fn value(v: Value) -> i64 {
+    match v { Value::Missing => -1, Value::Found(n) => n }
+}
+
+fn shared(n: i64, key: i64) -> i64 {
+    let env = build(n, Env::Nil);
+    value(lookup(env, key)) + value(lookup(env, key))
+}
+
+#[main]
+pub fn main() {
+    let x: i64 = 1;
+    let y: f64 = 1.5;
+    let a = pick(true, x, x) + pick(false, x, x);
+    let b = pick(false, y, y);
+    let c = pick(true, false, true);
+    let d = shared(10, 3);
+}
