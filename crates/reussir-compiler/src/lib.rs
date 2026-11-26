@@ -407,7 +407,8 @@ pub fn emit_to_file(
 
 /// Like [`emit_to_file`], with optional SanitizerCoverage / fuzzing
 /// instrumentation applied around the LLVM optimization pipeline. With
-/// `instrument_coverage`, the source coverage counters are lowered after it.
+/// `instrument_coverage`, it also lowers the source coverage counters after
+/// that pipeline.
 pub fn emit_to_file_with_sancov(
     finalized: Finalized,
     machine: &TargetMachine,
