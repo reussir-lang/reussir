@@ -239,9 +239,9 @@ pub(crate) fn link_product(
     match target {
         Stage::Executable if cli.fuzzer => {
             let driver = scratch.dir().join("fuzzer_driver.rs");
-            let source = format!(
-                "#![no_main]\n{runtime_extern}extern crate reussir_fuzzer;\nreussir_fuzzer::fuzz_target!();\n"
-            );
+            let fuzz_target = fuzz_target_call(cli.instrument_coverage);
+            let source =
+                format!("#![no_main]\n{runtime_extern}extern crate reussir_fuzzer;\n{fuzz_target}");
             std::fs::write(&driver, source)
                 .map_err(|e| format!("cannot write the fuzzer driver source: {e}"))?;
             cmd.arg(driver);
@@ -466,6 +466,18 @@ pub(crate) fn link_product(
     }
     tracing::debug!(output = %output.display(), "linked");
     Ok(())
+}
+
+/// The `fuzz_target!` call of the fuzzer driver. A coverage build links the
+/// profile runtime. Thus the driver gives its `__llvm_profile_write_file` to
+/// the harness, which writes the profile when libFuzzer stops on a crash.
+fn fuzz_target_call(instrument_coverage: bool) -> &'static str {
+    if instrument_coverage {
+        "unsafe extern \"C\" {\n    fn __llvm_profile_write_file() -> ::std::ffi::c_int;\n}\n\
+         reussir_fuzzer::fuzz_target!(reussir_fuzz_init, write_profile = __llvm_profile_write_file);\n"
+    } else {
+        "reussir_fuzzer::fuzz_target!();\n"
+    }
 }
 
 /// The directory of the toolchain's bundled rust-lld shims (`gcc-ld`, next
