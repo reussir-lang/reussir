@@ -215,6 +215,8 @@ config.substitutions.append((r'%llvm-nm', sh_path(config.llvm_nm_path)))
 config.substitutions.append((r'%llvm-bcanalyzer', sh_path(config.llvm_bcanalyzer_path)))
 config.substitutions.append((r'%llvm-dis', sh_path(config.llvm_dis_path)))
 config.substitutions.append((r'%llvm-readobj', sh_path(config.llvm_readobj_path)))
+config.substitutions.append((r'%llvm-profdata', sh_path(config.llvm_profdata_path)))
+config.substitutions.append((r'%llvm-cov', sh_path(config.llvm_cov_path)))
 # The debug-info rescan suite (debuginfo/): %lldb is a batch, init-free lldb
 # with the Reussir data formatters (tool/lldb/reussir_formatters.py)
 # preloaded, so tests can drive a compiled executable and FileCheck the
@@ -242,28 +244,36 @@ if config.gdb_path and os.path.exists(config.gdb_path):
 # `rrc` compiles every polyffi texture for it, and the launcher link is
 # another rustc invocation: all three need `rustup target add <target>`.
 # `--print target-libdir` renders the path whether or not it is populated,
-# so the rlibs are what decide.
-def _has_rust_std(target):
+# so the rlibs are what decide. No target means the host.
+def _has_rust_lib(lib, target=None):
     import subprocess
     rustc = config.environment.get('REUSSIR_RUSTC')
     if not rustc:
         return False
+    target_args = ['--target', target] if target else []
     try:
         printed = subprocess.run(
-            [rustc, '--print', 'target-libdir', '--target', target],
+            [rustc, '--print', 'target-libdir', *target_args],
             capture_output=True, text=True, timeout=60)
     except Exception:
         return False
     libdir = printed.stdout.strip()
     if printed.returncode != 0 or not libdir or not os.path.isdir(libdir):
         return False
-    return any(name.startswith('libstd-') for name in os.listdir(libdir))
+    return any(name.startswith('lib%s-' % lib) for name in os.listdir(libdir))
 
 # The feature is the target's short name: `wasip1` for the baseline WASI
 # target, `wasip1-threads` for the one whose programs get real threads.
 for _target in ('wasm32-wasip1', 'wasm32-wasip1-threads'):
-    if _has_rust_std(_target):
+    if _has_rust_lib('std', _target):
         config.available_features.add(_target.removeprefix('wasm32-'))
+
+# Source-based code coverage (coverage/): `rrc --instrument-coverage` links
+# the profile runtime of the Rust toolchain, `profiler_builtins`, from the
+# same target libdir. Without it, the tests that require `profile-runtime`
+# are unsupported.
+if _has_rust_lib('profiler_builtins'):
+    config.available_features.add('profile-runtime')
 
 # `wasmer` — the engine that runs the module (tests/integration/CMakeLists.txt
 # locates it; `-DREUSSIR_WASMER=` pins one). The threads proposal is on by
