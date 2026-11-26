@@ -7,26 +7,34 @@
 // primitive update specialization for StrongHasher), computed
 // independently. They guard the chaining and state handling: any drift
 // shows up as a changed number rather than as quietly different hashes.
+// The fuzz target checks that each signed write hashes the bits of its
+// value, and that `write` agrees with the typed writes.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin hash %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}hash
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin hash %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}hash
 
-// RUN: %std_rene_build/release/hash%exe_ext | %FileCheck %s
-// CHECK:      hash
-// CHECK-NEXT:   ✔ reference vectors
-// CHECK-NEXT:   ✔ properties
-// CHECK-NEXT:   ✔ primitives
-// CHECK-EMPTY:
-// CHECK-NEXT: 3 examples, 0 failures
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/hash%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/hash%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      hash/reference vectors: unit
+// CHECK-NEXT: hash/properties: unit
+// CHECK-NEXT: hash/primitives: unit
+// CHECK-NEXT: hash/narrow writes and strings: unit
+// CHECK-NEXT: hash/signed writes against their bits (fuzz):
 
 import std::hash::Hash;
 import std::hash::Hasher;
 import std::hash::FastHasher;
 import std::hash::StrongHasher;
+import test::domain::i16_domain;
+import test::domain::i64_domain;
+import test::domain::i8_domain;
+import test::domain::tuple3;
 import test::expect::Outcome;
 import test::expect::expect;
 import test::expect::should_be;
 import test::expect::should_not_be;
+import test::fuzz::fuzz_init;
 import test::tree::TestTree;
 
 pub struct Point { pub x : i64, pub y : i64 }
@@ -165,10 +173,58 @@ fn test_primitives() -> Outcome {
         .and_then(|| should_be(digest_of<StrongHasher, u64>(n), std::hash::strong_hash(n)))
 }
 
-#[main]
-pub fn main() {
-    test::runner::run_main(TestTree::group("hash")
+fn test_narrow_writes_and_strings() -> Outcome {
+    let word : u32 = 7;
+    let half : u16 = 8;
+    let byte : u8 = 9;
+    let wide : i64 = 0 - 5;
+    let short : i16 = 0 - 2;
+    let tiny : i8 = 0 - 3;
+    let pair = Pair { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } };
+    should_be(std::hash::fast_hash(word), std::hash::fast_hasher().write_u32(7).finish())
+        .and_then(|| should_be(std::hash::fast_hash(half), std::hash::fast_hasher().write_u16(8).finish()))
+        .and_then(|| should_be(std::hash::strong_hash(byte), std::hash::strong_hasher().write_u8(9).finish()))
+        .and_then(|| should_be(std::hash::strong_hash(wide), std::hash::strong_hasher().write_i64(0 - 5).finish()))
+        .and_then(|| should_be(std::hash::fast_hash(short), std::hash::fast_hasher().write_u16(65534).finish()))
+        .and_then(|| should_be(std::hash::strong_hash(short), std::hash::strong_hasher().write_u16(65534).finish()))
+        .and_then(|| should_be(std::hash::fast_hash(tiny), std::hash::fast_hasher().write_u8(253).finish()))
+        .and_then(|| should_be(std::hash::strong_hash(tiny), std::hash::strong_hasher().write_u8(253).finish()))
+        .and_then(|| should_be(std::hash::fast_hash("reussir"), std::hash::fast_hasher().write_str("reussir").finish()))
+        .and_then(|| should_be(std::hash::strong_hash("reussir"), std::hash::strong_hasher().write_str("reussir").finish()))
+        .and_then(|| should_not_be(std::hash::fast_hash("ab"), std::hash::fast_hash("ba")))
+        .and_then(|| should_not_be(std::hash::strong_hash("ab"), std::hash::strong_hash("ba")))
+        .and_then(|| should_be(std::hash::strong_hasher().write(pair).finish(), std::hash::strong_hash(pair)))
+}
+
+fn fuzz_signed_bits(values : (i64, i16, i8)) -> Outcome {
+    let (wide, short, tiny) = values;
+    let fast = std::hash::fast_hasher_seeded(wide as u64);
+    let strong = std::hash::strong_hasher_seeded(wide as u64);
+    should_be(fast.write_i64(wide).finish(), fast.write_u64(wide as u64).finish())
+        .and_then(|| should_be(fast.write_i16(short).finish(), fast.write_u16(short as u16).finish()))
+        .and_then(|| should_be(fast.write_i8(tiny).finish(), fast.write_u8(tiny as u8).finish()))
+        .and_then(|| should_be(strong.write_i64(wide).finish(), strong.write_u64(wide as u64).finish()))
+        .and_then(|| should_be(strong.write_i16(short).finish(), strong.write_u16(short as u16).finish()))
+        .and_then(|| should_be(strong.write_i8(tiny).finish(), strong.write_u8(tiny as u8).finish()))
+        .and_then(|| should_be(fast.write(short).finish(), fast.write_i16(short).finish()))
+        .and_then(|| should_be(strong.write(tiny).finish(), strong.write_i8(tiny).finish()))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("hash")
         .with_case("reference vectors", test_reference_vectors)
         .with_case("properties", test_properties)
-        .with_case("primitives", test_primitives))
+        .with_case("primitives", test_primitives)
+        .with_case("narrow writes and strings", test_narrow_writes_and_strings)
+        .with_fuzz(
+            "signed writes against their bits (fuzz)",
+            tuple3(i64_domain(), i16_domain(), i8_domain()),
+            fuzz_signed_bits
+        )
 }
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

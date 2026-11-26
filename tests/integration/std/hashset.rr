@@ -1,16 +1,17 @@
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin hashset %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}hashset
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin hashset %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}hashset
 
-// RUN: %std_rene_build/release/hashset%exe_ext | %FileCheck %s
-// CHECK:      hashset
-// CHECK-NEXT:   ✔ basics
-// CHECK-NEXT:   ✔ algebra
-// CHECK-NEXT:   ✔ transforms
-// CHECK-NEXT:   ✔ adaptive
-// CHECK-NEXT:   ✔ churn
-// CHECK-NEXT:   ✔ model equivalence (fuzz)
-// CHECK-EMPTY:
-// CHECK-NEXT: 6 examples, 0 failures
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/hashset%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/hashset%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      hashset/basics: unit
+// CHECK-NEXT: hashset/algebra: unit
+// CHECK-NEXT: hashset/transforms: unit
+// CHECK-NEXT: hashset/adaptive: unit
+// CHECK-NEXT: hashset/churn: unit
+// CHECK-NEXT: hashset/from_list and remove: unit
+// CHECK-NEXT: hashset/model equivalence (fuzz):
+// CHECK-NEXT: hashset/algebra laws with colliding values (fuzz):
 
 import std::collections::pure::hashset::HashSet;
 import std::collections::pure::hashset::TakeResult;
@@ -21,9 +22,11 @@ import std::hash::Hasher;
 import std::option::Option;
 import test::domain::i64_domain;
 import test::domain::list_of;
+import test::domain::tuple2;
 import test::expect::Outcome;
 import test::expect::expect;
 import test::expect::should_be;
+import test::fuzz::fuzz_init;
 import test::tree::TestTree;
 
 pub struct [value] Key {
@@ -279,17 +282,72 @@ fn model_equivalence(ops : List<i64>) -> Outcome {
         .and_then(|| expect(all_match, "HashSet and WavlSet membership should match"))
 }
 
-#[main]
-pub fn main() {
-    test::runner::run_main(TestTree::group("hashset")
+fn test_from_list_and_remove() -> Outcome {
+    let set : HashSet<Key> = HashSet::from_list(sample_values());
+    let kept = set.remove(int_key(7));
+    let dropped = set.remove(int_key(3));
+    let cleared = set.clear();
+    expect(set.len() == 4 && set.hash_seed() == 0 && set.contains(int_key(4)), "from_list checks failed")
+        .and_then(|| expect(kept == set && kept.len() == 4, "removing a missing value should keep the set"))
+        .and_then(|| expect(dropped.len() == 3 && !dropped.contains(int_key(3)), "remove checks failed"))
+        .and_then(|| expect(set.contains(int_key(3)), "remove should keep the original set"))
+        .and_then(|| expect(cleared.is_empty() && !cleared.contains(int_key(1)), "clear checks failed"))
+}
+
+// Values with equal `id % 5` share a digest, so the sets have collision buckets.
+fn colliding_set(ids : List<i64>) -> HashSet<Key> {
+    ids.fold_left(HashSet::new(), |set : HashSet<Key>, id : i64| {
+        set.insert(controlled(id, (id % 5) as u64))
+    })
+}
+
+fn fuzz_algebra_laws(lists : (List<i64>, List<i64>)) -> Outcome {
+    let (left_ids, right_ids) = lists;
+    let left = colliding_set(left_ids);
+    let right = colliding_set(right_ids);
+    let union = left.union(right);
+    let common = left.intersection(right);
+    should_be(union.len() + common.len(), left.len() + right.len())
+        .and_then(|| expect(
+            left.symmetric_difference(right) == union.difference(common),
+            "symmetric_difference is the union without the intersection"
+        ))
+        .and_then(|| expect(left.difference(right).is_disjoint(right), "difference shares no value with the right set"))
+        .and_then(|| expect(left.is_subset(union) && union.is_superset(right), "union contains both sets"))
+        .and_then(|| expect(common.is_subset(left) && common.is_subset(right), "intersection is in both sets"))
+        .and_then(|| expect(
+            left.is_proper_subset(right) == (left.is_subset(right) && left.len() < right.len()),
+            "is_proper_subset is a strict is_subset"
+        ))
+        .and_then(|| expect(left.is_proper_superset(right) == right.is_proper_subset(left), "is_proper_superset is the converse"))
+        .and_then(|| expect(HashSet::from_list(left.to_list()) == left, "from_list inverts to_list"))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("hashset")
         .with_case("basics", test_basics)
         .with_case("algebra", test_algebra)
         .with_case("transforms", test_transforms)
         .with_case("adaptive", test_adaptive)
         .with_case("churn", test_churn)
+        .with_case("from_list and remove", test_from_list_and_remove)
         .with_fuzz(
             "model equivalence (fuzz)",
             list_of(i64_domain()),
             model_equivalence
-        ))
+        )
+        .with_fuzz(
+            "algebra laws with colliding values (fuzz)",
+            tuple2(
+                i64_domain().in_range(0, 31).list_with_len(0, 24),
+                i64_domain().in_range(0, 31).list_with_len(0, 24)
+            ),
+            fuzz_algebra_laws
+        )
 }
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
