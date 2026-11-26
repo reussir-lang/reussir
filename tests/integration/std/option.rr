@@ -1,43 +1,43 @@
-// Each input selects one Option unit case through the executable's dispatcher.
-// Adding coverage only requires a test function, a match arm, and an input run.
+// Dedicated coverage-guided fuzz driver and unit suite for `Option` and
+// `Result`.
+// Unit cases cover every public method of both types on fixed values, and
+// `Result` equality between all pairs of variants.
+// Fuzz targets check the monad laws of both types, `map` against `and_then`,
+// and the other methods against a match on the variant.
 
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}option
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin option %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}option
 
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/is_some.in | %FileCheck %s --check-prefix=IS-SOME
-// IS-SOME:      1
-// IS-SOME-NEXT: 0
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/option%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/option%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
 
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/is_none.in | %FileCheck %s --check-prefix=IS-NONE
-// IS-NONE:      0
-// IS-NONE-NEXT: 1
-
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/and.in | %FileCheck %s --check-prefix=AND
-// AND:      9
-// AND-NEXT: -1
-
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/or.in | %FileCheck %s --check-prefix=OR
-// OR:      4
-// OR-NEXT: 9
-
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/map.in | %FileCheck %s --check-prefix=MAP
-// MAP:      5
-// MAP-NEXT: 9
-
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/and_then.in | %FileCheck %s --check-prefix=AND-THEN
-// AND-THEN:      8
-// AND-THEN-NEXT: 9
-
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/unwrap_or.in | %FileCheck %s --check-prefix=UNWRAP-OR
-// UNWRAP-OR:      4
-// UNWRAP-OR-NEXT: 9
-
-// RUN: %std_rene_build/release/option%exe_ext < %S/Inputs/option/unwrap_or_panic.in | %FileCheck %s --check-prefix=UNWRAP-OR-PANIC
-// UNWRAP-OR-PANIC: 4
+// CHECK:      option/is_some and is_none: unit
+// CHECK-NEXT: option/and: unit
+// CHECK-NEXT: option/or: unit
+// CHECK-NEXT: option/map: unit
+// CHECK-NEXT: option/and_then: unit
+// CHECK-NEXT: option/unwrap_or and unwrap_or_panic: unit
+// CHECK-NEXT: option/monad laws & methods against variant (fuzz):
+// CHECK-NEXT: option/result/is_ok and is_err: unit
+// CHECK-NEXT: option/result/map and map_err: unit
+// CHECK-NEXT: option/result/and_then: unit
+// CHECK-NEXT: option/result/unwrap_or: unit
+// CHECK-NEXT: option/result/eq: unit
+// CHECK-NEXT: option/result/monad laws & methods against variant (fuzz):
 
 import std::option::Option;
+import std::result::Result;
+import test::domain::bool_domain;
+import test::domain::i32_domain;
+import test::domain::tuple3;
+import test::domain::tuple4;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
 
-fn some(value: i32) -> Option<i32> {
+fn some(value : i32) -> Option<i32> {
     Option::Some { value }
 }
 
@@ -45,64 +45,176 @@ fn none() -> Option<i32> {
     Option::None
 }
 
-fn write_bool(value: bool) {
-    test_utils::io::write_i32(if value { 1 } else { 0 })
+fn option_of(present : bool, value : i32) -> Option<i32> {
+    if present { some(value) } else { none() }
 }
 
-fn test_is_some() {
-    write_bool(some(4).is_some());
-    write_bool(none().is_some());
-}
-
-fn test_is_none() {
-    write_bool(some(4).is_none());
-    write_bool(none().is_none());
-}
-
-fn test_and() {
-    test_utils::io::write_i32(some(4).and(some(9)).unwrap_or(-1));
-    test_utils::io::write_i32(none().and(some(9)).unwrap_or(-1));
-}
-
-fn test_or() {
-    test_utils::io::write_i32(some(4).or(some(9)).unwrap_or(-1));
-    test_utils::io::write_i32(none().or(some(9)).unwrap_or(-1));
-}
-
-fn test_map() {
-    test_utils::io::write_i32(some(4).map(|x: i32| x + 1).unwrap_or(9));
-    test_utils::io::write_i32(none().map(|x: i32| x + 1).unwrap_or(9));
-}
-
-fn test_and_then() {
-    test_utils::io::write_i32(
-        some(4).and_then(|x: i32| some(x * 2)).unwrap_or(9)
-    );
-    test_utils::io::write_i32(
-        none().and_then(|x: i32| some(x * 2)).unwrap_or(9)
-    );
-}
-
-fn test_unwrap_or() {
-    test_utils::io::write_i32(some(4).unwrap_or(9));
-    test_utils::io::write_i32(none().unwrap_or(9));
-}
-
-fn test_unwrap_or_panic() {
-    test_utils::io::write_i32(some(4).unwrap_or_panic());
-}
-
-#[main]
-pub fn entry() {
-    match test_utils::io::read_i32() {
-        0 => test_is_some(),
-        1 => test_is_none(),
-        2 => test_and(),
-        3 => test_or(),
-        4 => test_map(),
-        5 => test_and_then(),
-        6 => test_unwrap_or(),
-        7 => test_unwrap_or_panic(),
-        _ => core::intrinsic::panic::panic()
+fn opt_eq(a : Option<i32>, b : Option<i32>) -> bool {
+    match a {
+        Option::None => b.is_none(),
+        Option::Some(x) => match b {
+            Option::None => false,
+            Option::Some(y) => x == y
+        }
     }
 }
+
+fn ok(value : i32) -> Result<i32, i32> {
+    Result::Ok { value }
+}
+
+fn err(error : i32) -> Result<i32, i32> {
+    Result::Err { error }
+}
+
+fn result_of(is_ok : bool, value : i32) -> Result<i32, i32> {
+    if is_ok { ok(value) } else { err(value) }
+}
+
+fn test_is_some() -> Outcome {
+    expect(some(4).is_some() && !none().is_some(), "is_some")
+        .and_then(|| expect(!some(4).is_none() && none().is_none(), "is_none"))
+}
+
+fn test_and() -> Outcome {
+    expect(opt_eq(some(4).and(some(9)), some(9)), "Some and Some")
+        .and_then(|| expect(opt_eq(some(4).and(none()), none()), "Some and None"))
+        .and_then(|| expect(opt_eq(none().and(some(9)), none()), "None and Some"))
+}
+
+fn test_or() -> Outcome {
+    expect(opt_eq(some(4).or(some(9)), some(4)), "Some or Some")
+        .and_then(|| expect(opt_eq(none().or(some(9)), some(9)), "None or Some"))
+        .and_then(|| expect(opt_eq(none().or(none()), none()), "None or None"))
+}
+
+fn test_map() -> Outcome {
+    let increment = |x: i32| x + 1;
+    expect(opt_eq(some(4).map(increment), some(5)), "map of Some")
+        .and_then(|| expect(opt_eq(none().map(increment), none()), "map of None"))
+}
+
+fn test_and_then() -> Outcome {
+    let half = |x: i32| option_of(x % 2 == 0, x / 2);
+    expect(opt_eq(some(8).and_then(half), some(4)), "Some to Some")
+        .and_then(|| expect(opt_eq(some(7).and_then(half), none()), "Some to None"))
+        .and_then(|| expect(opt_eq(none().and_then(half), none()), "None"))
+}
+
+fn test_unwrap() -> Outcome {
+    should_be(some(4).unwrap_or(9), 4)
+        .and_then(|| should_be(none().unwrap_or(9), 9))
+        .and_then(|| should_be(some(4).unwrap_or_panic(), 4))
+}
+
+fn fuzz_option(input : (bool, i32, i32)) -> Outcome {
+    let (present, value, other) = input;
+    let m = option_of(present, value);
+    let f = |x: i32| option_of(x % 2 == 0, x + other);
+    let g = |x: i32| option_of(x > other, x - other);
+    let triple = |x: i32| x * 3;
+    expect(opt_eq(some(value).and_then(f), f(value)), "left identity")
+        .and_then(|| expect(opt_eq(m.and_then(|x: i32| some(x)), m), "right identity"))
+        .and_then(|| expect(
+            opt_eq(m.and_then(f).and_then(g), m.and_then(|x: i32| f(x).and_then(g))),
+            "associativity"
+        ))
+        .and_then(|| expect(opt_eq(m.map(triple), m.and_then(|x: i32| some(triple(x)))), "map"))
+        .and_then(|| expect(opt_eq(m.and(some(other)), option_of(present, other)), "and"))
+        .and_then(|| expect(opt_eq(m.or(some(other)), some(if present { value } else { other })), "or"))
+        .and_then(|| should_be(m.unwrap_or(other), if present { value } else { other }))
+        .and_then(|| should_be(m.is_some(), present))
+        .and_then(|| should_be(m.is_none(), !present))
+}
+
+fn test_is_ok() -> Outcome {
+    expect(ok(4).is_ok() && !err(4).is_ok(), "is_ok")
+        .and_then(|| expect(!ok(4).is_err() && err(4).is_err(), "is_err"))
+}
+
+fn test_result_map() -> Outcome {
+    let increment = |x: i32| x + 1;
+    should_be(ok(4).map(increment), ok(5))
+        .and_then(|| should_be(err(4).map(increment), err(4)))
+        .and_then(|| should_be(ok(4).map_err(increment), ok(4)))
+        .and_then(|| should_be(err(4).map_err(increment), err(5)))
+}
+
+fn test_result_and_then() -> Outcome {
+    let half = |x: i32| result_of(x % 2 == 0, x / 2);
+    should_be(ok(8).and_then(half), ok(4))
+        .and_then(|| should_be(ok(7).and_then(half), err(3)))
+        .and_then(|| should_be(err(5).and_then(half), err(5)))
+}
+
+fn test_result_unwrap_or() -> Outcome {
+    should_be(ok(4).unwrap_or(9), 4)
+        .and_then(|| should_be(err(4).unwrap_or(9), 9))
+}
+
+fn test_result_eq() -> Outcome {
+    expect(ok(4) == ok(4) && ok(4) != ok(5), "Ok against Ok")
+        .and_then(|| expect(err(4) == err(4) && err(4) != err(5), "Err against Err"))
+        .and_then(|| expect(ok(4) != err(4) && err(4) != ok(4), "Ok against Err"))
+}
+
+fn fuzz_result(input : (bool, bool, i32, i32)) -> Outcome {
+    let (is_ok, other_ok, value, other) = input;
+    let m = result_of(is_ok, value);
+    let f = |x: i32| result_of(x % 2 == 0, x + other);
+    let g = |x: i32| result_of(x > other, x - other);
+    let triple = |x: i32| x * 3;
+    should_be(ok(value).and_then(f), f(value))
+        .and_then(|| should_be(m.and_then(|x: i32| ok(x)), m))
+        .and_then(|| should_be(m.and_then(f).and_then(g), m.and_then(|x: i32| f(x).and_then(g))))
+        .and_then(|| should_be(m.map(triple), m.and_then(|x: i32| ok(triple(x)))))
+        .and_then(|| should_be(
+            m.map_err(triple),
+            result_of(is_ok, if is_ok { value } else { triple(value) })
+        ))
+        .and_then(|| should_be(m.unwrap_or(other), if is_ok { value } else { other }))
+        .and_then(|| should_be(m.is_ok(), is_ok))
+        .and_then(|| should_be(m.is_err(), !is_ok))
+        .and_then(|| should_be(m == result_of(other_ok, other), is_ok == other_ok && value == other))
+}
+
+fn result_suite() -> TestTree {
+    TestTree::group("result")
+        .with_case("is_ok and is_err", test_is_ok)
+        .with_case("map and map_err", test_result_map)
+        .with_case("and_then", test_result_and_then)
+        .with_case("unwrap_or", test_result_unwrap_or)
+        .with_case("eq", test_result_eq)
+        .with_fuzz(
+            "monad laws & methods against variant (fuzz)",
+            tuple4(
+                bool_domain(),
+                bool_domain(),
+                i32_domain().in_range(-8, 8),
+                i32_domain().in_range(-8, 8)
+            ),
+            fuzz_result
+        )
+}
+
+fn suite() -> TestTree {
+    TestTree::group("option")
+        .with_case("is_some and is_none", test_is_some)
+        .with_case("and", test_and)
+        .with_case("or", test_or)
+        .with_case("map", test_map)
+        .with_case("and_then", test_and_then)
+        .with_case("unwrap_or and unwrap_or_panic", test_unwrap)
+        .with_fuzz(
+            "monad laws & methods against variant (fuzz)",
+            tuple3(bool_domain(), i32_domain().in_range(-1000, 1000), i32_domain().in_range(-8, 8)),
+            fuzz_option
+        )
+        .with_group(result_suite())
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
