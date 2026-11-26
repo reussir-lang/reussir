@@ -389,6 +389,10 @@ pub(crate) fn link_product(
         }
     }
 
+    if cli.instrument_coverage {
+        add_profile_runtime(&mut cmd, &rustc, cli.target_triple.as_deref(), triple)?;
+    }
+
     // A dynamic library's exports: rustc's cdylib machinery localizes
     // everything the *crate* does not export — which is everything here, the
     // shim being empty — so the trampoline surface is spelled to the linker
@@ -480,18 +484,53 @@ fn fuzz_target_call(instrument_coverage: bool) -> &'static str {
     }
 }
 
+/// Link the profile runtime that writes the `--instrument-coverage` counters
+/// to a `.profraw` file at exit. This is `profiler_builtins` of the Rust
+/// toolchain: the compiler-rt runtime that rustc links for
+/// `-C instrument-coverage`. That flag also instruments the launcher, so the
+/// runtime goes to the linker directly.
+fn add_profile_runtime(
+    cmd: &mut std::process::Command,
+    rustc: &str,
+    target: Option<&str>,
+    triple: &str,
+) -> Result<(), String> {
+    let libdir = rustc_target_libdir(rustc, target)
+        .ok_or_else(|| format!("cannot get the target libdir of `{rustc}`"))?;
+    let (runtime, _) = find_rlib_in_libdirs(&[libdir], "profiler_builtins")
+        .map_err(|e| format!("--instrument-coverage needs the Rust profile runtime: {e}"))?;
+    // The archive goes after the objects and the Rust libraries, so that each
+    // of them can use the runtime.
+    cmd.arg(format!("-Clink-arg={}", runtime.display()));
+    // On Linux, the lowered code has no reference to the runtime. LLVM
+    // expects the linker to get `-u __llvm_profile_runtime`. clang and rustc
+    // also give this option.
+    if triple.contains("-linux") {
+        cmd.arg("-Clink-arg=-u")
+            .arg("-Clink-arg=__llvm_profile_runtime");
+    }
+    Ok(())
+}
+
+/// The target libdir of the sysroot of `rustc`, for `target` or the host.
+fn rustc_target_libdir(rustc: &str, target: Option<&str>) -> Option<PathBuf> {
+    let mut cmd = std::process::Command::new(rustc);
+    cmd.args(["--print", "target-libdir"]);
+    if let Some(target) = target {
+        cmd.arg("--target").arg(target);
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
 /// The directory of the toolchain's bundled rust-lld shims (`gcc-ld`, next
 /// to the target libdir), asked of the rustc driving the link. `None` when
 /// that distribution ships no rust-lld component.
 pub(crate) fn bundled_lld_dir(rustc: &str) -> Option<PathBuf> {
-    let out = std::process::Command::new(rustc)
-        .args(["--print", "target-libdir"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let libdir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let libdir = rustc_target_libdir(rustc, None)?;
     let dir = libdir.parent()?.join("bin").join("gcc-ld");
     dir.is_dir().then_some(dir)
 }
