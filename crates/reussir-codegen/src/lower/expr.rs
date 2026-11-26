@@ -36,7 +36,9 @@ use reussir_backend::melior::ir::{
 use reussir_backend::rcgmp;
 
 use reussir_core::full::mir::{self, DecisionTree, Expr, ExprKind, SwitchCases};
-use reussir_core::full::ownership::{OwnershipTable, RcOp, RecordTable, analyze_function};
+use reussir_core::full::ownership::{
+    OwnershipTable, RcOp, RecordTable, analyze_function, subtrees,
+};
 use reussir_core::intrinsic::{ArrayFn, CellFn, IntrinsicOp};
 use reussir_core::literal::{self, Integer};
 use reussir_core::semi::const_eval::{ConstScalar, ConstValue, is_const_scalar_ty};
@@ -2189,9 +2191,12 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     ty: inner,
                 },
             ));
-            let value = self.lower_tree(&non_null_block, scope, root_idx, non_null, result_ty)?;
-            non_null_block.append_operation(builders::scf_yield(value, loc));
-            Ok::<_, LoweringError>(())
+            self.at_arm(non_null, || {
+                let value =
+                    self.lower_tree(&non_null_block, scope, root_idx, non_null, result_ty)?;
+                non_null_block.append_operation(builders::scf_yield(value, self.loc()));
+                Ok::<_, LoweringError>(())
+            })
         })?;
         let non_null_region = Region::new();
         non_null_region.append_block(non_null_block);
@@ -2199,9 +2204,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         // Null region: no argument, no new anchor.
         let null_block = Block::new(&[]);
         env.subscope(|scope| {
-            let value = self.lower_tree(&null_block, scope, root_idx, null, result_ty)?;
-            null_block.append_operation(builders::scf_yield(value, loc));
-            Ok::<_, LoweringError>(())
+            self.at_arm(null, || {
+                let value = self.lower_tree(&null_block, scope, root_idx, null, result_ty)?;
+                null_block.append_operation(builders::scf_yield(value, self.loc()));
+                Ok::<_, LoweringError>(())
+            })
         })?;
         let null_region = Region::new();
         null_region.append_block(null_block);
@@ -2274,9 +2281,11 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                         whole,
                     },
                 ));
-                let value = self.lower_tree(&arm_block, scope, root_idx, subtree, result_ty)?;
-                arm_block.append_operation(builders::scf_yield(value, loc));
-                Ok::<_, LoweringError>(())
+                self.at_arm(subtree, || {
+                    let value = self.lower_tree(&arm_block, scope, root_idx, subtree, result_ty)?;
+                    arm_block.append_operation(builders::scf_yield(value, self.loc()));
+                    Ok::<_, LoweringError>(())
+                })
             })?;
             let region = Region::new();
             region.append_block(arm_block);
@@ -2602,22 +2611,34 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
         tree: &'tcx DecisionTree<'tcx>,
         result_ty: Ty<'tcx>,
     ) -> Result<Region<'c>> {
-        let loc = self.loc();
         let block = Block::new(&[]);
         env.subscope(|scope| {
-            let value = self.lower_tree(&block, scope, root_idx, tree, result_ty)?;
-            if is_unit(result_ty) {
-                block.append_operation(scf::r#yield(&[], loc));
-            } else {
-                let value =
-                    value.ok_or_else(|| LoweringError("match branch produced no value".into()))?;
-                block.append_operation(scf::r#yield(&[value], loc));
-            }
-            Ok::<_, LoweringError>(())
+            self.at_arm(tree, || {
+                let loc = self.loc();
+                let value = self.lower_tree(&block, scope, root_idx, tree, result_ty)?;
+                if is_unit(result_ty) {
+                    block.append_operation(scf::r#yield(&[], loc));
+                } else {
+                    let value = value
+                        .ok_or_else(|| LoweringError("match branch produced no value".into()))?;
+                    block.append_operation(scf::r#yield(&[value], loc));
+                }
+                Ok::<_, LoweringError>(())
+            })
         })?;
         let region = Region::new();
         region.append_block(block);
         Ok(region)
+    }
+
+    /// Run `lower` and give the ops that it builds the location of the arm
+    /// `tree`. Then each region of a dispatch has the span of its arm, not the
+    /// span of the full `match`.
+    fn at_arm<R>(&self, tree: &DecisionTree<'tcx>, lower: impl FnOnce() -> R) -> R {
+        let prev = self.cur_loc.replace(self.location(arm_span(tree)));
+        let result = lower();
+        self.cur_loc.replace(prev);
+        result
     }
 
     /// Lower a leaf: bind each pattern variable to the scrutinee value at its path
@@ -5642,5 +5663,31 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
             .into(),
         );
         Ok(op.result(0).expect("loop-carried result").into())
+    }
+}
+
+/// The span from the first to the last arm body or guard under `tree`. It is
+/// `None` when no body or guard under `tree` has a span.
+fn arm_span(tree: &DecisionTree<'_>) -> Option<Span> {
+    let cover = |a: Span, b: Span| Span {
+        start: a.start.min(b.start),
+        end: a.end.max(b.end),
+    };
+    match *tree {
+        DecisionTree::Leaf { body, .. } => body.span,
+        DecisionTree::Guard {
+            guard,
+            success,
+            failure,
+            ..
+        } => [guard.span, arm_span(success), arm_span(failure)]
+            .into_iter()
+            .flatten()
+            .reduce(cover),
+        DecisionTree::Switch { cases, .. } => subtrees(&cases)
+            .into_iter()
+            .filter_map(arm_span)
+            .reduce(cover),
+        DecisionTree::Uncovered | DecisionTree::Unreachable => None,
     }
 }

@@ -389,12 +389,14 @@ impl<'c, 'p, 'tcx> Lowerer<'c, 'p, 'tcx> {
                     arg,
                     views: Vec::new(),
                 });
-                let value = self.lower_tree(&arm_block, scope, root_idx, tree, result_ty)?;
-                if !unit && value.is_none() {
-                    return err("match arm produced no value");
-                }
-                arm_block.append_operation(rcgmp::yield_(value.as_slice(), loc));
-                Ok(())
+                self.at_arm(tree, || {
+                    let value = self.lower_tree(&arm_block, scope, root_idx, tree, result_ty)?;
+                    if !unit && value.is_none() {
+                        return err("match arm produced no value");
+                    }
+                    arm_block.append_operation(rcgmp::yield_(value.as_slice(), self.loc()));
+                    Ok(())
+                })
             })?;
             let region = Region::new();
             region.append_block(arm_block);
