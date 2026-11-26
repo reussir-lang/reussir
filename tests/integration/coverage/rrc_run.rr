@@ -1,0 +1,29 @@
+// Source-based code coverage from end to end: build with
+// `--instrument-coverage`, run the program, merge its profile, and read the
+// counts back with `llvm-cov`.
+// REQUIRES: profile-runtime
+// RUN: %rrc %s --instrument-coverage --emit executable --relocation-mode pic %rrc_linker -o %t.exe
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.exe
+// RUN: %llvm-profdata merge -sparse %t.profraw -o %t.profdata
+// RUN: %llvm-cov export --instr-profile=%t.profdata %t.exe > %t.json
+// RUN: %FileCheck %s < %t.json
+
+// The function region counts the calls, and each branch region counts the
+// calls that go into that branch.
+// CHECK-DAG: "count":3,{{[^}]*}}"name":"{{[^"]*}}8classify","regions":{{\[\[[0-9]+,[0-9]+,[0-9]+,[0-9]+}},3,0,0,0]{{[][,0-9]*}},1,0,0,0]{{[][,0-9]*}},2,0,0,0]
+// CHECK-DAG: "count":1,{{[^}]*}}"name":"{{[^"]*}}5entry"
+
+fn classify(x: u64) -> u64 {
+    if x > 4 {
+        x * 10
+    } else {
+        x + 1
+    }
+}
+
+#[main]
+pub fn entry() {
+    let a = classify(1);
+    let b = classify(2);
+    let c = classify(7);
+}
