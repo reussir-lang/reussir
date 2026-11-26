@@ -236,12 +236,14 @@ impl Fakes {
         // root first — the same JSON shape rrc emits, so a file added to the
         // package shows up in the next scan. Anything else is a compile:
         // it logs the full argv (plus the REUSSIR_RUSTC rene handed it) and
-        // fabricates the `-o` artifact.
+        // fabricates the `-o` artifact. An executable is a copy of
+        // `$FAKE_RRC_EXECUTABLE` when the test sets it.
         let rrc = script(
             "fake-rrc",
-            r#"root=""; input=""; out=""; report=""; package=""; color=auto; prev=""; scan=no
+            r#"root=""; input=""; out=""; report=""; package=""; color=auto; prev=""; scan=no; emit=""
 for arg in "$@"; do
   [ "$prev" = "--package-root" ] && root="$arg"
+  [ "$prev" = "--emit" ] && emit="$arg"
   [ "$prev" = "--package-name" ] && package="$arg"
   [ "$prev" = "-o" ] && out="$arg"
   [ "$prev" = "--token-reuse-remarks" ] && report="$arg"
@@ -282,7 +284,11 @@ if [ "$scan" = no ]; then
     fi
     exit 1
   fi
-  echo compiled > "$out"
+  if [ "$emit" = executable ] && [ -n "$FAKE_RRC_EXECUTABLE" ]; then
+    cp "$FAKE_RRC_EXECUTABLE" "$out"
+  else
+    echo compiled > "$out"
+  fi
   if [ -n "$report" ]; then
     mkdir -p "$(dirname "$report")"
     printf '{"schema":"reussir.token-reuse.v1","locations":[],"decisions":[]}\n' > "$report"
@@ -1027,6 +1033,92 @@ fn build_keeps_coverage_products_apart_from_the_normal_build() {
     assert!(again.status.success(), "stderr: {}", stderr(&again));
     assert_eq!(again.stdout, normal.stdout);
     assert_eq!(fakes.compiles().len(), normal_compiles + 5);
+}
+
+/// `rene coverage` builds the target with coverage, runs it over the corpus,
+/// merges the raw profiles, and prints only the `llvm-cov` report on stdout.
+#[cfg(unix)]
+#[test]
+fn coverage_runs_the_coverage_build_and_reports_with_llvm_cov() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    package(&tmp, "demo");
+    let manifest = write_targets_manifest(&tmp);
+    let fakes = Fakes::new(&tmp);
+    let corpus = tmp.join("corpus");
+    std::fs::create_dir(&corpus).unwrap();
+    // Each fake logs its arguments to `<name>.log`.
+    let fake = |name: &str, body: &str| -> PathBuf {
+        let path = tmp.join(name);
+        let log = tmp.join(format!("{name}.log"));
+        let script = format!("#!/bin/sh\necho \"$*\" > '{}'\n{body}", log.display());
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+    let log = |name: &str| std::fs::read_to_string(tmp.join(format!("{name}.log"))).unwrap();
+    let executable = fake(
+        "fuzz-target",
+        "echo \"$LLVM_PROFILE_FILE\" > \"$LLVM_PROFILE_FILE\"\necho TARGET OUTPUT",
+    );
+    let profdata = fake("llvm-profdata", "");
+    let cov = fake("llvm-cov", "echo REPORT");
+    let cxxfilt = fake("llvm-cxxfilt", "");
+
+    let out = run(rene(&["coverage", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--build-dir")
+        .arg(&root)
+        .arg("demo")
+        .arg(&corpus)
+        .args(["--llvm-cov", "show", "--", "-format=text"])
+        .env("REUSSIR_RRC", &fakes.rrc)
+        .env("RENE_CACHE_DIR", tmp.join("cache"))
+        .env("REUSSIR_CARGO", &fakes.cargo)
+        .env("REUSSIR_RUSTC", &fakes.rustc)
+        .env("FAKE_RRC_EXECUTABLE", &executable)
+        .env("REUSSIR_LLVM_PROFDATA", &profdata)
+        .env("REUSSIR_LLVM_COV", &cov)
+        .env("REUSSIR_LLVM_CXXFILT", &cxxfilt));
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "REPORT\n");
+    assert!(stderr(&out).contains("TARGET OUTPUT"), "{}", stderr(&out));
+    // Only the selected target compiles, and it compiles with coverage.
+    let compiles = fakes.package_compiles();
+    assert_eq!(compiles.len(), 1, "{compiles:#?}");
+    assert!(
+        compiles[0].contains("--emit executable") && compiles[0].contains("--instrument-coverage"),
+        "{compiles:#?}"
+    );
+
+    let target = root.join("dev").join("coverage").join("demo");
+    let raw = root.join("dev").join("coverage").join("demo.profraw");
+    let profile_file = raw.join("%m-%p.profraw");
+    assert_eq!(
+        std::fs::read_to_string(&profile_file).unwrap(),
+        format!("{}\n", profile_file.display())
+    );
+    assert_eq!(
+        log("fuzz-target"),
+        format!("-runs=0 {}\n", corpus.display())
+    );
+    let merged = root.join("dev").join("coverage").join("demo.profdata");
+    assert_eq!(
+        log("llvm-profdata"),
+        format!("merge -sparse {} -o {}\n", raw.display(), merged.display())
+    );
+    assert_eq!(
+        log("llvm-cov"),
+        format!(
+            "show {} -instr-profile {} -Xdemangler {} -format=text\n",
+            target.display(),
+            merged.display(),
+            cxxfilt.display()
+        )
+    );
 }
 
 /// Target paths give independent executables in one package their own crate
