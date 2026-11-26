@@ -4,14 +4,16 @@
 // part takes the most bytes it can, with a group or without one and
 // however `then` nests them; of branches, where the earliest that
 // matches the bytes is taken and the groups of the others are absent,
-// however `or` nests them; of parts with complements and intersections
+// however `or` nests them; of repetitions, whose groups say the last
+// time; of parts with complements and intersections
 // inside a group and beside it; of characters of several bytes; of rules
 // with different numbers of groups, for the matches of their automaton;
 // of long matches, where many beginnings are alive; of a text that is a
 // part of another, with one `Groups` for all matches and with a copy of
 // it that is kept; and of a match that the rules do not have. They say
-// what is refused: a misplaced group, and parts that need more states
-// than the limit, and how the states grow with the parts.
+// what is refused: a group under a complement or an intersection, and
+// parts that need more states than the limit, and how the states grow
+// with the parts.
 // The fuzz target builds two random rules with groups over `a`, `b` and
 // a character of two bytes, and for every stretch of a short text that
 // one of them matches compares the groups with a matcher on the trees,
@@ -31,6 +33,7 @@
 // CHECK:      regex groups/parts one after another: unit
 // CHECK-NEXT: regex groups/the earlier part takes the most: unit
 // CHECK-NEXT: regex groups/one or the other: unit
+// CHECK-NEXT: regex groups/repetitions: unit
 // CHECK-NEXT: regex groups/complements and intersections: unit
 // CHECK-NEXT: regex groups/characters: unit
 // CHECK-NEXT: regex groups/the matches of an automaton: unit
@@ -162,13 +165,15 @@ fn marks(regex: Regex) -> u64 {
     }
 }
 
-// Whether `regex` has a misplaced group: one under something other than
-// parts one after another, branches and groups.
+// Whether `regex` has a misplaced group: one under a complement or an
+// intersection.
 fn hidden(regex: Regex) -> bool {
     match regex {
         Group(inner) => hidden(inner),
         Concat(a, b) => hidden(a) || hidden(b),
         Union(a, b) => hidden(a) || hidden(b),
+        Star(inner) => hidden(inner),
+        Plus(inner) => hidden(inner),
         // Anything else.
         _ => marks(regex) > 0
     }
@@ -212,6 +217,18 @@ fn cut_at(first: ByteRegex, rest: ByteRegex, bytes: List<u8>, from: u64, to: u64
     }
 }
 
+// Where the last time of a repetition of `inner` begins in the bytes
+// from `from` to `to`, which are some: every time takes as many bytes as
+// it can, and one at least, with more times matching the rest.
+fn last_time(inner: ByteRegex, bytes: List<u8>, from: u64, to: u64) -> u64 {
+    let cut = cut_at(inner, ByteRegex::Star { inner }, bytes, from, to, to, from + 1);
+    if cut == to || cut == from {
+        from
+    } else {
+        last_time(inner, bytes, cut, to)
+    }
+}
+
 // The groups of `regex` in the bytes from `from` to `to` of `bytes`, which
 // it matches, in the order they begin in, before `after`.
 fn spans(regex: Regex, bytes: List<u8>, from: u64, to: u64, after: List<(u64, u64)>) -> List<(u64, u64)> {
@@ -222,6 +239,16 @@ fn spans(regex: Regex, bytes: List<u8>, from: u64, to: u64, after: List<(u64, u6
             spans(one, bytes, from, to, blank(marks(other), after))
         } else {
             blank(marks(one), spans(other, bytes, from, to, after))
+        },
+        Star(inner) => if from == to {
+            blank(marks(inner), after)
+        } else {
+            spans(inner, bytes, last_time(inner.to_bytes(), bytes, from, to), to, after)
+        },
+        Plus(inner) => if from == to {
+            spans(inner, bytes, from, to, after)
+        } else {
+            spans(inner, bytes, last_time(inner.to_bytes(), bytes, from, to), to, after)
         },
         // Nothing else has a group that is not misplaced.
         _ => blank(marks(regex), after)
@@ -557,6 +584,101 @@ fn test_branches() -> Outcome {
         })
 }
 
+// The groups of a repetition say the last time. Every time takes as many
+// bytes as it can, and one at least; a repetition of no times leaves
+// its groups absent.
+fn test_repetitions() -> Outcome {
+    let pairs = rules1(a().then(b()).group().star().then(Regex::byte(99)));
+    built(pairs, |groups: Groups| {
+        let three = whole(groups, "abababc");
+        let none = whole(groups, "c");
+        expect(has(three, 0, 0, 7) && has(three, 1, 4, 6), "the last of three times")
+            .and_then(|| expect(has(none, 0, 0, 1) && lacks(none, 1), "absent with no times"))
+            .and_then(|| expect(agrees(groups, pairs, Text::from_str("ababc c").view(), 4), "as the trees have them"))
+    })
+        // `(a | aa)*` on `aa`: one time of two bytes.
+        .and_then(|| built(rules1(a().or(word("aa")).group().star()), |groups: Groups| {
+            let taken = whole(groups, "aa");
+            expect(has(taken, 0, 0, 2) && has(taken, 1, 0, 2), "the first time takes both bytes")
+        }))
+        // `(aa | a)*` on five: two, two and one.
+        .and_then(|| built(rules1(word("aa").or(a()).group().star()), |groups: Groups| {
+            let taken = whole(groups, "aaaaa");
+            expect(has(taken, 0, 0, 5) && has(taken, 1, 4, 5), "the last time is the fifth byte")
+        }))
+        // `(((a*) | b) | b)+` on `ab`: the second time is the `b` of the
+        // first branch inside, which the group of `a*` is not in.
+        .and_then(|| built(rules1(a().star().group().or(b()).group().or(b()).group().plus()), |groups: Groups| {
+            let taken = whole(groups, "ab");
+            expect(has(taken, 0, 0, 2) && has(taken, 1, 1, 2) && has(taken, 2, 1, 2) && lacks(taken, 3), "the last time and its branch")
+        }))
+        // `((a?) (())* | a)+` on `aa`: the repetition inside has no times.
+        .and_then(|| {
+            let inside = a().optional().group().then(Regex::epsilon().group().group().star());
+            built(rules1(inside.or(a()).group().plus()), |groups: Groups| {
+                let taken = whole(groups, "aa");
+                expect(
+                    has(taken, 0, 0, 2) && has(taken, 1, 1, 2) && has(taken, 2, 1, 2) && lacks(taken, 3) && lacks(taken, 4),
+                    "the last time, and no time inside it"
+                )
+            })
+        })
+        // A time ends only where what is repeated matches: in
+        // `(aaaa | a | aab | ab)*` on `aaab` the times are `a` and `aab`,
+        // and `aa` is no time for `ab` to come after.
+        .and_then(|| {
+            let times = word("aaaa").or(a()).or(word("aab")).or(word("ab")).group().star();
+            built(rules1(times), |groups: Groups| {
+                let taken = whole(groups, "aaab");
+                expect(has(taken, 0, 0, 4) && has(taken, 1, 1, 4), "a and aab")
+            })
+        })
+        // A group that the last time did not come through is absent,
+        // whatever an earlier time said.
+        .and_then(|| built(rules1(a().group().or(b().group()).star()), |groups: Groups| {
+            let taken = whole(groups, "ab");
+            expect(lacks(taken, 1) && has(taken, 2, 1, 2), "only the group of the last time")
+        }))
+        // Once or more, with no bytes: the one time has none.
+        .and_then(|| built(rules1(a().star().group().plus()), |groups: Groups| {
+            let empty = whole(groups, "");
+            let some = whole(groups, "aaa");
+            expect(has(empty, 0, 0, 0) && has(empty, 1, 0, 0), "one time of no bytes")
+                .and_then(|| expect(has(some, 1, 0, 3), "one time of all the bytes"))
+        }))
+        // Any number of times, with no bytes: no time.
+        .and_then(|| built(rules1(a().star().group().star()), |groups: Groups| {
+            let empty = whole(groups, "");
+            expect(has(empty, 0, 0, 0) && lacks(empty, 1), "no time")
+        }))
+        // The times do not end where the bytes repeat: `(ab | a | ba)*`.
+        .and_then(|| {
+            let mixed = rules1(word("ab").or(a()).or(word("ba")).group().star());
+            built(mixed, |groups: Groups| {
+                let taken = whole(groups, "aba");
+                expect(has(taken, 0, 0, 3) && has(taken, 1, 2, 3), "ab and a, not a and ba")
+                    .and_then(|| expect(agrees(groups, mixed, Text::from_str("abaab baab").view(), nowhere()), "as the trees have them"))
+            })
+        })
+        // `((k) = (v)) ;` once or more: the groups of the last pair.
+        .and_then(|| {
+            let pair = letters().group().then(Regex::byte(61)).then(digits().group()).group().then(Regex::byte(59));
+            built(rules1(pair.plus()), |groups: Groups| {
+                let taken = whole(groups, "a=1;bc=23;");
+                expect(
+                    has(taken, 0, 0, 10) && has(taken, 1, 4, 9) && has(taken, 2, 4, 6) && has(taken, 3, 7, 9),
+                    "the pair, its name and its number"
+                )
+                    .and_then(|| expect(agrees(groups, rules1(pair.plus()), Text::from_str("a=1;bc=23; x=0;").view(), nowhere()), "as the trees have them"))
+            })
+        })
+        // Bytes that the repetition does not match.
+        .and_then(|| built(rules1(a().then(b()).group().star()), |groups: Groups| {
+            let taken = whole(groups, "aba");
+            expect(has(taken, 0, 0, 3) && lacks(taken, 1), "no last time")
+        }))
+}
+
 // Inside a group and beside it, a part may be any regex: the groups are
 // asked of automata.
 fn test_complements() -> Outcome {
@@ -628,8 +750,8 @@ fn many(count: u64, piece: str, rest: str) -> TextView {
     Text::from_string(string.push_str(rest)).view()
 }
 
-// Matches of hundreds of bytes: a part that ends far on, and a part after
-// which many beginnings stay alive.
+// Matches of hundreds of bytes: a part that ends far on, a repetition of
+// many times, and a part after which many beginnings stay alive.
 fn test_long() -> Outcome {
     built(rules1(a().star().group().then(b().group())), |groups: Groups| {
         let taken = groups.fill(many(1000, "a", "b"), Match { rule: 0, start: 0, end: 1001 });
@@ -641,6 +763,30 @@ fn test_long() -> Outcome {
             let taken = groups.fill(many(1000, "a", "b"), Match { rule: 0, start: 0, end: 1001 });
             expect(has(taken, 1, 0, 1000) && has(taken, 2, 1000, 1001), "a thousand beginnings in one state")
         }))
+        .and_then(|| built(rules1(a().then(b()).group().star()), |groups: Groups| {
+            let taken = groups.fill(many(500, "ab", ""), Match { rule: 0, start: 0, end: 1000 });
+            expect(has(taken, 0, 0, 1000) && has(taken, 1, 998, 1000), "the last of five hundred times")
+        }))
+        // `((a | b)* b)* a`: a repetition whose times can end at every
+        // `b`.
+        .and_then(|| {
+            let rule = a().or(b()).star().then(b()).group().star().then(a());
+            built(rules1(rule), |groups: Groups| {
+                let taken = groups.fill(many(100, "abb", "a"), Match { rule: 0, start: 0, end: 301 });
+                expect(has(taken, 0, 0, 301) && has(taken, 1, 0, 300), "one time takes all it can")
+            })
+        })
+        // One to four of `a` and `b`, any number of times: a time can end
+        // after every byte, in four states at once, and one new time
+        // begins there.
+        .and_then(|| {
+            let any = a().or(b());
+            let upto = any.or(any.then(any)).or(any.then(any).then(any)).or(any.then(any).then(any).then(any));
+            built(rules1(upto.group().star()), |groups: Groups| {
+                let taken = groups.fill(many(100, "ab", "a"), Match { rule: 0, start: 0, end: 201 });
+                expect(has(taken, 0, 0, 201) && has(taken, 1, 200, 201), "fifty times of four and one of one")
+            })
+        })
         // `([ab]*) (a [ab] [ab] [ab])`: the second part may begin at
         // every `a`, and which beginning holds is known at the end.
         .and_then(|| {
@@ -751,8 +897,9 @@ fn test_refused() -> Outcome {
         .and_then(|| should_be(refusal(rules1(fine), 400), 0))
         .and_then(|| should_be(refusal(rules1(a().group().or(b().group().not())), 400), 2))
         .and_then(|| should_be(refusal(rules1(a().group().or(b())), 400), 0))
-        .and_then(|| should_be(refusal(rules1(a().group().star()), 400), 2))
-        .and_then(|| should_be(refusal(rules1(a().group().plus()), 400), 2))
+        .and_then(|| should_be(refusal(rules1(digits().then(a().or(b().group().not()).star())), 400), 2))
+        .and_then(|| should_be(refusal(rules1(a().group().star()), 400), 0))
+        .and_then(|| should_be(refusal(rules1(a().group().plus()), 400), 0))
         // The parts of the date have nine states with the dead one.
         .and_then(|| should_be(states_of(rules1(date())), 9))
         .and_then(|| should_be(refusal(rules1(date()), 3), 1))
@@ -955,6 +1102,7 @@ fn suite() -> TestTree {
         .with_case("parts one after another", test_parts)
         .with_case("the earlier part takes the most", test_most)
         .with_case("one or the other", test_branches)
+        .with_case("repetitions", test_repetitions)
         .with_case("complements and intersections", test_complements)
         .with_case("characters", test_characters)
         .with_case("the matches of an automaton", test_rules)

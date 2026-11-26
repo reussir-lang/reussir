@@ -41,6 +41,10 @@
 //! absent. `optional` is the empty string first: a group that may be
 //! left out is absent where it has no bytes.
 //!
+//! Every time of a repetition takes as many bytes as it can, and one at
+//! least, and its groups say the last time; a repetition of no times
+//! leaves them absent.
+//!
 //! The groups are found by reading, not by trying. For `first rest`, the
 //! automaton of `first` reads on, and at every place where it accepts the
 //! automaton of `rest` begins anew. Of the beginnings that come to one
@@ -59,14 +63,19 @@
 //! With `first` dead and one beginning left, that one is the answer, and
 //! the rest of the bytes is not read. The branches of a union are one
 //! automaton, which says the earliest of them that matches the bytes it
-//! has read. No byte is tried and taken back, so what is inside a group,
-//! and beside it, may be any regex, with complements and intersections.
-//! Only parts one after another and branches are asked about: a rule
-//! with a group under anything else is refused.
+//! has read. A repetition is the automaton of what is repeated, begun
+//! anew at every place where a time can end; a beginning that comes to a
+//! state where an earlier one stands is left out, for the earlier one
+//! took more bytes in a time before. No byte is tried and taken back, so
+//! what is inside a group, and beside it, may be any regex, with
+//! complements and intersections. A rule with a group under a complement
+//! or an intersection is refused: the bytes that match one do not come
+//! through what is inside it.
 //!
 //! The groups of a match cost one reading of its bytes for every place
-//! between two parts that is asked for and for every union with a group
-//! inside that they come through, times the beginnings that are alive, which are no more than the states of the automata. Those are
+//! between two parts that is asked for and for every union and
+//! repetition with a group inside that they come through, times the
+//! beginnings that are alive, which are no more than the states of the automata. Those are
 //! one table for all parts of all rules, of no more states than the limit
 //! given to `Groups::build`; that limit is not the limit of the automaton
 //! of the rules, which is built apart. The parts from each part on have
@@ -148,8 +157,8 @@ pub enum [value] Taken {
 pub enum [value] Refused {
     /// The automata of the parts need more states than the limit.
     TooManyStates(TooManyStates),
-    /// The rule with this number has a group under something other than
-    /// parts one after another, branches and groups.
+    /// The rule with this number has a group under a complement or an
+    /// intersection.
     Misplaced(u32)
 }
 
