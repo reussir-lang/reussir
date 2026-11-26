@@ -4145,7 +4145,8 @@ emitOwnershipAcquisitionImpl(mlir::Value value, mlir::OpBuilder &builder,
 bool leavesCountsAlone(mlir::Operation *op) {
   if (isUnsafeRcOperation(op))
     return false;
-  if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op))
+  if (llvm::isa<ReussirRcIncOp>(op) || getRCGMPRetainedValue(op) ||
+      isCoverageIncrement(op))
     return true;
   if (op->getNumRegions() > 0 || llvm::isa<mlir::CallOpInterface>(op))
     return false;

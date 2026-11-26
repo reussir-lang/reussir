@@ -60,6 +60,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Analysis/EquivalenceAnalysis.h"
+#include "Reussir/IR/Coverage.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
@@ -599,10 +600,11 @@ void fuseCompoundConsumption(ReussirRcDecOp dec) {
       continue;
     }
     // Reads of any box and spills of loaded values commute with the
-    // retains; so does anything without memory effects.
+    // retains; so do coverage counters and anything without memory effects.
     if (llvm::isa<ReussirRcBorrowOp, ReussirRefProjectOp, ReussirRefLoadOp,
                   ReussirRefSpilledOp, ReussirRecordCoerceOp,
-                  ReussirRecordTagOp>(cursor))
+                  ReussirRecordTagOp>(cursor) ||
+        isCoverageIncrement(cursor))
       continue;
     if (cursor->getNumRegions() == 0 && mlir::isMemoryEffectFree(cursor))
       continue;
