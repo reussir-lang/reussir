@@ -228,11 +228,31 @@ private:
   llvm::SmallVector<MappingRegion> regions;
 };
 
+/// Returns the end of the operands of `op`, such as the condition of an
+/// `if`. It is the last end of the spans of the ops that give the operands
+/// and that are in `span`. Returns nothing when no such op has a span.
+std::optional<Position> operandsEnd(mlir::Operation *op,
+                                    mlir::FileLineColRange span) {
+  std::optional<Position> result;
+  for (mlir::Value operand : op->getOperands()) {
+    mlir::Operation *def = operand.getDefiningOp();
+    auto operandSpan =
+        def ? def->getLoc()->findInstanceOf<mlir::FileLineColRange>() : nullptr;
+    if (operandSpan && operandSpan.getFilename() == span.getFilename() &&
+        startOf(span) <= startOf(operandSpan) &&
+        endOf(operandSpan) <= endOf(span))
+      result = std::max(result, std::optional(endOf(operandSpan)));
+  }
+  return result;
+}
+
 /// Fills the space before each code region in `counted` with a gap region
 /// of its counter, as clang does before `then` and `else`. Then llvm-cov
 /// gives a line that starts in the space, such as `else {` or a `match`
-/// arm, the count of the next region. The first gap starts at the start of
-/// `op`.
+/// arm, the count of the next region. The first gap starts at the end of
+/// the operands of `op`. It cannot start at the start of `op`: the region
+/// that contains `op` can start there too, and llvm-cov then drops the
+/// start of that region.
 void addGapRegions(
     CoverageMap &map, mlir::Operation *op,
     llvm::MutableArrayRef<std::pair<mlir::FileLineColRange, uint32_t>>
@@ -244,12 +264,12 @@ void addGapRegions(
   llvm::sort(counted, [](auto lhs, auto rhs) {
     return startOf(lhs.first) < startOf(rhs.first);
   });
-  Position from = startOf(span);
+  std::optional<Position> from = operandsEnd(op, span);
   for (auto [codeSpan, counter] : counted) {
-    if (from < startOf(codeSpan))
+    if (from && *from < startOf(codeSpan))
       map.addGapRegion(counter,
-                       makeSpan(map.getFile(), from, startOf(codeSpan)));
-    from = std::max(from, endOf(codeSpan));
+                       makeSpan(map.getFile(), *from, startOf(codeSpan)));
+    from = std::max(from, std::optional(endOf(codeSpan)));
   }
 }
 

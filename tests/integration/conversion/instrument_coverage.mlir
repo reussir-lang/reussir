@@ -11,7 +11,7 @@ module {
   // CHECK-LABEL: func.func @choose(
   // CHECK-SAME: reussir.coverage.map = {counters = 3 : i32, hash = [[HASH:-?[0-9]+]] : i64, name = "choose",
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":1:1 to 7:2)}, {counter = 1 : i32, span = loc("a.rr":3:5 to :10)}, {counter = 2 : i32, span = loc("a.rr":5:5 to :10)},
-  // CHECK-SAME: {counter = 1 : i32, kind = "gap", span = loc("a.rr":2:3 to 3:5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":3:10 to 5:5)}]}
+  // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":3:10 to 5:5)}]}
   // CHECK: %[[NAME:.+]] = llvm.mlir.addressof @__profn_choose : !llvm.ptr
   // CHECK-NEXT: %[[FUNCTION_HASH:.+]] = llvm.mlir.constant([[HASH]] : i64) : i64
   // CHECK-NEXT: %[[COUNTERS:.+]] = llvm.mlir.constant(3 : i32) : i32
@@ -39,7 +39,7 @@ module {
 
   // CHECK-LABEL: func.func @count(
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":8:1 to 14:2)}, {counter = 1 : i32, span = loc("a.rr":10:9 to :14)}, {counter = 2 : i32, span = loc("a.rr":11:5 to :15)},
-  // CHECK-SAME: {counter = 1 : i32, kind = "gap", span = loc("a.rr":10:3 to :9)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":10:14 to 11:5)}]}
+  // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":10:14 to 11:5)}]}
   // CHECK: llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: llvm.call_intrinsic "llvm.instrprof.increment"
   // CHECK: scf.while
@@ -89,10 +89,12 @@ module {
 
   // The default region of a switch is the first region of the op, but it is
   // the last in the source. Each gap gets the counter of the region after it.
+  // The first gap starts at the end of the operand.
   // CHECK-LABEL: func.func @arms(
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":20:1 to 25:2)}, {counter = 1 : i32, span = loc("a.rr":23:14 to :19)}, {counter = 2 : i32, span = loc("a.rr":22:14 to :19)},
-  // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":21:3 to 22:14)}, {counter = 1 : i32, kind = "gap", span = loc("a.rr":22:19 to 23:14)}]}
-  func.func @arms(%tag: index, %x: i64) -> i64 {
+  // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":21:12 to 22:14)}, {counter = 1 : i32, kind = "gap", span = loc("a.rr":22:19 to 23:14)}]}
+  func.func @arms(%n: i64, %x: i64) -> i64 {
+    %tag = arith.index_cast %n : i64 to index loc("a.rr":21:9 to 21:12)
     %r = scf.index_switch %tag -> i64
     case 0 {
       %a = arith.addi %x, %x : i64 loc("a.rr":22:14 to 22:19)
