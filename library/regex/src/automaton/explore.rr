@@ -185,18 +185,45 @@ impl StateTable {
     }
 }
 
-/// The states of `rules` over the classes `sets`, each expanded in the
-/// order it was found. The search gives up when it has found more than
-/// `limit` states.
-pub fn explore(rules: List<ByteRegex>, sets: ByteClasses, limit: u64) -> Result<Explored, TooManyStates> {
-    let classes = sets.len();
-    let (nodes, first) = add_all(Nodes::new(), rules, sets, 0);
-    let (start, _) = StateTable::new(nodes).allocate(first);
+// The states of `start` and those that follow them, each expanded in the
+// order it was found, over `classes` classes of bytes.
+fn follow(start: StateTable, classes: u64, limit: u64) -> Result<Explored, TooManyStates> {
     let (_, table) = while [at = 0, table = start] (at < table.states.len() && table.states.len() <= limit) {
         let state = table.states.get(at).unwrap_or(List::Nil);
         (at + 1, table.expand(state, classes))
     };
     if table.states.len() > limit { Result::Err { TooManyStates { limit } } } else {
         Result::Ok { Explored { classes, next: table.next, winners: table.winners() } }
+    }
+}
+
+/// The states of `rules` over the classes `sets`, each expanded in the
+/// order it was found. The search gives up when it has found more than
+/// `limit` states.
+pub fn explore(rules: List<ByteRegex>, sets: ByteClasses, limit: u64) -> Result<Explored, TooManyStates> {
+    let (nodes, first) = add_all(Nodes::new(), rules, sets, 0);
+    let (start, _) = StateTable::new(nodes).allocate(first);
+    follow(start, sets.len(), limit)
+}
+
+/// The states of each list of `lists` alone, in one table, and the state
+/// that each list begins in. The rules of every list are numbered from 0,
+/// so a state that two lists come to with the same rules left is one
+/// state. The search gives up when it has found more than `limit` states.
+pub fn explore_each(lists: List<List<ByteRegex>>, sets: ByteClasses, limit: u64) -> Result<(Explored, Vec<u32>), TooManyStates> {
+    let (start, begins) = lists.fold_left((StateTable::new(Nodes::new()), Vec::new()), |so_far: (StateTable, Vec<u32>), rules: List<ByteRegex>| {
+        let (table, begins) = so_far;
+        // The fields leave the table first, as in `allocate`.
+        let nodes = table.nodes;
+        let states = table.states;
+        let numbers = table.numbers;
+        let next = table.next;
+        let (nodes, first) = add_all(nodes, rules, sets, 0);
+        let (table, number) = StateTable { nodes, states, numbers, next }.allocate(first);
+        (table, begins.push(number))
+    });
+    match follow(start, sets.len(), limit) {
+        Ok(found) => Result::Ok { (found, begins) },
+        Err(error) => Result::Err { error }
     }
 }

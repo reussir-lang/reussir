@@ -1,0 +1,85 @@
+//! The automata that the questions read with, in one table.
+//!
+//! An automaton is that of a list of regexes without groups: a part of a
+//! rule, or the parts from one on. A state is what is left of each regex
+//! of its list, and all automata share the states: `first rest`, once
+//! `first` has ended and cannot go on, is in a state of `rest`.
+//!
+//! ```text
+//! classes[byte]            -> class         256 bytes
+//! next[row + class]        -> cell
+//! ```
+//!
+//! A cell is the place of the row of a state, with the lowest bit set
+//! when the state accepts. A row is as long as the number of classes
+//! rounded up to a power of two, two at least. The states from which no
+//! state that accepts is reached are one state, whose row is the first:
+//! its cell is 0, and all its cells are.
+
+import core::intrinsic::array;
+import std::collections::cow::vec::Vec;
+import std::collections::pure::list::List;
+import std::option::Option;
+import regex::alphabet::byte_classes::ByteClasses;
+import regex::automaton::TooManyStates;
+import regex::automaton::classify;
+import regex::automaton::explore;
+import regex::tree::ByteRegex;
+import std::result::Result;
+
+/// The automata of some lists of regexes.
+pub struct Table {
+    pub next: [u32; ?],
+    pub classes: [u8; 256],
+    /// The cell of the state that each automaton begins in.
+    pub starts: [u32; ?],
+    /// A row has `1 << shift` cells.
+    pub shift: u64,
+    /// The number of rows.
+    pub states: u64
+}
+
+/// The automata of `lists` over the classes `sets`. The search for their
+/// states gives up when it has found more than `limit` of them.
+pub fn build(lists: List<List<ByteRegex>>, sets: ByteClasses, limit: u64) -> Result<Table, TooManyStates> {
+    match explore::explore_each(lists, sets, limit) {
+        Err(error) => Result::Err { error },
+        Ok(explored) => {
+            let (found, begins) = explored;
+            let classes = found.classes;
+            let cells = found.next;
+            let winners = found.winners;
+            let table = array::tabulate<[u32; ?]>(cells.len(), |at: i64| cells.get_or(at as u64, 0));
+            let kinds = classify::kinds(found, table);
+            let shift = while [shift = (1 as u64)] ((1 << shift) < classes) { shift + 1 };
+            // The states that are not dead, in order, whose rows come
+            // after the first, and the cell of every state as the search
+            // numbered them.
+            let (_, live, cell_of) = while [state = (0 as u64), live = Vec::new(), cell_of = Vec::new()] (state < kinds.len()) {
+                if kinds.get_or(state, 0) == 0 { (state + 1, live, cell_of.push(0)) } else {
+                    let accepts = if winners.get_or(state, Option::None).is_some() { 1 } else { 0 };
+                    let cell = (((live.len() + 1) << shift) | accepts) as u32;
+                    (state + 1, live.push(state), cell_of.push(cell))
+                }
+            };
+            let states = live.len() + 1;
+            // A cell is 32 bits.
+            if (states << shift) > 0xFFFFFFFF { Result::Err { TooManyStates { limit } } } else {
+                Result::Ok { Table {
+                    next: array::tabulate<[u32; ?]>(states << shift, |at: i64| {
+                        let row = (at as u64) >> shift;
+                        let class = (at as u64) & ((1 << shift) - 1);
+                        if row == 0 || class >= classes { 0 } else {
+                            let to = array::get(table, (live.get_or(row - 1, 0) * classes + class) as i64);
+                            cell_of.get_or(to as u64, 0)
+                        }
+                    }),
+                    classes: array::tabulate<[u8; 256]>(|byte: i64| sets.class_index(byte as u8) as u8),
+                    starts: array::tabulate<[u32; ?]>(begins.len(), |at: i64| cell_of.get_or(begins.get_or(at as u64, 0) as u64, 0)),
+                    shift,
+                    states
+                } }
+            }
+        }
+    }
+}

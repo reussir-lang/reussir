@@ -1,0 +1,150 @@
+//! The automata that the groups of the rules are found with.
+//!
+//! The groups of a rule are found where its parts that come one after
+//! another end. For every such part but the last, with a group in it or
+//! after it, two automata are read with: that of the part alone, and that
+//! of the parts after it. The parts inside a group are asked for in the
+//! same way.
+//!
+//! ```text
+//! rule      ([0-9]+) "-" ([0-9]+)
+//!
+//! [0-9]+    and   "-" [0-9]+
+//! "-"       and   [0-9]+
+//! ```
+//!
+//! An automaton is that of a list of regexes without groups, and says the
+//! earliest of them that matches; a part of a rule is a list of one.
+
+import std::collections::pure::list::List;
+import std::option::Option;
+import regex::tree::ByteRegex;
+import regex::tree::Regex;
+
+/// The automata of a list of rules.
+pub struct Asked {
+    /// The lists of regexes that are read with, each an automaton, the
+    /// last one first.
+    pub parts: List<List<ByteRegex>>
+}
+
+// A part of parts that come one after another: the part alone and the
+// parts from it on, both without their groups, and the number of groups
+// from it on.
+struct Piece {
+    regex: Regex,
+    alone: ByteRegex,
+    onward: ByteRegex,
+    groups: u64
+}
+
+// The number of groups in `regex`.
+fn groups_of(regex: Regex) -> u64 {
+    match regex {
+        Group(inner) => 1 + groups_of(inner),
+        Concat(first, second) => groups_of(first) + groups_of(second),
+        Union(first, second) => groups_of(first) + groups_of(second),
+        Intersect(first, second) => groups_of(first) + groups_of(second),
+        Star(inner) => groups_of(inner),
+        Plus(inner) => groups_of(inner),
+        Not(inner) => groups_of(inner),
+        // A set, the empty string or nothing.
+        _ => 0
+    }
+}
+
+// Whether `regex` has a group that no automaton finds: only parts one
+// after another, and groups, are asked about.
+fn misplaces(regex: Regex) -> bool {
+    match regex {
+        Group(inner) => misplaces(inner),
+        Concat(first, second) => misplaces(first) || misplaces(second),
+        // Anything else has no group inside, or one that is misplaced.
+        _ => groups_of(regex) > 0
+    }
+}
+
+/// The first of `rules`, numbered from `rule`, with a misplaced group.
+pub fn misplaced(rules: List<Regex>, rule: u32) -> Option<u32> {
+    match rules {
+        Nil => Option::None,
+        Cons(regex, _) if misplaces(regex) => Option::Some { rule },
+        Cons(_, rest) => misplaced(rest, rule + 1)
+    }
+}
+
+// The parts of `regex` that come one after another, before `after`,
+// however `then` nests them.
+fn flat(regex: Regex, after: List<Regex>) -> List<Regex> {
+    match regex {
+        Concat(first, second) => flat(first, flat(second, after)),
+        // Anything else is one part.
+        _ => List::Cons { regex, after }
+    }
+}
+
+// `parts` as pieces. The parts from one on hold the parts from the next
+// on, so n parts are n concatenations.
+fn pieces(parts: List<Regex>) -> List<Piece> {
+    match parts {
+        Nil => List::Nil,
+        Cons(regex, rest) => {
+            let after = pieces(rest);
+            let alone = regex.to_bytes();
+            let piece = match after {
+                Nil => Piece { regex, alone, onward: alone, groups: groups_of(regex) },
+                Cons(next, _) => Piece {
+                    regex,
+                    alone,
+                    onward: ByteRegex::Concat { alone, next.onward },
+                    groups: groups_of(regex) + next.groups
+                }
+            };
+            List::Cons { piece, after }
+        }
+    }
+}
+
+impl Asked {
+    fn new() -> Asked {
+        Asked { parts: List::Nil }
+    }
+
+    // One more automaton, that of `regexes`.
+    fn reads(self: Self, regexes: List<ByteRegex>) -> Asked {
+        Asked { parts: List::Cons { regexes, self.parts } }
+    }
+
+    // The automata of `regex`.
+    fn part(self: Self, regex: Regex) -> Asked {
+        match regex {
+            Group(inner) => self.part(inner),
+            Concat(_, _) => self.parts(pieces(flat(regex, List::Nil))),
+            // Nothing else has a group inside that is not misplaced.
+            _ => self
+        }
+    }
+
+    // The automata of `pieces`, which come one after another. Where the
+    // parts without a group after the last group end changes no group,
+    // and is not asked.
+    fn parts(self: Self, pieces: List<Piece>) -> Asked {
+        match pieces {
+            Cons(first, rest) if first.groups > 0 => match rest {
+                Nil => self.part(first.regex),
+                Cons(next, _) => {
+                    let asked = self.reads(List::Cons { first.alone, List::Nil });
+                    let asked = asked.reads(List::Cons { next.onward, List::Nil });
+                    asked.part(first.regex).parts(rest)
+                }
+            },
+            // No part is left, or none with a group.
+            _ => self
+        }
+    }
+}
+
+/// The automata of `rules`, none of which has a misplaced group.
+pub fn ask(rules: List<Regex>) -> Asked {
+    rules.fold_left(Asked::new(), |asked: Asked, rule: Regex| asked.part(rule))
+}
