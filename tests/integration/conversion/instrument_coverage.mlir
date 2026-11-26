@@ -11,7 +11,7 @@ module {
   // CHECK-LABEL: func.func @choose(
   // CHECK-SAME: reussir.coverage.map = {counters = 3 : i32, hash = [[HASH:-?[0-9]+]] : i64, name = "choose",
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":1:1 to 7:2)}, {counter = 1 : i32, span = loc("a.rr":3:5 to :10)}, {counter = 2 : i32, span = loc("a.rr":5:5 to :10)},
-  // CHECK-SAME: {counter = 1 : i32, kind = "gap", span = loc("a.rr":3:1 to :5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":3:10 to 5:5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":5:10 to 6:4)}]}
+  // CHECK-SAME: {counter = 1 : i32, kind = "gap", span = loc("a.rr":2:4 to 3:5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":3:10 to 5:5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":5:10 to 6:4)}]}
   // CHECK: %[[NAME:.+]] = llvm.mlir.addressof @__profn_choose : !llvm.ptr
   // CHECK-NEXT: %[[FUNCTION_HASH:.+]] = llvm.mlir.constant([[HASH]] : i64) : i64
   // CHECK-NEXT: %[[COUNTERS:.+]] = llvm.mlir.constant(3 : i32) : i32
@@ -39,7 +39,7 @@ module {
 
   // CHECK-LABEL: func.func @count(
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":8:1 to 14:2)}, {counter = 1 : i32, span = loc("a.rr":10:9 to :14)}, {counter = 2 : i32, span = loc("a.rr":11:5 to :15)},
-  // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":11:1 to :5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":11:15 to 12:4)}]}
+  // CHECK-SAME: {counter = 1 : i32, kind = "gap", span = loc("a.rr":10:4 to :9)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":10:14 to 11:5)}, {counter = 2 : i32, kind = "gap", span = loc("a.rr":11:15 to 12:4)}]}
   // CHECK: llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: llvm.call_intrinsic "llvm.instrprof.increment"
   // CHECK: scf.while
@@ -89,7 +89,8 @@ module {
 
   // The default region of a switch is the first region of the op, but it is
   // the last in the source. Each gap gets the counter of the region after it.
-  // The first gap starts at the end of the operand, on the next line.
+  // The first gap starts at the end of the operand, which ends on the next
+  // line.
   // CHECK-LABEL: func.func @arms(
   // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":20:1 to 26:2)}, {counter = 1 : i32, span = loc("a.rr":24:14 to :19)}, {counter = 2 : i32, span = loc("a.rr":23:14 to :19)},
   // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":22:5 to 23:14)}, {counter = 1 : i32, kind = "gap", span = loc("a.rr":23:19 to 24:14)}, {counter = 1 : i32, kind = "gap", span = loc("a.rr":24:19 to 25:4)}]}

@@ -262,11 +262,14 @@ void addGapRegions(
   llvm::sort(counted, [](auto lhs, auto rhs) {
     return startOf(lhs.first) < startOf(rhs.first);
   });
-  // The first gap starts on the next line, after the operands. The line
-  // where `op` starts keeps the start of the region that contains `op`.
-  // llvm-cov ignores that start when a gap starts at the same position.
-  Position from = std::max(Position(span.getStartLine() + 1, 1),
-                           operandsEnd(op, span).value_or(Position()));
+  // A gap gives its count to the lines after the line where it starts. So
+  // the first gap starts on the first line of `op`, after the operands. It
+  // starts after the first column of `op`: the region that contains `op`
+  // can start at that column, and llvm-cov ignores the start of a region
+  // when a gap starts at the same position.
+  Position from =
+      std::max(Position(span.getStartLine(), span.getStartColumn() + 1),
+               operandsEnd(op, span).value_or(Position()));
   for (auto [codeSpan, counter] : counted) {
     if (from < startOf(codeSpan))
       map.addGapRegion(counter,
