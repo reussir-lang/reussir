@@ -30,6 +30,7 @@
 
 namespace reussir {
 #define GEN_PASS_DEF_REUSSIREMITCOVERAGEMAPPINGPASS
+#define GEN_PASS_DEF_REUSSIREMITCOVERAGEUNUSEDNAMESPASS
 #include "Reussir/Transformation/Passes.h.inc"
 
 namespace {
@@ -292,6 +293,42 @@ struct EmitCoverageMappingPass
     used.push_back(mapping);
     if (mlir::failed(appendToUsed(builder, module, used)))
       signalPassFailure();
+  }
+};
+
+struct EmitCoverageUnusedNamesPass
+    : public impl::ReussirEmitCoverageUnusedNamesPassBase<
+          EmitCoverageUnusedNamesPass> {
+  using Base::Base;
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+    mlir::SymbolTableCollection symbols;
+    mlir::SymbolUserMap users(symbols, module);
+    // The lowering fails when an increment uses a name in the list.
+    llvm::SmallVector<LLVM::GlobalOp> names;
+    for (auto global : module.getOps<LLVM::GlobalOp>())
+      if (global.getSymName().starts_with(llvm::getInstrProfNameVarPrefix()) &&
+          users.useEmpty(global))
+        names.push_back(global);
+    if (names.empty())
+      return;
+
+    auto builder = mlir::OpBuilder::atBlockEnd(module.getBody());
+    mlir::Location loc = module.getLoc();
+    auto type = LLVM::LLVMArrayType::get(
+        LLVM::LLVMPointerType::get(&getContext()), names.size());
+    auto list = LLVM::GlobalOp::create(
+        builder, loc, type, /*isConstant=*/true, LLVM::Linkage::Internal,
+        llvm::getCoverageUnusedNamesVarName(), mlir::Attribute());
+    builder.createBlock(&list.getInitializerRegion());
+    mlir::Value array = LLVM::PoisonOp::create(builder, loc, type);
+    for (auto [index, name] : llvm::enumerate(names)) {
+      mlir::Value element = LLVM::AddressOfOp::create(builder, loc, name);
+      array = LLVM::InsertValueOp::create(builder, loc, array, element,
+                                          int64_t(index));
+    }
+    LLVM::ReturnOp::create(builder, loc, array);
   }
 };
 } // namespace

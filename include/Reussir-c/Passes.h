@@ -103,6 +103,9 @@ MlirPass reussirCreateInstrumentCoveragePass(void);
 // Writes the `reussir.coverage.map` attributes as the LLVM coverage mapping
 // globals. Run it immediately after the instrumentation pass.
 MlirPass reussirCreateEmitCoverageMappingPass(void);
+// Lists in `__llvm_coverage_names` each `__profn_` global that no increment
+// uses. Run it after the last pass that can remove functions.
+MlirPass reussirCreateEmitCoverageUnusedNamesPass(void);
 
 //===----------------------------------------------------------------------===//
 // Upstream passes used by the pipeline

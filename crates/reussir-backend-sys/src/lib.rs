@@ -251,6 +251,9 @@ unsafe extern "C" {
     /// Writes the `reussir.coverage.map` attributes as the LLVM coverage
     /// mapping globals. Run it immediately after the instrumentation pass.
     pub fn reussirCreateEmitCoverageMappingPass() -> MlirPass;
+    /// Lists in `__llvm_coverage_names` each `__profn_` global that no
+    /// increment uses. Run it after the last pass that can remove functions.
+    pub fn reussirCreateEmitCoverageUnusedNamesPass() -> MlirPass;
 
     //==-- Upstream passes used by the pipeline --==//
 
