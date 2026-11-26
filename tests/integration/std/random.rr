@@ -1,5 +1,22 @@
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin random %rrc_linker
-// RUN: %std_rene_build/release/random%exe_ext
+// Dedicated coverage-guided fuzz driver and unit suite for `std::random`.
+// Unit cases cover `RandomError` equality and formatting, operating-system
+// entropy, and reference vectors of `Xoshiro256pp` and `MWC192X` through
+// `Rng`.
+// Fuzz targets check `RandomError` equality against a model, and that `Rng`
+// gives the stream of its pure state for any seed.
+
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin random %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}random
+
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/random%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/random%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      random/error: unit
+// CHECK-NEXT: random/entropy64: unit
+// CHECK-NEXT: random/xoshiro256pp: unit
+// CHECK-NEXT: random/mwc192x: unit
+// CHECK-NEXT: random/error equality against model (fuzz):
+// CHECK-NEXT: random/generators against pure state (fuzz):
 
 import std::format::Display;
 import std::format::Options;
@@ -12,108 +29,143 @@ import std::random::RandomState;
 import std::random::Rng;
 import std::random::Xoshiro256pp;
 import std::result::Result;
+import test::domain::i32_domain;
+import test::domain::tuple4;
+import test::domain::u64_domain;
+import test::domain::u8_domain;
+import test::expect::Outcome;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
 
-fn check(value: bool) {
-    if !value { core::intrinsic::panic::panic() }
+fn renders(error : RandomError, expected : str) -> bool {
+    error.fmt().render(Options::default()).to_string().eq_str(expected)
 }
 
-fn unwrap_ok<T>(res: Result<T, RandomError>) -> T {
-    match res {
-        Ok(value) => value,
-        Err(_) => core::intrinsic::panic::panic()
+fn error_of(tag : u8, code : i32) -> RandomError {
+    match tag {
+        0 => RandomError::Unsupported,
+        1 => RandomError::OsError { code },
+        _ => RandomError::Other
     }
 }
 
-fn test_error() {
-    check(RandomError::Unsupported == RandomError::Unsupported);
-    check(RandomError::Other == RandomError::Other);
-    check(RandomError::OsError { 5 } == RandomError::OsError { 5 });
-    check(RandomError::OsError { 5 } != RandomError::OsError { 6 });
-    check(RandomError::Unsupported != RandomError::Other);
-    check(RandomError::Unsupported != RandomError::OsError { 5 });
-    check(RandomError::Other != RandomError::OsError { 5 });
-
-    let opts = Options::default();
-    check(RandomError::Unsupported.fmt().render(opts).to_string().eq_str("Unsupported"));
-    check(RandomError::Other.fmt().render(opts).to_string().eq_str("Other"));
-    check(RandomError::OsError { 5 }.fmt().render(opts).to_string().eq_str("OsError(5)"));
-    check(RandomError::OsError { 0 - 22 }.fmt().render(opts).to_string().eq_str("OsError(-22)"));
+fn test_error() -> Outcome {
+    expect(error_of(0, 0) == RandomError::Unsupported && error_of(2, 0) == RandomError::Other, "same variant")
+        .and_then(|| expect(error_of(1, 5) == error_of(1, 5) && error_of(1, 5) != error_of(1, 6), "OsError code"))
+        .and_then(|| expect(error_of(0, 5) != error_of(2, 5) && error_of(0, 5) != error_of(1, 5), "Unsupported"))
+        .and_then(|| expect(error_of(1, 5) != error_of(0, 5) && error_of(1, 5) != error_of(2, 5), "OsError"))
+        .and_then(|| expect(error_of(2, 5) != error_of(0, 5) && error_of(2, 5) != error_of(1, 5), "Other"))
+        .and_then(|| expect(renders(RandomError::Unsupported, "Unsupported"), "fmt of Unsupported"))
+        .and_then(|| expect(renders(RandomError::Other, "Other"), "fmt of Other"))
+        .and_then(|| expect(renders(RandomError::OsError { 5 }, "OsError(5)"), "fmt of OsError"))
+        .and_then(|| expect(renders(RandomError::OsError { 0 - 22 }, "OsError(-22)"), "fmt of a negative code"))
 }
 
-fn test_entropy64() {
-    let a = unwrap_ok(std::random::entropy64());
-    let b = unwrap_ok(std::random::entropy64());
-    let distinct = if a != b {
-        true
-    } else {
-        let c = unwrap_ok(std::random::entropy64());
-        a != c
-    };
-    check(distinct);
-
-    let seed = if a != b { a } else { unwrap_ok(std::random::entropy64()) };
-    check(FastHasher::from_entropy(seed).write_u64(42).finish() ==
-        std::hash::fast_hasher_seeded(seed).write_u64(42).finish());
-    check(StrongHasher::from_entropy(seed).write_u64(42).finish() ==
-        std::hash::strong_hasher_seeded(seed).write_u64(42).finish());
+fn test_entropy64() -> Outcome {
+    let a = std::random::entropy64();
+    let b = std::random::entropy64();
+    let c = std::random::entropy64();
+    let seed = a.unwrap_or(0);
+    expect(a.is_ok() && b.is_ok() && c.is_ok(), "entropy64 succeeds")
+        .and_then(|| expect(a != b || a != c, "entropy64 gives distinct words"))
+        .and_then(|| should_be(
+            FastHasher::from_entropy(seed).write_u64(42).finish(),
+            std::hash::fast_hasher_seeded(seed).write_u64(42).finish()
+        ))
+        .and_then(|| should_be(
+            StrongHasher::from_entropy(seed).write_u64(42).finish(),
+            std::hash::strong_hasher_seeded(seed).write_u64(42).finish()
+        ))
 }
 
-fn check_rng_matches_state<R: RandomState>(seed: u64) {
-    let rng: Rng<R> = Rng::new_from_seed(seed);
-    let rng2: Rng<R> = Rng::new_from_seed(seed);
-    let other: Rng<R> = Rng::new_from_seed(seed + 1);
-
-    let s0 = R::from_seed(seed);
-    let (v0, s1) = s0.next();
+// `Rng` from `seed` gives the first four words of the pure state from `seed`.
+fn rng_matches_state<R : RandomState>(seed : u64) -> Outcome {
+    let rng : Rng<R> = Rng::new_from_seed(seed);
+    let (v0, s1) = R::from_seed(seed).next();
     let (v1, s2) = s1.next();
     let (v2, s3) = s2.next();
     let (v3, _) = s3.next();
-
-    check(rng.next() == v0);
-    check(rng.next() == v1);
-    check(rng.next() == v2);
-    check(rng.next() == v3);
-
-    check(rng2.next() == v0);
-    check(rng2.next() == v1);
-    check(other.next() != v0);
-    check(v0 != v1 && v1 != v2 && v2 != v3);
-
-    let from_ent: Rng<R> = unwrap_ok(Rng::new_from_entropy());
-    let e0 = from_ent.next();
-    let e1 = from_ent.next();
-    check(e0 != e1);
+    should_be(rng.next(), v0)
+        .and_then(|| should_be(rng.next(), v1))
+        .and_then(|| should_be(rng.next(), v2))
+        .and_then(|| should_be(rng.next(), v3))
 }
 
-fn test_xoshiro256pp() {
-    check_rng_matches_state<Xoshiro256pp>(0);
-    check_rng_matches_state<Xoshiro256pp>(42);
+fn check_generator<R : RandomState>(seed : u64) -> Outcome {
+    let rng : Rng<R> = Rng::new_from_seed(seed);
+    let other : Rng<R> = Rng::new_from_seed(seed + 1);
+    let from_entropy : Result<Rng<R>, RandomError> = Rng::new_from_entropy();
+    let (v0, s1) = R::from_seed(seed).next();
+    let (v1, _) = s1.next();
+    rng_matches_state<R>(seed)
+        .and_then(|| expect(rng.next() == v0 && other.next() != v0 && v0 != v1, "distinct words"))
+        .and_then(|| expect(
+            from_entropy.map(|r: Rng<R>| r.next() != r.next()).unwrap_or(false),
+            "new_from_entropy gives distinct words"
+        ))
+}
 
+fn test_xoshiro256pp() -> Outcome {
     // Reference vectors: xoshiro256++ seeded via SplitMix64(0).
-    let rng: Rng<Xoshiro256pp> = Rng::new_from_seed(0);
-    check(rng.next() == 5987356902031041503);
-    check(rng.next() == 7051070477665621255);
-    check(rng.next() == 6633766593972829180);
-    check(rng.next() == 211316841551650330);
+    let rng : Rng<Xoshiro256pp> = Rng::new_from_seed(0);
+    check_generator<Xoshiro256pp>(0)
+        .and_then(|| check_generator<Xoshiro256pp>(42))
+        .and_then(|| should_be(rng.next(), 5987356902031041503))
+        .and_then(|| should_be(rng.next(), 7051070477665621255))
+        .and_then(|| should_be(rng.next(), 6633766593972829180))
+        .and_then(|| should_be(rng.next(), 211316841551650330))
 }
 
-fn test_mwc192x() {
-    check_rng_matches_state<MWC192X>(0);
-    check_rng_matches_state<MWC192X>(42);
-
+fn test_mwc192x() -> Outcome {
     // Reference vectors: MWC192X (MWC_A2 = 0xff4e24dd418f5433) seeded via
     // SplitMix64(0) with x = sm(0), y = sm(1), c = 1.
-    let rng: Rng<MWC192X> = Rng::new_from_seed(0);
-    check(rng.next() == 7960286522194355701);
-    check(rng.next() == 3136876846181122791);
-    check(rng.next() == 13675753176678066963);
-    check(rng.next() == 7320853031938515170);
+    let rng : Rng<MWC192X> = Rng::new_from_seed(0);
+    check_generator<MWC192X>(0)
+        .and_then(|| check_generator<MWC192X>(42))
+        .and_then(|| should_be(rng.next(), 7960286522194355701))
+        .and_then(|| should_be(rng.next(), 3136876846181122791))
+        .and_then(|| should_be(rng.next(), 13675753176678066963))
+        .and_then(|| should_be(rng.next(), 7320853031938515170))
 }
 
-#[main]
-pub fn main() {
-    test_error();
-    test_entropy64();
-    test_xoshiro256pp();
-    test_mwc192x();
+fn fuzz_error_eq(input : (u8, i32, u8, i32)) -> Outcome {
+    let (tag, code, other_tag, other_code) = input;
+    let lhs = error_of(tag, code);
+    let rhs = error_of(other_tag, other_code);
+    let same = tag == other_tag && (tag != 1 || code == other_code);
+    should_be(lhs == rhs, same)
+        .and_then(|| should_be(rhs == lhs, same))
+        .and_then(|| expect(lhs == error_of(tag, code), "reflexive"))
 }
+
+fn fuzz_generators(seed : u64) -> Outcome {
+    rng_matches_state<Xoshiro256pp>(seed)
+        .and_then(|| rng_matches_state<MWC192X>(seed))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("random")
+        .with_case("error", test_error)
+        .with_case("entropy64", test_entropy64)
+        .with_case("xoshiro256pp", test_xoshiro256pp)
+        .with_case("mwc192x", test_mwc192x)
+        .with_fuzz(
+            "error equality against model (fuzz)",
+            tuple4(
+                u8_domain().in_range(0, 2),
+                i32_domain().in_range(-2, 2),
+                u8_domain().in_range(0, 2),
+                i32_domain().in_range(-2, 2)
+            ),
+            fuzz_error_eq
+        )
+        .with_fuzz("generators against pure state (fuzz)", u64_domain(), fuzz_generators)
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
