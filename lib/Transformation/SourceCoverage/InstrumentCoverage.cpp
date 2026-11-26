@@ -27,6 +27,7 @@
 #include <llvm/Support/xxhash.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
@@ -197,11 +198,20 @@ private:
   llvm::SmallVector<MappingRegion> regions;
 };
 
-/// Gives a counter to each region of `op`.
+/// Gives a counter to each region of `op` that can run a different number of
+/// times than `op`. A region that runs exactly once each time `op` runs has
+/// the count of the parent region.
 void instrumentRegionBranch(CoverageMap &map,
                             mlir::RegionBranchOpInterface op) {
-  for (mlir::Region &region : op->getRegions())
-    map.addRegion(region);
+  // scf.execute_region runs its region exactly once, but it gives no bounds.
+  if (llvm::isa<mlir::scf::ExecuteRegionOp>(op))
+    return;
+  llvm::SmallVector<mlir::InvocationBounds> bounds;
+  op.getRegionInvocationBounds(
+      llvm::SmallVector<mlir::Attribute>(op->getNumOperands()), bounds);
+  for (auto [region, bound] : llvm::zip_equal(op->getRegions(), bounds))
+    if (bound.getLowerBound() != 1 || bound.getUpperBound() != 1u)
+      map.addRegion(region);
 }
 
 /// Gives a counter to the body of `op`. The body runs each time that the
@@ -267,6 +277,9 @@ void instrumentFunction(mlir::func::FuncOp function,
   // A function with the attribute has its counters already.
   if (function.isExternal() || function->hasAttr(coverageMapAttr) ||
       !coverageEnabled(function))
+    return;
+  // A kernel is StableHLO code for a device, so it cannot hold counters.
+  if (function->hasAttr("reussir.kernel_function"))
     return;
   auto span = function.getLoc()->findInstanceOf<mlir::FileLineColRange>();
   if (!span)
