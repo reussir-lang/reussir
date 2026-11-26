@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/IR/Coverage.h"
+#include "Reussir/IR/ReussirOps.h"
 #include "Reussir/Transformation/Passes.h"
 
 #include <llvm/ADT/SmallString.h>
@@ -203,6 +204,12 @@ void instrumentRegionBranch(CoverageMap &map,
     map.addRegion(region);
 }
 
+/// Gives a counter to the body of `op`. The body runs each time that the
+/// program calls the closure, not when the program makes the closure.
+void instrumentClosure(CoverageMap &map, ReussirClosureCreateOp op) {
+  map.addRegion(op.getBody());
+}
+
 /// Adds the counters of `op` to `map`. Add a case here for an op that needs
 /// different counters. A case returns `skip` to keep the walk out of the
 /// regions of the op.
@@ -210,6 +217,10 @@ mlir::WalkResult instrumentOp(CoverageMap &map, mlir::Operation *op) {
   return llvm::TypeSwitch<mlir::Operation *, mlir::WalkResult>(op)
       .Case<mlir::RegionBranchOpInterface>([&](auto branch) {
         instrumentRegionBranch(map, branch);
+        return mlir::WalkResult::advance();
+      })
+      .Case<ReussirClosureCreateOp>([&](auto closure) {
+        instrumentClosure(map, closure);
         return mlir::WalkResult::advance();
       })
       .Default([](mlir::Operation *) { return mlir::WalkResult::advance(); });
