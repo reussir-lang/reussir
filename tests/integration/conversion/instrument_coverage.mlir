@@ -108,6 +108,23 @@ module {
     return %r : i64 loc("a.rr":21:3 to 25:4)
   } loc("a.rr":20:1 to 26:2)
 
+  // An operand op with the location of the switch is a part of the switch.
+  // CHECK-LABEL: func.func @scrutinee(
+  // CHECK-SAME: {counter = 2 : i32, kind = "gap", span = loc("a.rr":28:4 to 29:14)}
+  func.func @scrutinee(%n: i64, %x: i64) -> i64 {
+    %tag = arith.index_cast %n : i64 to index loc("a.rr":28:3 to 31:4)
+    %r = scf.index_switch %tag -> i64
+    case 0 {
+      %a = arith.addi %x, %x : i64 loc("a.rr":29:14 to 29:19)
+      scf.yield %a : i64 loc("a.rr":29:14 to 29:19)
+    }
+    default {
+      %m = arith.muli %x, %x : i64 loc("a.rr":30:14 to 30:19)
+      scf.yield %m : i64 loc("a.rr":30:14 to 30:19)
+    } loc("a.rr":28:3 to 31:4)
+    return %r : i64 loc("a.rr":28:3 to 31:4)
+  } loc("a.rr":27:1 to 32:2)
+
   // CHECK: func.func private @external(i64) -> i64{{$}}
   func.func private @external(i64) -> i64 loc("a.rr":19:1 to 19:20)
 }

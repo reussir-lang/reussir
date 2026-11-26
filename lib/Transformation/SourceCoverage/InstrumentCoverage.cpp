@@ -230,7 +230,8 @@ private:
 
 /// Returns the end of the operands of `op`, such as the condition of an
 /// `if`. It is the last end of the spans of the ops that give the operands
-/// and that are in `span`. Returns nothing when no such op has a span.
+/// and that are in `span`. Returns nothing when no such op has a span. An op
+/// with the location of `op` is a part of `op`, and is not an operand.
 std::optional<Position> operandsEnd(mlir::Operation *op,
                                     mlir::FileLineColRange span) {
   std::optional<Position> result;
@@ -238,7 +239,8 @@ std::optional<Position> operandsEnd(mlir::Operation *op,
     mlir::Operation *def = operand.getDefiningOp();
     auto operandSpan =
         def ? def->getLoc()->findInstanceOf<mlir::FileLineColRange>() : nullptr;
-    if (operandSpan && operandSpan.getFilename() == span.getFilename() &&
+    if (operandSpan && def->getLoc() != op->getLoc() &&
+        operandSpan.getFilename() == span.getFilename() &&
         startOf(span) <= startOf(operandSpan) &&
         endOf(operandSpan) <= endOf(span))
       result = std::max(result, std::optional(endOf(operandSpan)));
