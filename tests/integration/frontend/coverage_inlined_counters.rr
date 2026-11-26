@@ -20,16 +20,16 @@ fn helper(x: i64) -> i64 {
 // MLIR: llvm.func {{.*}}right(
 // CHECK-LABEL: define {{.*}}left(
 // CHECK: store i64 {{.*}}, ptr @__profc_[[HELPER]],
-// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 1)
-// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 2)
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds nuw (i8, ptr @__profc_[[HELPER]], i64 8)
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds nuw (i8, ptr @__profc_[[HELPER]], i64 16)
 pub fn left(x: i64) -> i64 {
     helper(x)
 }
 
 // CHECK-LABEL: define {{.*}}right(
 // CHECK: store i64 {{.*}}, ptr @__profc_[[HELPER]],
-// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 1)
-// CHECK: store i64 {{.*}}, ptr getelementptr inbounds ([3 x i64], ptr @__profc_[[HELPER]], i32 0, i32 2)
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds nuw (i8, ptr @__profc_[[HELPER]], i64 8)
+// CHECK: store i64 {{.*}}, ptr getelementptr inbounds nuw (i8, ptr @__profc_[[HELPER]], i64 16)
 pub fn right(x: i64) -> i64 {
     helper(x + 1)
 }
