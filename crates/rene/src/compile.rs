@@ -4,7 +4,7 @@
 //! root (or the package's `src/lib.rr` default), the profile's knobs as
 //! flags, `--emit` from the target's kind, and the baked runtime's libdirs
 //! for polyffi and the link step.
-//! Artifacts land in `<build-dir>/<profile>/`, named per platform
+//! Artifacts land in [`plan::profile_dir`], named per platform
 //! (`demo`/`demo.exe`/`demo.wasm`,
 //! `libdemo.so`/`libdemo.dylib`/`demo.dll`,
 //! `libdemo.a`/`demo.lib`).
@@ -177,7 +177,7 @@ pub async fn build(
     let manifest = &loaded.manifest;
     let selected = selected_targets(manifest, &opts.bins, &opts.libs)?;
 
-    let out_dir = dir.root().join(&opts.profile_name);
+    let out_dir = plan::profile_dir(dir.root(), &opts.profile_name, &opts.profile);
     std::fs::create_dir_all(&out_dir).map_err(|source| Error::file("create", &out_dir, source))?;
     let fingerprint = fingerprint(loaded, &sources.files, rt, opts);
 
@@ -190,7 +190,7 @@ pub async fn build(
         let token_reuse_report = opts
             .token_reuse_remarks
             .then(|| plan::token_reuse_report_path(&path));
-        let key = tables::product_key(&opts.profile_name, name);
+        let key = tables::product_key(&opts.profile_name, name, opts.profile.variant());
         let current = product_is_current(
             dir,
             &key,
@@ -517,6 +517,9 @@ pub(crate) fn profile_flags(
     }
     if profile.fuzzer == Some(true) {
         args.push("--fuzzer".to_owned());
+    }
+    if profile.instrument_coverage == Some(true) {
+        args.push("--instrument-coverage".to_owned());
     }
     if let Some(encoding) = &profile.nullary_variant_encoding {
         push(&mut args, "--nullary-variant-encoding", encoding);

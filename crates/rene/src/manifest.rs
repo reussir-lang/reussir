@@ -7,7 +7,7 @@
 //! so a manifest can carry fields for future `rene` stages (or for other
 //! tools) without being rejected.
 
-use crate::Error;
+use crate::{Error, tables};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -193,6 +193,10 @@ pub struct Profile {
     pub sancov: Vec<String>,
     /// `rrc --fuzzer` when true.
     pub fuzzer: Option<bool>,
+    /// `rrc --instrument-coverage` when true; `rene build
+    /// --instrument-coverage` sets it. A coverage build keeps its products
+    /// in `<build-dir>/<profile>/coverage/`.
+    pub instrument_coverage: Option<bool>,
     /// `rrc --nullary-variant-encoding`.
     pub nullary_variant_encoding: Option<String>,
     /// Default machine target when `rene build --target` is absent.
@@ -247,13 +251,22 @@ impl Profile {
             instrument_nonlinear_ffi,
             closure_wpd,
             pack_record_members,
-            fuzzer
+            fuzzer,
+            instrument_coverage
         );
         self.link_args.extend(over.link_args.iter().cloned());
         self.sanitizers.extend(over.sanitizers.iter().cloned());
         self.sancov.extend(over.sancov.iter().cloned());
         self.extra_flags.extend(over.extra_flags.iter().cloned());
         self
+    }
+
+    /// The variant of the build records that this profile writes.
+    pub fn variant(&self) -> tables::Variant {
+        tables::Variant {
+            fuzzer: self.fuzzer == Some(true),
+            coverage: self.instrument_coverage == Some(true),
+        }
     }
 }
 
@@ -552,6 +565,7 @@ mod tests {
             {
               package = { name = "demo" },
               profiles = {
+                dev = { instrument_coverage = true },
                 release = { lto = "thin" },
                 custom = { opt = "size" },
               },
@@ -560,15 +574,17 @@ mod tests {
         );
         let manifest = load(&path).unwrap().manifest;
 
-        // Pure built-ins.
+        // The manifest adds the coverage knob to the built-in values.
         let dev = resolve_profile(&manifest, "dev").unwrap();
         assert_eq!(dev.opt.as_deref(), Some("none"));
         assert_eq!(dev.debug, Some(true));
+        assert!(dev.variant().coverage);
 
         // Refinement: the manifest's lto lands, the built-in's opt stays.
         let release = resolve_profile(&manifest, "release").unwrap();
         assert_eq!(release.opt.as_deref(), Some("aggressive"));
         assert_eq!(release.lto.as_deref(), Some("thin"));
+        assert_eq!(release.variant(), tables::Variant::default());
 
         // A declared profile with no built-in stands alone.
         let custom = resolve_profile(&manifest, "custom").unwrap();
