@@ -1,0 +1,45 @@
+// The coverage sections of COFF and Mach-O objects. The section name for
+// each object format comes from `getInstrProfSectionName`. On COFF, the `$M`
+// suffix puts each section between the `$A` and `$Z` sections of the profile
+// runtime, and the linker removes the suffix. On Mach-O, the mapping sections
+// are in the `__LLVM_COV` segment.
+
+// RUN: %rrc %s --instrument-coverage --emit obj --target-triple x86_64-pc-windows-msvc -o %t.coff.obj
+// RUN: %llvm-readobj --sections --coff-directives %t.coff.obj > %t.coff.txt
+// RUN: %FileCheck %s --check-prefix=COFF < %t.coff.txt
+// RUN: %FileCheck %s --check-prefix=COFF-SECTIONS < %t.coff.txt
+// RUN: %llvm-cov report --empty-profile %t.coff.obj | %FileCheck %s --check-prefix=REPORT
+// RUN: %rrc %s --instrument-coverage --emit obj --target-triple x86_64-apple-darwin -o %t.macho.o
+// RUN: %llvm-nm -m %t.macho.o | %FileCheck %s --check-prefix=MACHO
+// RUN: %llvm-cov report --empty-profile %t.macho.o | %FileCheck %s --check-prefix=REPORT
+
+// llvm-cov reads the mapping from the object without a profile.
+// REPORT: object_formats.rr {{.*}} 0.00%
+// REPORT: TOTAL
+
+// A function record is `linkonce_odr`, so COFF needs a comdat for it. The
+// `/INCLUDE:` directive (from `llvm.used`) keeps the record when the linker
+// removes the comdats that nothing refers to (`/OPT:REF`).
+// COFF:      Name: .lcovfun$M
+// COFF-NOT:  Name:
+// COFF:      IMAGE_SCN_LNK_COMDAT
+// COFF:      Directive(s): {{.*}}/INCLUDE:__covrec_{{[0-9A-F]+}}u
+
+// COFF-SECTIONS-DAG: Name: .lcovmap$M
+// COFF-SECTIONS-DAG: Name: .lprfc$M
+// COFF-SECTIONS-DAG: Name: .lprfd$M
+// COFF-SECTIONS-DAG: Name: .lprfn$M
+
+// Mach-O has no comdats. `llvm.used` marks the records `no dead strip`, so
+// the linker keeps them under `-dead_strip`.
+// MACHO-DAG: (__LLVM_COV,__llvm_covfun) weak private external [no dead strip] ___covrec_{{[0-9A-F]+}}u
+// MACHO-DAG: (__LLVM_COV,__llvm_covmap) non-external [no dead strip] l___llvm_coverage_mapping
+// MACHO-DAG: (__DATA,__llvm_prf_cnts) {{.*}}___profc_
+// MACHO-DAG: (__DATA,__llvm_prf_data) {{.*}}___profd_
+// MACHO-DAG: (__DATA,__llvm_prf_names) {{.*}}___llvm_prf_nm
+
+pub fn clamp(x: i64) -> i64 {
+    if x > 3 { x } else { 3 }
+}
+
+extern "C" trampoline "formats_clamp" = clamp;
