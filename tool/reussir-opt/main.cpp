@@ -169,6 +169,9 @@ int main(int argc, char **argv) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return reussir::createReussirBorrowSpecializationPass();
   });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return reussir::createReussirInstrumentCoveragePass();
+  });
   return failed(mlir::MlirOptMain(
       argc, argv, "Reussir analysis and optimization driver\n", registry));
 }
