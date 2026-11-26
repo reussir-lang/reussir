@@ -2613,6 +2613,13 @@ void ReussirRegionRunOp::getSuccessorRegions(
   regions.emplace_back(getOperation());
 }
 
+// The body runs exactly once each time region.run runs.
+void ReussirRegionRunOp::getRegionInvocationBounds(
+    llvm::ArrayRef<mlir::Attribute>,
+    llvm::SmallVectorImpl<mlir::InvocationBounds> &invocationBounds) {
+  invocationBounds.emplace_back(1, 1);
+}
+
 // The region argument is produced by region.run, not forwarded from an operand.
 mlir::ValueRange
 ReussirRegionRunOp::getSuccessorInputs(mlir::RegionSuccessor successor) {

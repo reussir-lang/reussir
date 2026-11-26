@@ -2098,7 +2098,8 @@ class ReussirRegionOp<string mnemonic, list<Trait> traits>
 
 def ReussirRegionRunOp
     : ReussirRegionOp<
-          "run", [DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
+          "run", [DeclareOpInterfaceMethods<RegionBranchOpInterface,
+                      ["getSuccessorInputs", "getRegionInvocationBounds"]>]> {
   let summary = "Execute a region";
   let description = [{
     `reussir.region.run` executes a region. The inner region must accepts one 
