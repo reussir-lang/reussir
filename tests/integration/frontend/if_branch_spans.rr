@@ -1,0 +1,18 @@
+// RUN: %rrc %s --emit mlir --instrument-coverage -o - | %FileCheck %s
+//
+// The yield of each branch has the location of the branch. A branch that
+// is only a variable then has its own span, which source coverage uses.
+
+// CHECK-LABEL: func.func @{{.*}}pick
+// CHECK: scf.if
+// CHECK-NEXT: scf.yield %{{.*}} : i64 loc([[THEN:#loc[0-9]*]])
+// CHECK-NEXT: } else {
+// CHECK-NEXT: scf.yield %{{.*}} : i64 loc([[ELSE:#loc[0-9]*]])
+// CHECK-DAG: [[THEN]] = loc("{{.*}}if_branch_spans.rr":[[@LINE+4]]:12 to :13)
+// CHECK-DAG: [[ELSE]] = loc("{{.*}}if_branch_spans.rr":[[@LINE+3]]:23 to :24)
+
+pub fn pick(c: bool, x: i64, y: i64) -> i64 {
+    if c { x } else { y }
+}
+
+extern "C" trampoline "branch_spans_pick" = pick;
