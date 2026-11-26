@@ -11,7 +11,7 @@
 ; CHECK: store i64 {{.*}}, ptr @__profc_count
 ;
 ; PLAIN-NOT: @__profc_count
-; PLAIN: call void @llvm.instrprof.increment(ptr @__profn_count, i64 1, i32 1, i32 0)
+; PLAIN: call void @llvm.instrprof.increment(ptr {{.*}}@__profn_count, i64 1, i32 1, i32 0)
 
 @__profn_count = private constant [5 x i8] c"count"
 
