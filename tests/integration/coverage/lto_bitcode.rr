@@ -1,0 +1,35 @@
+// With `--instrument-coverage`, the bitcode members of an LTO static library
+// have lowered counters, as clang writes them in the pre-link compile. The
+// LTO link does not lower counters, so no counter intrinsic stays.
+// RUN: %rrc %s --instrument-coverage --emit staticlib --lto thin -o %t.thin.a
+// RUN: rm -rf %t.thin && mkdir -p %t.thin && cd %t.thin && %llvm-ar x %t.thin.a
+// RUN: %llvm-dis %t.thin/*.0.bc -o %t.thin.ll
+// RUN: %FileCheck %s < %t.thin.ll
+// RUN: %rrc %s --instrument-coverage --emit staticlib --lto fat -o %t.fat.a
+// RUN: rm -rf %t.fat && mkdir -p %t.fat && cd %t.fat && %llvm-ar x %t.fat.a
+// RUN: %llvm-dis %t.fat/*.0.bc -o %t.fat.ll
+// RUN: %FileCheck %s < %t.fat.ll
+
+// The ThinLTO member keeps its module summary.
+// RUN: %llvm-bcanalyzer %t.thin/*.0.bc | %FileCheck %s --check-prefix=THIN
+// THIN: GLOBALVAL_SUMMARY_BLOCK
+
+// CHECK-DAG: @{{"?}}__profc_{{[^ ]*}}8classify{{"?}} = {{.*}}global [3 x i64] zeroinitializer
+// CHECK-DAG: @{{"?}}__profd_{{[^ ]*}}8classify{{"?}} = {{.*}}global
+// CHECK-DAG: @{{"?}}__profc_{{[^ ]*}}5entry{{"?}} = {{.*}}global [1 x i64] zeroinitializer
+// CHECK-NOT: call void @llvm.instrprof.increment
+
+fn classify(x: u64) -> u64 {
+    if x > 4 {
+        x * 10
+    } else {
+        x + 1
+    }
+}
+
+#[main]
+pub fn entry() {
+    let a = classify(1);
+    let b = classify(2);
+    let c = classify(7);
+}
