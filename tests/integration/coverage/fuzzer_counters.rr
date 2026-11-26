@@ -1,0 +1,25 @@
+// With `--fuzzer --instrument-coverage`, a function has the profile counters
+// and the SanitizerCoverage of the fuzz build. InstrProfilingLoweringPass
+// lowers the counters before SanitizerCoverage runs, as clang and rustc do.
+// RUN: %rrc %s --package-name fuzzcov --emit llvm-ir --fuzzer --instrument-coverage -o %t.ll
+// RUN: %FileCheck %s < %t.ll
+
+// CHECK-DAG: @__profc__RNvC7fuzzcov4pick = private global [3 x i64] zeroinitializer, section "__llvm_prf_cnts"
+// CHECK-DAG: @__sancov_gen_ = private global [3 x i8] zeroinitializer, section "__sancov_cntrs"
+// CHECK-DAG: section "__sancov_pcs"
+// CHECK-NOT: call void @llvm.instrprof.increment
+// CHECK-LABEL: define i64 @_RNvC7fuzzcov4pick(
+// CHECK-SAME: #[[ATTRS:[0-9]+]]
+// CHECK: load i8, ptr @__sancov_gen_
+// CHECK: load i64, ptr @__profc__RNvC7fuzzcov4pick
+// CHECK: attributes #[[ATTRS]] = { {{.*}}optforfuzzing
+
+pub fn pick(x: u64) -> u64 {
+    if x > 4 {
+        x * 10
+    } else {
+        x + 1
+    }
+}
+
+extern "C" trampoline "fuzzcov_pick" = pick;

@@ -1,0 +1,29 @@
+import test::domain::u8_domain;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+fn small_step(byte: u8) -> u64 {
+    (byte as u64) + 1
+}
+
+fn large_step(byte: u8) -> u64 {
+    (byte as u64) * 2
+}
+
+fn step(byte: u8) -> u64 {
+    if byte < 128 {
+        small_step(byte)
+    } else {
+        large_step(byte)
+    }
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(TestTree::group("fuzzer_coverage")
+        .with_case("small step", || should_be(small_step(1), 2))
+        .with_fuzz("step", u8_domain(), |byte: u8| expect(step(byte) > 0, "step is zero")));
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
