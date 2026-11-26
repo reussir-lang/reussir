@@ -194,7 +194,7 @@ async fn build_node(
             .status(&crate::tables::dep_sources_key(
                 ctx.profile_name,
                 name,
-                ctx.profile.fuzzer == Some(true),
+                ctx.profile.variant(),
             ))?
             .ok_or_else(|| Error::MissingRecordedSources {
                 package: name.to_owned(),

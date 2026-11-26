@@ -981,6 +981,54 @@ fn build_compiles_the_declared_targets_with_the_profile_knobs() {
     assert_eq!(fakes.package_compiles().len(), 6, "the edit must rebuild");
 }
 
+/// A coverage build compiles every archive and target with
+/// `--instrument-coverage` into its own directory, and the normal build of
+/// the same profile stays current.
+#[cfg(unix)]
+#[test]
+fn build_keeps_coverage_products_apart_from_the_normal_build() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path().canonicalize().unwrap();
+    let root = tmp.join("reussir-build");
+    package(&tmp, "demo");
+    let manifest = write_targets_manifest(&tmp);
+    let fakes = Fakes::new(&tmp);
+
+    let normal = fakes.rene(&["build"], &manifest, &root);
+    assert!(normal.status.success(), "stderr: {}", stderr(&normal));
+    let normal_compiles = fakes.compiles().len();
+    assert!(
+        fakes
+            .compiles()
+            .iter()
+            .all(|l| !l.contains("--instrument-coverage"))
+    );
+
+    let coverage = fakes.rene(&["build", "--instrument-coverage"], &manifest, &root);
+    assert!(coverage.status.success(), "stderr: {}", stderr(&coverage));
+    let dir = root.join("dev").join("coverage");
+    assert_eq!(
+        String::from_utf8(coverage.stdout)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["libarchive.a", "demo", "libshared.so"].map(|f| dir.join(f).display().to_string())
+    );
+    // The implicit core and the three targets compile again. An interface
+    // has no code, so it does not get the flag.
+    let compiles = fakes.compiles().split_off(normal_compiles);
+    assert_eq!(compiles.len(), 5, "{compiles:#?}");
+    for line in compiles.iter().filter(|l| !l.contains("--emit rri")) {
+        assert!(line.contains("--instrument-coverage"), "{line}");
+    }
+    assert_eq!(fakes.runs("cargo"), 1, "coverage does not change the bake");
+
+    let again = fakes.rene(&["build"], &manifest, &root);
+    assert!(again.status.success(), "stderr: {}", stderr(&again));
+    assert_eq!(again.stdout, normal.stdout);
+    assert_eq!(fakes.compiles().len(), normal_compiles + 5);
+}
+
 /// Target paths give independent executables in one package their own crate
 /// roots; both the source scan and the compile plan use those files directly.
 #[cfg(unix)]

@@ -226,7 +226,7 @@ fn dep_state(
         .status(&tables::dep_variant_key(
             ctx.profile_name,
             name,
-            ctx.profile.fuzzer == Some(true),
+            ctx.profile.variant(),
         ))?
         .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok())
     else {
@@ -236,7 +236,7 @@ fn dep_state(
         .status(&tables::dep_sources_key(
             ctx.profile_name,
             name,
-            ctx.profile.fuzzer == Some(true),
+            ctx.profile.variant(),
         ))?
         .and_then(|json| serde_json::from_str(&json).ok())
     {
@@ -339,9 +339,9 @@ fn root_state(
             color: false,
         },
     );
-    let out_dir = ctx.build_dir.join(ctx.profile_name);
+    let out_dir = plan::profile_dir(ctx.build_dir, ctx.profile_name, ctx.profile);
     for (target, decl) in &node.loaded.manifest.targets {
-        let key = tables::product_key(ctx.profile_name, target);
+        let key = tables::product_key(ctx.profile_name, target, ctx.profile.variant());
         let path = out_dir.join(compile::artifact_file(target, decl.kind, Some(ctx.target)));
         let token_reuse_report = ctx
             .token_reuse_remarks
@@ -402,11 +402,11 @@ pub fn record_dep(
     let sources = serde_json::to_string(sources)?;
     dir.set_status(&[
         (
-            &tables::dep_variant_key(ctx.profile_name, name, ctx.profile.fuzzer == Some(true)),
+            &tables::dep_variant_key(ctx.profile_name, name, ctx.profile.variant()),
             &record,
         ),
         (
-            &tables::dep_sources_key(ctx.profile_name, name, ctx.profile.fuzzer == Some(true)),
+            &tables::dep_sources_key(ctx.profile_name, name, ctx.profile.variant()),
             &sources,
         ),
     ])
@@ -488,7 +488,7 @@ pub fn recorded_artifacts(
             .status(&tables::dep_variant_key(
                 profile_name,
                 name,
-                profile.fuzzer == Some(true),
+                profile.variant(),
             ))?
             .and_then(|json| serde_json::from_str::<DepRecord>(&json).ok());
         if let Some(record) = record

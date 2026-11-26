@@ -38,9 +38,20 @@ pub struct Options<'a> {
     pub token_reuse_remarks: bool,
 }
 
+/// The directory of the root's products: `<build-dir>/<profile>/`, or its
+/// `coverage/` subdirectory for a coverage build.
+pub fn profile_dir(build_dir: &Path, profile_name: &str, profile: &Profile) -> PathBuf {
+    let dir = build_dir.join(profile_name);
+    if profile.variant().coverage {
+        dir.join("coverage")
+    } else {
+        dir
+    }
+}
+
 /// Keep instrumented dependency outputs separate from ordinary builds.
 pub fn dependency_dir(build_dir: &Path, profile_name: &str, profile: &Profile) -> PathBuf {
-    let dir = build_dir.join(profile_name).join("deps");
+    let dir = profile_dir(build_dir, profile_name, profile).join("deps");
     if profile.fuzzer == Some(true) {
         dir.join("fuzzer")
     } else {
@@ -104,7 +115,7 @@ pub(crate) fn node_commands(
     opts: &Options,
     bake: Option<&RtArtifacts>,
 ) -> Vec<PlannedCommand> {
-    let profile_dir = opts.build_dir.join(opts.profile_name);
+    let profile_dir = profile_dir(opts.build_dir, opts.profile_name, opts.profile);
     let deps_dir = dependency_dir(opts.build_dir, opts.profile_name, opts.profile);
     let node = &graph.nodes[name];
     let transitive = transitive_deps(graph);

@@ -181,6 +181,13 @@ struct BuildArgs {
     /// dependency archives).
     #[arg(long)]
     token_reuse_remarks: bool,
+
+    /// Compile every package with source-based code coverage (`rrc
+    /// --instrument-coverage`), as the profile field `instrument_coverage`
+    /// does. Artifacts land in `<build-dir>/<profile>/coverage/`, apart from
+    /// those of the normal build.
+    #[arg(long)]
+    instrument_coverage: bool,
 }
 
 /// Delete the build directory, unless another rene is using it.
@@ -242,6 +249,11 @@ struct InspectArgs {
     /// them in freshness checks, matching `rene build --token-reuse-remarks`.
     #[arg(long)]
     token_reuse_remarks: bool,
+
+    /// Render the commands and records of a coverage build, matching `rene
+    /// build --instrument-coverage`.
+    #[arg(long)]
+    instrument_coverage: bool,
 }
 
 fn main() -> ExitCode {
@@ -337,6 +349,19 @@ fn resolve_build_dir(location: &Location) -> Result<PathBuf, Error> {
         .join(BUILD_DIR))
 }
 
+/// The profile `name` with the knobs that the command line sets.
+fn selected_profile(
+    loaded: &manifest::Loaded,
+    name: &str,
+    instrument_coverage: bool,
+) -> Result<manifest::Profile, Error> {
+    let mut profile = manifest::resolve_profile(&loaded.manifest, name)?;
+    if instrument_coverage {
+        profile.instrument_coverage = Some(true);
+    }
+    Ok(profile)
+}
+
 fn locate_manifest(flag: &Option<PathBuf>) -> Result<PathBuf, Error> {
     match flag {
         Some(path) => Ok(path.clone()),
@@ -359,7 +384,7 @@ async fn build(args: &BuildArgs, color: bool) -> Result<(), Error> {
     );
     // Resolve the profile before any work: an unknown name is a usage
     // problem, not something to discover after a runtime bake.
-    let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+    let profile = selected_profile(&loaded, &args.profile, args.instrument_coverage)?;
     let groups = compile::target_groups(&loaded.manifest, &profile, &args.bins, &args.libs)?;
     let root = resolve_build_dir(location)?;
     // Builds sharing a directory queue on its database lock. Take it before
@@ -615,7 +640,7 @@ async fn inspect(args: &InspectArgs, color: bool) -> Result<(), Error> {
             });
         }
         if args.commands {
-            let profile = manifest::resolve_profile(&loaded.manifest, &args.profile)?;
+            let profile = selected_profile(&loaded, &args.profile, args.instrument_coverage)?;
             let groups = compile::target_groups(&loaded.manifest, &profile, &[], &[])?;
             let requested_target = args
                 .target
