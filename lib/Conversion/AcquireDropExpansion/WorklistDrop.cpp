@@ -456,6 +456,22 @@ public:
     call->setAttr(kMustTailCallAttr, builder.getUnitAttr());
   }
 
+  // Whether releasing a box of `payload` only releases integers in place
+  // and frees the box: a leaf, or a variant whose arms are all leaves.
+  static bool releasesInPlace(mlir::Type payload) {
+    auto record = llvm::dyn_cast<RecordType>(payload);
+    if (!record || !record.isVariant() || !record.getComplete())
+      return classify(payload) == Visit::Leaf;
+    return llvm::all_of(
+        llvm::zip(record.getMembers(), record.getMemberIsField()),
+        [](auto arm) {
+          auto [member, field] = arm;
+          return !field &&
+                 classify(getProjectedType(member, false,
+                                           Capability::shared)) == Visit::Leaf;
+        });
+  }
+
   // Release the integers stored in line in `slot` and hand its boxes to
   // `onBox`. Only for a slot that `classify` does not call `Ordered`.
   void visitInline(mlir::Value slot,
@@ -698,8 +714,9 @@ prepareWorklistDropBridges(mlir::ModuleOp module,
     } else if (auto rc =
                    llvm::dyn_cast<RcType>(function.getArgument(0).getType());
                rc && !rc.isRegional() &&
-               isTriviallyCopyable(rc.getElementType())) {
-      // Releasing such a box only frees it: no work to enqueue, no scope.
+               WorklistGlue::releasesInPlace(rc.getElementType())) {
+      // Releasing such a box releases its integers in place and frees it:
+      // no work to enqueue, no scope.
       function->removeAttr(REUSSIR_FOREIGN_DROP);
       continue;
     }
