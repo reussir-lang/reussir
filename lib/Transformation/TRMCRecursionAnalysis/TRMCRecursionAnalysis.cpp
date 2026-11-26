@@ -36,6 +36,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/Conversion/RcDecrementExpansion.h"
+#include "Reussir/IR/Coverage.h"
 #include "Reussir/IR/ReussirDialect.h"
 #include "Reussir/IR/ReussirOps.h"
 #include "Reussir/IR/ReussirTypes.h"
@@ -377,6 +378,11 @@ static bool canPrecedeSelfCall(mlir::Operation *op, bool lends) {
            llvm::isa<ReussirRcCreateOp, ReussirRcCreateCompoundOp,
                      ReussirRcCreateVariantOp, ReussirTokenAllocOp>(op);
   }
+  // A coverage counter can go before the call. A region counter also counts
+  // the ops after a call in its region, so the counts are correct only when
+  // the call returns.
+  if (isCoverageIncrement(op))
+    return true;
   if (op->getNumRegions() == 0)
     return mlir::isPure(op);
   // Nested ops are judged one by one, so the region op only has to defer

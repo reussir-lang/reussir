@@ -122,8 +122,8 @@ mlir::Value getRCGMPRetainedValue(mlir::Operation *op);
 mlir::Value getRCGMPReleasedValue(mlir::Operation *op);
 
 // Whether `op` leaves every count and every stored value alone: it only
-// adds references or at most reads memory. Region-holding ops and calls do
-// not qualify.
+// adds references, adds to a coverage counter, or at most reads memory.
+// Region-holding ops and calls do not qualify.
 bool leavesCountsAlone(mlir::Operation *op);
 
 /// The memref type `reussir.array.view` produces for an array: identity

@@ -1,6 +1,7 @@
 #include "Reussir/IR/Coverage.h"
 
 #include <llvm/Demangle/Demangle.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/Support/JSON.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -137,5 +138,14 @@ void excludeCoverage(mlir::Operation *function) {
   auto module = function->getParentOfType<mlir::ModuleOp>();
   if (module && module->hasAttr("reussir.coverage.include"))
     annotate(function, false, {});
+}
+
+bool isCoverageIncrement(mlir::Operation *op) {
+  auto call = llvm::dyn_cast<mlir::LLVM::CallIntrinsicOp>(op);
+  if (!call)
+    return false;
+  llvm::Intrinsic::ID id = llvm::Intrinsic::lookupIntrinsicID(call.getIntrin());
+  return id == llvm::Intrinsic::instrprof_increment ||
+         id == llvm::Intrinsic::instrprof_increment_step;
 }
 } // namespace reussir
