@@ -1,16 +1,17 @@
-// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile release --bin hashmap %rrc_linker | %FileCheck %s --check-prefix=LISTING
-// LISTING: release{{[/\\]}}hashmap
+// RUN: %rene build --manifest-path %S/rene.ncl --build-dir %std_rene_build --profile fuzz --bin hashmap %rrc_linker | %FileCheck %s --check-prefix=LISTING
+// LISTING: fuzz{{[/\\]}}hashmap
 
-// RUN: %std_rene_build/release/hashmap%exe_ext | %FileCheck %s
-// CHECK:      hashmap
-// CHECK-NEXT:   ✔ basics
-// CHECK-NEXT:   ✔ adaptive
-// CHECK-NEXT:   ✔ transforms
-// CHECK-NEXT:   ✔ algebra
-// CHECK-NEXT:   ✔ churn
-// CHECK-NEXT:   ✔ model equivalence (fuzz)
-// CHECK-EMPTY:
-// CHECK-NEXT: 6 examples, 0 failures
+// RUN: env REUSSIR_FUZZ_LIST=1 %std_rene_build/fuzz/hashmap%exe_ext -runs=0 | %FileCheck %s
+// RUN: %std_rene_build/fuzz/hashmap%exe_ext -runs=128 -seed=12345 -artifact_prefix=%t.
+
+// CHECK:      hashmap/basics: unit
+// CHECK-NEXT: hashmap/adaptive: unit
+// CHECK-NEXT: hashmap/transforms: unit
+// CHECK-NEXT: hashmap/algebra: unit
+// CHECK-NEXT: hashmap/churn: unit
+// CHECK-NEXT: hashmap/from_list and proper submaps: unit
+// CHECK-NEXT: hashmap/model equivalence (fuzz):
+// CHECK-NEXT: hashmap/algebra laws with colliding keys (fuzz):
 
 import std::collections::pure::hashmap::Entry;
 import std::collections::pure::hashmap::HashMap;
@@ -27,6 +28,7 @@ import test::domain::tuple2;
 import test::expect::Outcome;
 import test::expect::expect;
 import test::expect::should_be;
+import test::fuzz::fuzz_init;
 import test::tree::TestTree;
 
 pub struct [value] Key {
@@ -352,17 +354,89 @@ fn model_equivalence(ops : List<(i64, i64)>) -> Outcome {
         .and_then(|| expect(all_match, "HashMap and WavlMap lookups should match"))
 }
 
-#[main]
-pub fn main() {
-    test::runner::run_main(TestTree::group("hashmap")
+fn test_from_list_and_proper_submaps() -> Outcome {
+    let map : HashMap<Key, i64> = HashMap::from_list(sample_entries());
+    let larger = map.insert(int_key(5), 50);
+    let flags = larger.map_values(|value| value > 0);
+    let seeded : HashMap<Key, i64> = HashMap::with_seed(31).insert(int_key(1), 1);
+    let scaled = map.update(int_key(1), |value| Option::Some { value * 5 })
+        .update(int_key(9), |value| Option::Some { value })
+        .adjust(int_key(9), |value| value + 1);
+    let construction = map.len() == 3 && map.hash_seed() == 0
+        && value_or(map, 2, 0) == 200 && value_or(map, 3, 0) == 30;
+    let edits = scaled.len() == 3 && value_or(scaled, 1, 0) == 50
+        && !scaled.contains_key(int_key(9))
+        && seeded.clear().is_empty() && seeded.clear().hash_seed() == 31;
+    let submaps = map.is_proper_submap_by(larger, |a, b| a == b)
+        && !map.is_proper_submap_by(map, |a, b| a == b)
+        && !larger.is_proper_submap_by(map, |a, b| a == b)
+        && !map.is_proper_submap_by(larger, |a, b| a != b)
+        && map.is_proper_submap_by(flags, |value, flag| flag && value > 0);
+    expect(construction, "from_list checks failed")
+        .and_then(|| expect(edits, "update and clear checks failed"))
+        .and_then(|| expect(submaps, "is_proper_submap_by checks failed"))
+}
+
+// Keys with equal `id % 5` share a digest, so the maps have collision buckets.
+fn colliding_map(ids : List<i64>, offset : i64) -> HashMap<Key, i64> {
+    ids.fold_left(HashMap::new(), |map : HashMap<Key, i64>, id : i64| {
+        map.insert(controlled(id, (id % 5) as u64), id + offset)
+    })
+}
+
+fn fuzz_algebra_laws(lists : (List<i64>, List<i64>)) -> Outcome {
+    let (left_ids, right_ids) = lists;
+    let left = colliding_map(left_ids, 0);
+    let right = colliding_map(right_ids, 100);
+    let union = left.union(right);
+    let common = left.intersection(right);
+    let only_left = left.difference(right);
+    should_be(union.len() + common.len(), left.len() + right.len())
+        .and_then(|| should_be(only_left.len() + common.len(), left.len()))
+        .and_then(|| expect(only_left.is_disjoint(right), "difference shares no key with the right map"))
+        .and_then(|| expect(common.is_submap(left), "intersection keeps the left values"))
+        .and_then(|| expect(right.is_submap(union), "union keeps the right values"))
+        .and_then(|| expect(
+            left.union_with(right, |a, b| a).equals(right.union(left)),
+            "union_with gives the left value first"
+        ))
+        .and_then(|| expect(
+            left.intersection_with(right, |a, b| b).equals(right.intersection(left)),
+            "intersection_with gives the right value second"
+        ))
+        .and_then(|| expect(left.is_disjoint(right) == common.is_empty(), "is_disjoint agrees with intersection"))
+        .and_then(|| expect(
+            left.is_proper_submap(union) == (left.is_submap(union) && left.len() < union.len()),
+            "is_proper_submap is a strict is_submap"
+        ))
+        .and_then(|| expect(HashMap::from_list(left.to_list()) == left, "from_list inverts to_list"))
+}
+
+fn suite() -> TestTree {
+    TestTree::group("hashmap")
         .with_case("basics", test_basics)
         .with_case("adaptive", test_adaptive)
         .with_case("transforms", test_transforms)
         .with_case("algebra", test_algebra)
         .with_case("churn", test_churn)
+        .with_case("from_list and proper submaps", test_from_list_and_proper_submaps)
         .with_fuzz(
             "model equivalence (fuzz)",
             list_of(tuple2(i64_domain(), i64_domain())),
             model_equivalence
-        ))
+        )
+        .with_fuzz(
+            "algebra laws with colliding keys (fuzz)",
+            tuple2(
+                i64_domain().in_range(0, 31).list_with_len(0, 24),
+                i64_domain().in_range(0, 31).list_with_len(0, 24)
+            ),
+            fuzz_algebra_laws
+        )
 }
+
+pub fn fuzz_entry() {
+    fuzz_init(suite());
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;
