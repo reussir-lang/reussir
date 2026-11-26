@@ -1,0 +1,15 @@
+// RUN: %rrc %s --emit mlir --instrument-coverage -o %t.mlir
+// RUN: %FileCheck %s < %t.mlir
+// RUN: %rrc %t.mlir --emit mlir --instrument-coverage -o %t.resumed.mlir
+// RUN: %FileCheck %s < %t.resumed.mlir
+// RUN: %rrc %s --emit mlir -o %t.plain.mlir
+// RUN: %FileCheck %s --check-prefix=PLAIN < %t.plain.mlir
+//
+// CHECK: loc("{{.*}}instrument_coverage_dump.rr":[[@LINE+3]]:{{[0-9]+}} to [[@LINE+5]]:2)
+// PLAIN-NOT: loc(
+
+pub fn twice(x: i64) -> i64 {
+    x * 2
+}
+
+extern "C" trampoline "dump_twice" = twice;

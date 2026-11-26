@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use reussir_backend::llvm::LlvmLowering;
 use reussir_backend::melior::ir::Module;
 use reussir_backend::melior::ir::attribute::StringAttribute;
-use reussir_backend::melior::ir::operation::{OperationLike, OperationMutLike};
+use reussir_backend::melior::ir::operation::{
+    OperationLike, OperationMutLike, OperationPrintingFlags,
+};
 use reussir_backend::pipeline::{self, LoweringOptions, OptLevel};
 use reussir_backend_sys as sys;
 
@@ -136,8 +138,17 @@ pub(crate) fn backend_module<'c>(
         StringAttribute::new(context, drop_order.as_str()).into(),
     );
     // A `.mlir` dump is the module as it stands, before the lowering pipeline.
+    // Source coverage makes its regions from the locations, so keep them.
     if target == Stage::Mlir {
-        write_text(output, &module.as_operation().to_string())?;
+        let text = if cli.instrument_coverage {
+            module
+                .as_operation()
+                .to_string_with_flags(OperationPrintingFlags::new().enable_debug_info(true, false))
+                .map_err(|e| format!("{name}: failed to print the MLIR module: {e}"))?
+        } else {
+            module.as_operation().to_string()
+        };
+        write_text(output, &text)?;
         return Ok(true);
     }
 
@@ -215,7 +226,15 @@ pub(crate) fn backend_module<'c>(
         .output_kind(cli.lto)
         .expect("file-emitting or linked target past the mlir-llvm stage");
     tracing::debug!("optimizing and emitting the object");
-    emit_to_file_with_sancov(finalized, &machine, opt, kind, sancov, output)?;
+    emit_to_file_with_sancov(
+        finalized,
+        &machine,
+        opt,
+        kind,
+        sancov,
+        cli.instrument_coverage,
+        output,
+    )?;
     tracing::debug!(output = %output.display(), "emitted");
     Ok(true)
 }

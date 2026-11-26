@@ -380,6 +380,7 @@ fn run(cli: &Cli) -> Result<bool, String> {
                 opt,
                 kind,
                 sancov.as_ref(),
+                cli.instrument_coverage,
                 &lib.next_member(),
             )?;
             if target == Stage::Staticlib {
@@ -387,7 +388,15 @@ fn run(cli: &Cli) -> Result<bool, String> {
             }
             return link_product(cli, target, machine.triple(), None, &lib, output).map(|()| true);
         }
-        emit_to_file_with_sancov(finalized, &machine, opt, kind, sancov.as_ref(), output)?;
+        emit_to_file_with_sancov(
+            finalized,
+            &machine,
+            opt,
+            kind,
+            sancov.as_ref(),
+            cli.instrument_coverage,
+            output,
+        )?;
         return Ok(true);
     }
 
