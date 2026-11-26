@@ -459,4 +459,22 @@ def ReussirEmitCoverageMappingPass
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// EmitCoverageUnusedNames
+//===----------------------------------------------------------------------===//
+def ReussirEmitCoverageUnusedNamesPass
+    : Pass<"reussir-emit-coverage-unused-names", "::mlir::ModuleOp"> {
+  let summary = "list the PGO names that no counter increment uses";
+  let description = [{
+    A pass such as `symbol-dce` can remove an instrumented function. Its
+    coverage record stays, but no increment uses its `__profn_` global, so
+    `InstrProfilingLoweringPass` does not write the name. Then `llvm-cov`
+    cannot read the coverage of the binary. This pass lists each `__profn_`
+    global with no use in `__llvm_coverage_names`, as clang does for the
+    functions that it does not emit. The lowering then writes these names.
+    Run the pass after the last pass that can remove functions.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // REUSSIR_TRANSFORMATION_PASSES_TD
