@@ -407,7 +407,7 @@ pub fn emit_to_file(
 
 /// Like [`emit_to_file`], with optional SanitizerCoverage / fuzzing
 /// instrumentation applied around the LLVM optimization pipeline. With
-/// `instrument_coverage`, it also lowers the source coverage counters after
+/// `instrument_coverage`, it also lowers the source coverage counters before
 /// that pipeline.
 pub fn emit_to_file_with_sancov(
     finalized: Finalized,
@@ -435,12 +435,15 @@ pub fn emit_to_file_with_sancov(
             tracing::debug!("preparing LLVM module for fuzzing");
             reussir_backend::sancov::prepare_module_for_fuzzing(finalized.module);
         }
-        tracing::debug!(?opt, "running the LLVM pass pipeline");
-        run_backend_llvm_pipeline(finalized.module, opt, machine.machine, lto);
+        // Clang and rustc lower the counters at the start of the pipeline, also
+        // of an LTO pre-link pipeline. Then the optimizer sees plain counter
+        // updates, and the bitcode has no counter intrinsics for the link.
         if instrument_coverage {
             tracing::debug!("running LLVM InstrProfilingLoweringPass");
             reussir_backend::source_coverage::run_instr_profiling_lowering_pass(finalized.module);
         }
+        tracing::debug!(?opt, "running the LLVM pass pipeline");
+        run_backend_llvm_pipeline(finalized.module, opt, machine.machine, lto);
         if let Some(sancov) = sancov.map(|s| s.for_target(machine.triple())) {
             tracing::debug!(?sancov, "running LLVM SanitizerCoveragePass");
             reussir_backend::sancov::run_sanitizer_coverage_pass(

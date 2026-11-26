@@ -24,7 +24,7 @@ extern "C" {
 
 // Runs LLVM's `InstrProfilingLoweringPass` over `module`. The pass changes the
 // `llvm.instrprof.*` intrinsics into counter updates and adds the profile data
-// that the profile runtime writes. Call AFTER `reussirRunBackendLLVMPipeline`.
+// that the profile runtime writes. Call BEFORE `reussirRunBackendLLVMPipeline`.
 void reussirRunInstrProfilingLoweringPass(LLVMModuleRef module);
 
 #ifdef __cplusplus

@@ -423,7 +423,7 @@ unsafe extern "C" {
 
     //==-- Source-based code coverage (SourceCoverage.h) --==//
 
-    /// Runs LLVM's `InstrProfilingLoweringPass` over `module` (call after
+    /// Runs LLVM's `InstrProfilingLoweringPass` over `module` (call before
     /// `reussirRunBackendLLVMPipeline`).
     pub fn reussirRunInstrProfilingLoweringPass(module: LLVMModuleRef);
 

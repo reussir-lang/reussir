@@ -26,7 +26,7 @@ pub fn instrument_module(context: &Context, module: &mut Module) -> Result<(), S
 
 /// Runs LLVM's `InstrProfilingLoweringPass` over `module`: it changes the
 /// counter increments into counter updates and adds the profile data that the
-/// profile runtime writes. Call after [`crate::llvm::run_backend_llvm_pipeline`].
+/// profile runtime writes. Call before [`crate::llvm::run_backend_llvm_pipeline`].
 ///
 /// # Safety
 /// `module` must be a valid `LLVMModuleRef`.
