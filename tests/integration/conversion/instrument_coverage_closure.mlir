@@ -10,7 +10,7 @@
 module {
   // CHECK-LABEL: func.func @make()
   // CHECK-SAME: reussir.coverage.map = {counters = 4 : i32, hash = [[HASH:-?[0-9]+]] : i64, name = "make",
-  // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":2:1 to 5:2)}, {counter = 1 : i32, span = loc("a.rr":3:5 to :39)}, {counter = 2 : i32, span = loc("a.rr":3:24 to :26)}, {counter = 3 : i32, span = loc("a.rr":3:36 to :37)}]}
+  // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("a.rr":2:1 to 5:2)}, {counter = 1 : i32, span = loc("a.rr":3:5 to :39)}, {counter = 2 : i32, span = loc("a.rr":3:24 to :26)}, {counter = 3 : i32, span = loc("a.rr":3:36 to :37)}, {false_counter = 3 : i32, span = loc("a.rr":3:16 to :21), true_counter = 2 : i32}]}
   // CHECK: %[[ENTRY:.+]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: llvm.call_intrinsic "llvm.instrprof.increment"(%{{.+}}, %{{.+}}, %{{.+}}, %[[ENTRY]])
   // CHECK: reussir.closure.create
