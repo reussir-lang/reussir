@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Reussir/IR/Coverage.h"
+#include "Reussir/IR/ReussirOps.h"
 #include "Reussir/Transformation/Passes.h"
 
 #include <llvm/ADT/SmallString.h>
@@ -203,11 +204,20 @@ void instrumentRegionBranch(CoverageMap &map,
     map.addRegion(region);
 }
 
+/// Gives a counter to the body of `op`. The body runs each time that the
+/// program calls the closure, not when the program makes the closure.
+void instrumentClosure(CoverageMap &map, ReussirClosureCreateOp op) {
+  map.addRegion(op.getBody());
+}
+
 /// Adds the counters of `op` to `map`. Add a case here for an op that needs
 /// different counters.
 void instrumentOp(CoverageMap &map, mlir::Operation *op) {
-  llvm::TypeSwitch<mlir::Operation *>(op).Case<mlir::RegionBranchOpInterface>(
-      [&](auto branch) { instrumentRegionBranch(map, branch); });
+  llvm::TypeSwitch<mlir::Operation *>(op)
+      .Case<mlir::RegionBranchOpInterface>(
+          [&](auto branch) { instrumentRegionBranch(map, branch); })
+      .Case<ReussirClosureCreateOp>(
+          [&](auto closure) { instrumentClosure(map, closure); });
 }
 
 /// Returns the PGO name of `function`, as `llvm::getPGOFuncName` makes it.
