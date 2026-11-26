@@ -1,0 +1,41 @@
+// REQUIRES: profile-runtime
+// RUN: %rrc %s --instrument-coverage --relocation-mode pic -o %t.o
+// RUN: %cc -fprofile-instr-generate %t.o %S/Inputs/if_branches.c -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.exe
+// RUN: %llvm-profdata merge -sparse %t.profraw -o %t.profdata
+// RUN: %llvm-cov show %t.exe -instr-profile=%t.profdata -show-branches=count %s | %FileCheck %s
+
+// Each condition of an `if` shows how often it was true and false.
+fn pick(x: i64) -> i64 {
+    if x > 0 {
+        x
+    } else {
+        0 - x
+    }
+}
+// CHECK: Branch ([[@LINE-6]]:8): [True: 2, False: 1]
+
+fn sign(x: i64) -> i64 {
+    if x < 0 { 0 - 1 } else { if x == 0 { 0 } else { 1 } }
+}
+// CHECK: Branch ([[@LINE-2]]:8): [True: 1, False: 2]
+// CHECK: Branch ([[@LINE-3]]:34): [True: 1, False: 1]
+
+// `a && b` and `a || b` are `if` expressions. The left operand gets a branch,
+// and the whole condition of the outer `if` gets another.
+fn both(a: i64, b: i64) -> i64 {
+    if a > 0 && b > 0 { 1 } else { 0 }
+}
+// CHECK-DAG: Branch ([[@LINE-2]]:8): [True: 2, False: 1]
+// CHECK-DAG: Branch ([[@LINE-3]]:8): [True: 1, False: 2]
+
+fn either(a: i64, b: i64) -> i64 {
+    if a > 0 || b > 0 { 1 } else { 0 }
+}
+// CHECK-DAG: Branch ([[@LINE-2]]:8): [True: 1, False: 2]
+// CHECK-DAG: Branch ([[@LINE-3]]:8): [True: 2, False: 1]
+
+extern "C" trampoline "if_branches_pick" = pick;
+extern "C" trampoline "if_branches_sign" = sign;
+extern "C" trampoline "if_branches_both" = both;
+extern "C" trampoline "if_branches_either" = either;
