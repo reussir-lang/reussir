@@ -282,7 +282,8 @@ pub(crate) struct Cli {
     pub(crate) sancov: Vec<String>,
 
     /// Instrument only these demangled package, module, or function prefixes
-    /// (repeatable). Explicit includes replace the default test-package exclusion.
+    /// (repeatable), for SanitizerCoverage and for `--instrument-coverage`.
+    /// Explicit includes replace the default test-package exclusion of fuzzing.
     #[arg(long = "sancov-include", value_name = "PATH")]
     pub(crate) sancov_include: Vec<String>,
 
