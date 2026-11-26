@@ -915,7 +915,10 @@ fn test_relations() -> Outcome {
             pair.is_proper_subset(other) && !pair.is_superset(other) && !other.is_proper_subset(pair),
             "a smaller set"
         ))
-        .and_then(|| expect(!pair.is_disjoint(set) && WavlSet::singleton(9).is_disjoint(set), "the smaller set as the receiver"))
+        .and_then(|| expect(
+            !pair.is_disjoint(set) && WavlSet::singleton(9).is_disjoint(set),
+            "the smaller set as the receiver"
+        ))
         .and_then(|| expect(
             none.is_proper_subset(set) && set.is_proper_superset(none) && none == none
                 && none.is_disjoint(none),
