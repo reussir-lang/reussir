@@ -164,6 +164,9 @@ MlirPass reussirCreateInstrumentCoveragePass(void) {
 MlirPass reussirCreateEmitCoverageMappingPass(void) {
   return wrapOwned(reussir::createReussirEmitCoverageMappingPass());
 }
+MlirPass reussirCreateEmitCoverageUnusedNamesPass(void) {
+  return wrapOwned(reussir::createReussirEmitCoverageUnusedNamesPass());
+}
 MlirPass reussirCreateBasicOpsLoweringPass(bool closureWpd,
                                            unsigned swizzleLanes) {
   reussir::ReussirBasicOpsLoweringPassOptions options;
