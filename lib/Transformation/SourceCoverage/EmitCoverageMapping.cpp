@@ -244,8 +244,7 @@ struct EmitCoverageMappingPass
 
     llvm::SmallVector<LLVM::GlobalOp> used;
     for (auto &[loc, record] : records) {
-      std::string name =
-          ("__covrec_" + llvm::utohexstr(record.nameHash) + "u").str();
+      std::string name = "__covrec_" + llvm::utohexstr(record.nameHash) + "u";
       mlir::SymbolRefAttr comdatRef;
       if (comdat) {
         mlir::OpBuilder::InsertionGuard guard(builder);

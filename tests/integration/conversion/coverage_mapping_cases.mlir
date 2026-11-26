@@ -4,16 +4,16 @@
 // Mach-O has no comdats. The records go after the old `llvm.used` entries.
 
 // CHECK-LABEL: llvm.func @g
-// CHECK-NOT: llvm.comdat
-// CHECK: llvm.mlir.global linkonce_odr hidden constant @[[RECORD:__covrec_[0-9A-F]+u]]()
-// CHECK-SAME: section = "__LLVM_COV,__llvm_covfun"
-// CHECK-NOT: comdat
-// CHECK: section = "__LLVM_COV,__llvm_covmap"
 // CHECK: llvm.mlir.global appending @llvm.used()
 // CHECK-SAME: !llvm.array<3 x ptr>
 // CHECK: llvm.mlir.addressof @g
-// CHECK: llvm.mlir.addressof @[[RECORD]]
+// CHECK: llvm.mlir.addressof @[[RECORD:__covrec_[0-9A-F]+u]]
 // CHECK: llvm.mlir.addressof @__llvm_coverage_mapping
+// CHECK-NOT: comdat
+// CHECK: llvm.mlir.global linkonce_odr hidden constant @[[RECORD]]()
+// CHECK-SAME: section = "__LLVM_COV,__llvm_covfun"
+// CHECK-NOT: comdat
+// CHECK: section = "__LLVM_COV,__llvm_covmap"
 
 module attributes {llvm.target_triple = "arm64-apple-macosx14.0.0"} {
   llvm.func @g() attributes {reussir.coverage.map = {
