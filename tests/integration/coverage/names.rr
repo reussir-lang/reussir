@@ -1,0 +1,31 @@
+// PGO names under source coverage. A function with local LLVM linkage gets
+// the name `<source file>:<symbol>`, as llvm::getPGOFuncName gives it. Other
+// functions get their symbol. The `llvm.linkage` attribute of a function sets
+// its linkage, not its MLIR symbol visibility.
+
+// One unit: the private `helper` is internal. The private generic instance of
+// `id` is weak_odr, although its symbol visibility is private.
+// RUN: %rrc %s --package-name names --instrument-coverage --emit mlir-llvm -o %t.mlir
+// RUN: %FileCheck %s --check-prefix=ONE < %t.mlir
+// ONE-DAG: llvm.mlir.global private constant @{{.*}}("{{.*}}names.rr:_RNvC5names6helper")
+// ONE-DAG: llvm.mlir.global {{.*}}constant @{{.*}}("_RINvC5names2idyE")
+// ONE-DAG: llvm.mlir.global private constant @{{.*}}("_RNvC5names8exported")
+
+// Several units: each definition is external, so no name has a prefix.
+// RUN: %rrc %s --package-name names --instrument-coverage --emit mlir-llvm --codegen-units 2 -o %t.split.mlir
+// RUN: cat %t.split.0.mlir %t.split.1.mlir | %FileCheck %s --check-prefix=SPLIT --implicit-check-not=names.rr:_RNv
+// SPLIT-DAG: llvm.mlir.global private constant @{{.*}}("_RNvC5names6helper")
+// SPLIT-DAG: llvm.mlir.global {{.*}}constant @{{.*}}("_RINvC5names2idyE")
+// SPLIT-DAG: llvm.mlir.global private constant @{{.*}}("_RNvC5names8exported")
+
+fn helper(x: u64) -> u64 {
+    x + 1
+}
+
+fn id<T>(x: T) -> T {
+    x
+}
+
+pub fn exported(x: u64) -> u64 {
+    helper(id(x))
+}

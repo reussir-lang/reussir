@@ -1,0 +1,13 @@
+#[main]
+pub fn entry() {
+    let a = same(2);
+    let b = changed(a);
+}
+
+fn same(x: u64) -> u64 {
+    x + 1
+}
+
+fn changed(x: u64) -> u64 {
+    if x > 3 { x } else { 0 }
+}
