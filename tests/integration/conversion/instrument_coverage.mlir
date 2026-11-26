@@ -93,6 +93,43 @@ module attributes {reussir.coverage.include = []} {
     return %x : i64 loc("a.rr":20:3 to 20:9)
   } loc("a.rr":19:1 to 21:2)
 
+  // An op with the location of the op that holds its region is a part of
+  // that op: the `else` that the frontend makes for an `if` with no `else`,
+  // and the regions that the lowering makes for one call.
+  // CHECK-LABEL: func.func @ping(
+  // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("r.rr":1:22 to 5:2)}, {counter = 1 : i32, span = loc("r.rr":3:9 to :15)}]}
+  func.func @ping(%c: i1) {
+    scf.if %c {
+      func.call @tick() : () -> () loc("r.rr":3:9 to 3:15)
+      scf.yield loc("r.rr":3:9 to 3:15)
+    } else {
+      scf.yield loc("r.rr":2:5 to 4:6)
+    } loc("r.rr":2:5 to 4:6)
+    return loc("r.rr":1:22 to 5:2)
+  } loc("r.rr":1:22 to 5:2)
+
+  // CHECK-LABEL: func.func @fold(
+  // CHECK-SAME: counters = 1 : i32
+  // CHECK-SAME: regions = [{counter = 0 : i32, span = loc("s.rr":4:20 to 6:2)}]}
+  func.func @fold(%p: i1, %n: index) {
+    %flag = arith.xori %p, %p : i1 loc("s.rr":5:5 to 5:30)
+    scf.if %flag {
+      func.call @tick() : () -> () loc("s.rr":5:5 to 5:30)
+      scf.yield loc("s.rr":5:5 to 5:30)
+    } else {
+      scf.yield loc("s.rr":5:5 to 5:30)
+    } loc("s.rr":5:5 to 5:30)
+    %c0 = arith.constant 0 : index loc("s.rr":5:5 to 5:30)
+    %c1 = arith.constant 1 : index loc("s.rr":5:5 to 5:30)
+    scf.for %i = %c0 to %n step %c1 {
+      func.call @tick() : () -> () loc("s.rr":5:5 to 5:30)
+      scf.yield loc("s.rr":5:5 to 5:30)
+    } loc("s.rr":5:5 to 5:30)
+    return loc("s.rr":4:20 to 6:2)
+  } loc("s.rr":4:20 to 6:2)
+
+  func.func private @tick()
+
   // CHECK: func.func private @external(i64) -> i64{{$}}
   func.func private @external(i64) -> i64 loc("a.rr":22:1 to 22:20)
 }
