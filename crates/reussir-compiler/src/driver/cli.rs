@@ -299,7 +299,7 @@ pub(crate) struct Cli {
     /// Instrument the program for source-based code coverage, as clang
     /// `-fprofile-instr-generate -fcoverage-mapping` does. At exit, a linked
     /// program writes its counters to a `.profraw` file (`LLVM_PROFILE_FILE`
-    /// sets the path) for `llvm-profdata merge` and `llvm-cov`. A `mlir` dump
+    /// sets the path) for `llvm-profdata merge` and `llvm-cov`. An `mlir` dump
     /// keeps its source locations, so a compile that resumes it can
     /// instrument it.
     #[arg(long = "instrument-coverage")]

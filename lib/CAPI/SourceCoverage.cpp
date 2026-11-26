@@ -33,6 +33,6 @@ void reussirRunInstrProfilingLoweringPass(LLVMModuleRef module) {
   pb.crossRegisterProxies(lam, fam, cgam, mam);
 
   llvm::ModulePassManager mpm;
-  mpm.addPass(llvm::InstrProfilingLoweringPass(llvm::InstrProfOptions()));
+  mpm.addPass(llvm::InstrProfilingLoweringPass());
   mpm.run(*llvm::unwrap(module), mam);
 }
