@@ -40,15 +40,28 @@ namespace {
 
 constexpr llvm::StringLiteral coverageMapAttr = "reussir.coverage.map";
 
+/// A line and a column in a source file.
+using Position = std::pair<unsigned, unsigned>;
+
+Position startOf(mlir::FileLineColRange span) {
+  return {span.getStartLine(), span.getStartColumn()};
+}
+
+Position endOf(mlir::FileLineColRange span) {
+  return {span.getEndLine(), span.getEndColumn()};
+}
+
+mlir::FileLineColRange makeSpan(mlir::StringAttr file, Position start,
+                                Position end) {
+  return mlir::FileLineColRange::get(file, start.first, start.second, end.first,
+                                     end.second);
+}
+
 /// Returns the smallest span that contains `lhs` and `rhs`.
 mlir::FileLineColRange unite(mlir::FileLineColRange lhs,
                              mlir::FileLineColRange rhs) {
-  auto start = std::min(std::pair(lhs.getStartLine(), lhs.getStartColumn()),
-                        std::pair(rhs.getStartLine(), rhs.getStartColumn()));
-  auto end = std::max(std::pair(lhs.getEndLine(), lhs.getEndColumn()),
-                      std::pair(rhs.getEndLine(), rhs.getEndColumn()));
-  return mlir::FileLineColRange::get(lhs.getFilename(), start.first,
-                                     start.second, end.first, end.second);
+  return makeSpan(lhs.getFilename(), std::min(startOf(lhs), startOf(rhs)),
+                  std::max(endOf(lhs), endOf(rhs)));
 }
 
 /// Returns the union of the spans of the ops in `region` that are in `file`.
@@ -85,10 +98,12 @@ void buildIncrement(mlir::OpBuilder &builder, mlir::Location loc,
 }
 
 /// A source region of a function and the counters that count it. A code
-/// region has the counter `counter`.
+/// region has the counter `counter`. A gap region is a code region that
+/// gives its count only to the lines that start in it.
 struct MappingRegion {
   mlir::FileLineColRange span;
   llvm::SmallVector<std::pair<llvm::StringRef, uint32_t>, 2> counters;
+  bool gap = false;
 };
 
 /// The counters and the source regions of one function. Counter 0 counts
@@ -112,17 +127,30 @@ public:
     regions.push_back({span, {{"counter", counter}}});
   }
 
+  /// Adds a gap region that counter `counter` counts.
+  void addGapRegion(uint32_t counter, mlir::FileLineColRange span) {
+    regions.push_back({span, {{"counter", counter}}, /*gap=*/true});
+  }
+
   /// Adds a counter at the start of the entry block of `region`. Its code
   /// region is the span of the ops in `region`. Returns the counter, or
   /// nothing when no op in `region` has a span in the file of the function.
   std::optional<uint32_t> addRegion(mlir::Region &region) {
-    mlir::FileLineColRange span = regionSpan(region, file);
+    return addRegion(region, regionSpan(region, file));
+  }
+
+  /// Adds a counter at the start of the entry block of `region`, with the
+  /// code region `span`. Returns nothing when `span` is null.
+  std::optional<uint32_t> addRegion(mlir::Region &region,
+                                    mlir::FileLineColRange span) {
     if (!span)
       return std::nullopt;
     uint32_t counter = addCounter(region.front(), span);
     addCodeRegion(counter, span);
     return counter;
   }
+
+  mlir::StringAttr getFile() const { return file; }
 
   /// Puts the increments into the function and writes the
   /// `reussir.coverage.map` attribute. The global `name` holds `pgoName`.
@@ -168,6 +196,7 @@ private:
         writeString(name);
         writer.write<uint32_t>(counter);
       }
+      writer.write<uint8_t>(region.gap);
       writeString(region.span.getFilename());
       writer.write<uint32_t>(region.span.getStartLine());
       writer.write<uint32_t>(region.span.getStartColumn());
@@ -184,6 +213,9 @@ private:
       for (auto [name, counter] : region.counters)
         entries.push_back(
             builder.getNamedAttr(name, builder.getI32IntegerAttr(counter)));
+      if (region.gap)
+        entries.push_back(
+            builder.getNamedAttr("kind", builder.getStringAttr("gap")));
       entries.push_back(builder.getNamedAttr("span", region.span));
       return builder.getDictionaryAttr(entries);
     };
@@ -196,11 +228,41 @@ private:
   llvm::SmallVector<MappingRegion> regions;
 };
 
+/// Fills the space before each code region in `counted` with a gap region
+/// of its counter, as clang does before `then` and `else`. Then llvm-cov
+/// gives a line that starts in the space, such as `else {` or a `match`
+/// arm, the count of the next region. The first gap starts at the start of
+/// `op`.
+void addGapRegions(
+    CoverageMap &map, mlir::Operation *op,
+    llvm::MutableArrayRef<std::pair<mlir::FileLineColRange, uint32_t>>
+        counted) {
+  auto span = op->getLoc()->findInstanceOf<mlir::FileLineColRange>();
+  if (!span || span.getFilename() != map.getFile())
+    return;
+  // The regions of an op can be in a different order in the source.
+  llvm::sort(counted, [](auto lhs, auto rhs) {
+    return startOf(lhs.first) < startOf(rhs.first);
+  });
+  Position from = startOf(span);
+  for (auto [codeSpan, counter] : counted) {
+    if (from < startOf(codeSpan))
+      map.addGapRegion(counter,
+                       makeSpan(map.getFile(), from, startOf(codeSpan)));
+    from = std::max(from, endOf(codeSpan));
+  }
+}
+
 /// Gives a counter to each region of `op`.
 void instrumentRegionBranch(CoverageMap &map,
                             mlir::RegionBranchOpInterface op) {
-  for (mlir::Region &region : op->getRegions())
-    map.addRegion(region);
+  llvm::SmallVector<std::pair<mlir::FileLineColRange, uint32_t>> counted;
+  for (mlir::Region &region : op->getRegions()) {
+    mlir::FileLineColRange span = regionSpan(region, map.getFile());
+    if (auto counter = map.addRegion(region, span))
+      counted.emplace_back(span, *counter);
+  }
+  addGapRegions(map, op, counted);
 }
 
 /// Adds the counters of `op` to `map`. Add a case here for an op that needs
