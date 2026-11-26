@@ -20,6 +20,7 @@
 // CHECK-NEXT: intmap/neighbours and range: unit
 // CHECK-NEXT: intmap/traversals and transforms: unit
 // CHECK-NEXT: intmap/algebra: unit
+// CHECK-NEXT: intmap/equality of shapes: unit
 // CHECK-NEXT: intmap/churn: unit
 // CHECK-NEXT: intmap/generic payloads: unit
 // CHECK-NEXT: intmap/stateful operations, persistence & WavlMap model (fuzz):
@@ -709,6 +710,25 @@ fn algebra() -> Outcome {
     )
 }
 
+// Each unequal pair differs in one part of the tree: a value, a key, a
+// prefix, or the node kind.
+fn equality_of_shapes() -> Outcome {
+    let empty : IntMap<i64> = IntMap::new();
+    let base = empty.insert(1, 10).insert(2, 20).insert(8, 80);
+    let pair = base.remove(8);
+    expect(
+        base == empty.insert(8, 80).insert(2, 20).insert(1, 10)
+            && base != base.insert(2, 21)
+            && base != pair && pair != base
+            && pair != pair.remove(2) && pair.remove(2) != pair
+            && pair != pair.remove(2).insert(5, 20)
+            && pair.remove(2) != pair.remove(1)
+            && pair.remove(2) != pair.remove(2).insert(1, 11)
+            && empty != pair && pair != empty && empty == pair.clear(),
+        "equality of shapes failed"
+    )
+}
+
 fn key_at(index : i64) -> i64 {
     ((index as u64) * 11400714819323198485) as i64
 }
@@ -1221,6 +1241,7 @@ fn suite() -> TestTree {
         .with_case("neighbours and range", neighbours_and_range)
         .with_case("traversals and transforms", traversals_and_transforms)
         .with_case("algebra", algebra)
+        .with_case("equality of shapes", equality_of_shapes)
         .with_case("churn", test_churn)
         .with_case("generic payloads", generic_payloads)
         .with_fuzz(
