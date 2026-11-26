@@ -196,6 +196,10 @@ pub(crate) fn backend_module<'c>(
     if let Some(options) = sancov {
         reussir_backend::sancov::prepare_module_scope(context, &mut module, options)?;
     }
+    if cli.instrument_coverage {
+        tracing::debug!("instrumenting for source coverage");
+        reussir_backend::source_coverage::instrument_module(context, &mut module)?;
+    }
     let optimize_ffi = !matches!(opt, OptLevel::None);
     tracing::debug!("gathering polymorphic FFI");
     let prepared = LlvmLowering::prepare(
