@@ -42,9 +42,14 @@ llvm-cov report ./main -instr-profile=main.profdata -Xdemangler=llvm-cxxfilt
 ```
 
 `LLVM_PROFILE_FILE` sets the path of the raw profile. If you do not set it,
-the program writes `default.profraw` in the current directory. Reussir
-symbols use the Rust v0 mangling. `-Xdemangler=llvm-cxxfilt` shows the
-function names in the report as Reussir paths.
+the program writes `default.profraw` in the current directory.
+
+`rrc` links the profile runtime of the Rust toolchain, `profiler_builtins`,
+into the executable. The profile runtime writes the raw profile. Without this
+runtime, `rrc` stops with an error.
+
+Reussir symbols use the Rust v0 mangling. `-Xdemangler=llvm-cxxfilt` shows
+the function names in the report as Reussir paths.
 
 == Build with `rene`
 
@@ -128,13 +133,12 @@ a line with no code, for example an empty line or a comment.
 
 == Coverage Scope
 
-In a fuzz build, the coverage scope of `--sancov-include` and
-`--sancov-exclude` also applies to source-based code coverage. A function
-outside the scope gets no counters, and the report does not show it. Each
-scope is a prefix of demangled paths: a package, a module or a function. By
-default, a fuzz build excludes the `test` package. An explicit
-`--sancov-include` replaces this default. The scope options need `--fuzzer`
-or `--sancov`.
+The `rrc` options `--sancov-include` and `--sancov-exclude` set the coverage
+scope. The scope applies to SanitizerCoverage and to source-based code
+coverage. A function outside the scope gets no counters, and the report does
+not show it. Each scope is a prefix of demangled paths: a package, a module or
+a function. A fuzz build (`--fuzzer`) excludes the `test` package by default.
+An explicit `--sancov-include` replaces this default.
 
 In `rene.ncl`, give the scope to `rrc` with `extra_flags`:
 
