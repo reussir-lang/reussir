@@ -411,6 +411,12 @@ unsafe extern "C" {
         options: *const ReussirSanCovOptions,
     );
 
+    //==-- Source-based code coverage (SourceCoverage.h) --==//
+
+    /// Runs LLVM's `InstrProfilingLoweringPass` over `module` (call after
+    /// `reussirRunBackendLLVMPipeline`).
+    pub fn reussirRunInstrProfilingLoweringPass(module: LLVMModuleRef);
+
     //==-- Artifact packaging (Artifact.h) --==//
 
     /// Writes `module` to `path` as LLVM bitcode for the given LTO mode

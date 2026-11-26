@@ -23,6 +23,7 @@ pub mod llvm;
 pub mod pipeline;
 pub mod rcgmp;
 pub mod sancov;
+pub mod source_coverage;
 
 /// Returns the [`DialectHandle`] for the Reussir dialect.
 ///

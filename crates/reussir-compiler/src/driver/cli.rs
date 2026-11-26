@@ -296,6 +296,15 @@ pub(crate) struct Cli {
     #[arg(long = "fuzzer")]
     pub(crate) fuzzer: bool,
 
+    /// Instrument the program for source-based code coverage, as clang
+    /// `-fprofile-instr-generate -fcoverage-mapping` does. At exit, a linked
+    /// program writes its counters to a `.profraw` file (`LLVM_PROFILE_FILE`
+    /// sets the path) for `llvm-profdata merge` and `llvm-cov`. A `mlir` dump
+    /// keeps its source locations, so a compile that resumes it can
+    /// instrument it.
+    #[arg(long = "instrument-coverage")]
+    pub(crate) instrument_coverage: bool,
+
     /// Emit DWARF debug info (source locations, function/variable debug types).
     #[arg(short = 'g', long = "debug")]
     pub(crate) debug: bool,

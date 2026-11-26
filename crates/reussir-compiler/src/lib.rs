@@ -402,17 +402,19 @@ pub fn emit_to_file(
     kind: OutputKind,
     out_path: &Path,
 ) -> Result<(), String> {
-    emit_to_file_with_sancov(finalized, machine, opt, kind, None, out_path)
+    emit_to_file_with_sancov(finalized, machine, opt, kind, None, false, out_path)
 }
 
 /// Like [`emit_to_file`], with optional SanitizerCoverage / fuzzing
-/// instrumentation applied around the LLVM optimization pipeline.
+/// instrumentation applied around the LLVM optimization pipeline. With
+/// `instrument_coverage`, the source coverage counters are lowered after it.
 pub fn emit_to_file_with_sancov(
     finalized: Finalized,
     machine: &TargetMachine,
     opt: OptLevel,
     kind: OutputKind,
     sancov: Option<&SanCovOptions>,
+    instrument_coverage: bool,
     out_path: &Path,
 ) -> Result<(), String> {
     let lto = match kind {
@@ -434,6 +436,10 @@ pub fn emit_to_file_with_sancov(
         }
         tracing::debug!(?opt, "running the LLVM pass pipeline");
         run_backend_llvm_pipeline(finalized.module, opt, machine.machine, lto);
+        if instrument_coverage {
+            tracing::debug!("running LLVM InstrProfilingLoweringPass");
+            reussir_backend::source_coverage::run_instr_profiling_lowering_pass(finalized.module);
+        }
         if let Some(sancov) = sancov.map(|s| s.for_target(machine.triple())) {
             tracing::debug!(?sancov, "running LLVM SanitizerCoveragePass");
             reussir_backend::sancov::run_sanitizer_coverage_pass(
