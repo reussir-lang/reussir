@@ -1,0 +1,27 @@
+// The SanitizerCoverage scope flags also select the functions that
+// `--instrument-coverage` instruments, without `--sancov` or `--fuzzer`. An
+// included function gets counters, and an excluded function gets none. A
+// `.mlir` dump keeps the scope for the compile that resumes it.
+// RUN: %rrc %s --package-name scope --emit llvm-ir --instrument-coverage --sancov-exclude scope::harness -o %t.ll
+// RUN: %FileCheck %s --implicit-check-not='__profc_{{[^ ]*}}7harness' --implicit-check-not=__sanitizer_cov --implicit-check-not=optforfuzzing < %t.ll
+// RUN: %rrc %s --package-name scope --emit llvm-ir --instrument-coverage --sancov-include scope::drive -o %t.include.ll
+// RUN: %FileCheck %s --implicit-check-not='__profc_{{[^ ]*}}7harness' --implicit-check-not=__sanitizer_cov --implicit-check-not=optforfuzzing < %t.include.ll
+// RUN: %rrc %s --package-name scope --emit mlir --instrument-coverage --sancov-exclude scope::harness -o %t.mlir
+// RUN: %rrc %t.mlir --emit llvm-ir --instrument-coverage -o %t.resumed.ll
+// RUN: %FileCheck %s --implicit-check-not='__profc_{{[^ ]*}}7harness' --implicit-check-not=__sanitizer_cov --implicit-check-not=optforfuzzing < %t.resumed.ll
+// RUN: %not %rrc %s --package-name scope --emit llvm-ir --sancov-exclude scope::harness -o %t.bad.ll 2>&1 | %FileCheck %s --check-prefix=NOCOV
+// NOCOV: coverage scopes require --fuzzer, --sancov, or --instrument-coverage
+//
+// CHECK-DAG: @{{"?}}__profc_{{[^ ]*}}5drive{{"?}} = {{.*}}global
+// CHECK-DAG: attributes #{{[0-9]+}} = { {{.*}}"reussir-coverage"="on" "reussir-coverage-origin"="_RNvC5scope5drive"
+// CHECK-DAG: attributes #{{[0-9]+}} = { {{.*}}nosanitize_coverage {{.*}}"reussir-coverage"="off" "reussir-coverage-origin"="_RNvC5scope7harness"
+
+pub fn harness(x: i64, body: i64 -> i64) -> i64 {
+    body(if x == 42 { x + 1 } else { x })
+}
+
+pub fn drive(x: i64) -> i64 {
+    harness(x, |value: i64| if value > 1000 { value * 7 } else { value + 9 })
+}
+
+extern "C" trampoline "scope_drive" = drive;
