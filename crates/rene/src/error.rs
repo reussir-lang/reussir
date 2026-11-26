@@ -43,6 +43,18 @@ pub enum Error {
     },
     #[error("compiling `{}` failed (see rrc's diagnostics above)", output.display())]
     CompilationFailed { output: PathBuf, status: ExitStatus },
+    #[error("cannot find `{}` ({source}); set `{variable}` to its path", program.display())]
+    ToolLookup {
+        program: PathBuf,
+        variable: &'static str,
+        #[source]
+        source: which::Error,
+    },
+    #[error("`{}` failed ({status}); see its output above", program.display())]
+    ToolFailed {
+        program: PathBuf,
+        status: ExitStatus,
+    },
     #[error("building reussir-rt failed ({status}):\n{diagnostics}")]
     RuntimeBuildFailed {
         status: ExitStatus,

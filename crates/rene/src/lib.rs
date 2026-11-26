@@ -15,6 +15,7 @@ pub mod bundled;
 pub mod cache;
 pub mod compile;
 pub mod core_src;
+pub mod coverage;
 pub mod db;
 pub mod deps;
 pub mod error;
