@@ -1,0 +1,32 @@
+// A coverage build of a fuzz suite keeps the SanitizerCoverage of the fuzz
+// build, as `cargo fuzz coverage` does. libFuzzer replays a corpus with
+// -runs=0, and the profile runtime writes the counters at exit. Only the
+// Reussir functions have counters: the Rust code of libFuzzer and of the
+// harness has none.
+//
+// UNSUPPORTED: windows
+// REQUIRES: profile-runtime
+// RUN: rm -rf %t.corpus %t.profraw && mkdir -p %t.corpus
+// Each seed selects case 1 (the `step` fuzz target) and gives it a byte less than 128.
+// RUN: %python -c "import struct; [open(r'%t.corpus/byte-%%d' %% b, 'wb').write(struct.pack('<QB', 1, b)) for b in (7, 42, 99)]"
+// RUN: %rene build --manifest-path %S/fuzzer_coverage/rene.ncl --build-dir %t.bdir --profile fuzz --instrument-coverage %rrc_linker
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.bdir/fuzz/coverage/suite -runs=0 %t.corpus 2>&1 | %FileCheck %s --check-prefix=REPLAY
+// RUN: %llvm-profdata show --all-functions %t.profraw | %FileCheck %s --check-prefix=FUNCTIONS --implicit-check-not=LLVMFuzzer --implicit-check-not=rust_fuzzer --implicit-check-not=reussir_fuzzer --implicit-check-not=libfuzzer_sys --implicit-check-not=fuzzer_driver --implicit-check-not=_ZN
+// RUN: %llvm-profdata show --function=_RNvC15fuzzer_coverage4step --counts %t.profraw | %FileCheck %s --check-prefix=STEP
+// RUN: %llvm-profdata show --function=_RNvC15fuzzer_coverage10large_step --counts %t.profraw | %FileCheck %s --check-prefix=NEVER
+//
+// libFuzzer loads the SanitizerCoverage counters. It runs the empty input and
+// the three seeds, and then it stops.
+// REPLAY: INFO: Loaded 1 modules ({{[0-9]+}} inline 8-bit counters)
+// REPLAY: INITED
+// REPLAY: Done 4 runs
+//
+// FUNCTIONS-DAG: _RNvC15fuzzer_coverage10fuzz_entry:
+// FUNCTIONS-DAG: suite.rr:_RNvC15fuzzer_coverage10small_step:
+// FUNCTIONS-DAG: suite.rr:_RNvC15fuzzer_coverage4step:
+// FUNCTIONS-DAG: suite.rr:_RNvC15fuzzer_coverage10large_step:
+//
+// Each seed runs `step`, and no seed runs its `else` branch.
+// STEP: Function count: 3
+// STEP-NEXT: Block counts: [3, 0]
+// NEVER: Function count: 0
