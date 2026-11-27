@@ -245,6 +245,10 @@ unsafe extern "C" {
     ) -> MlirPass;
     pub fn reussirCreateTokenReusePass(reuse_across_call: bool, emit_remarks: bool) -> MlirPass;
 
+    /// Adds source-based coverage counters and the `reussir.coverage.map`
+    /// attribute to each function. Run it on frontend IR, before inlining.
+    pub fn reussirCreateInstrumentCoveragePass() -> MlirPass;
+
     //==-- Upstream passes used by the pipeline --==//
 
     pub fn reussirCreateDefaultInlinerPass() -> MlirPass;
