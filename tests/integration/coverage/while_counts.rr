@@ -1,0 +1,30 @@
+// REQUIRES: profile-runtime
+// RUN: %rrc %s --instrument-coverage --relocation-mode pic -o %t.o
+// RUN: %cc %t.o %S/Inputs/while_counts.c -fprofile-instr-generate -o %t.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: env LLVM_PROFILE_FILE=%t.profraw %t.exe
+// RUN: %llvm-profdata merge -sparse %t.profraw -o %t.profdata
+// RUN: %llvm-cov export -format=lcov %t.exe -instr-profile=%t.profdata %s | %FileCheck %s
+// RUN: %rrc %s --instrument-coverage --relocation-mode pic -Oaggressive -o %t.opt.o
+// RUN: %cc %t.opt.o %S/Inputs/while_counts.c -fprofile-instr-generate -o %t.opt.exe -L%library_path -lreussir_rt %rpath_flag %extra_sys_libs
+// RUN: env LLVM_PROFILE_FILE=%t.opt.profraw %t.opt.exe
+// RUN: %llvm-profdata merge -sparse %t.opt.profraw -o %t.opt.profdata
+// RUN: %llvm-cov export -format=lcov %t.opt.exe -instr-profile=%t.opt.profdata %s | %FileCheck %s
+//
+// `count` runs two times, and its loop body runs three times in all. The
+// condition runs one time more than the body each time that `count` runs.
+// In `nested`, the inner condition runs two times in each outer iteration.
+// The counts do not change with -Oaggressive.
+// CHECK: FNDA:2,{{.*}}count
+// CHECK: FNDA:1,{{.*}}nested
+
+pub fn count(n: u64) -> u64 {
+    while [i = 0] (i < n) { // CHECK: DA:[[@LINE]],5
+        i + 1               // CHECK: DA:[[@LINE]],3
+    }                       // CHECK: DA:[[@LINE]],3
+}
+extern "C" trampoline "count" = count;
+
+pub fn nested(n: u64) -> u64 {
+    while [i = 0] (i < n) { while [j = i] (j == i) { j + 1 } } // CHECK: DA:[[@LINE]],4
+}
+extern "C" trampoline "nested" = nested;
