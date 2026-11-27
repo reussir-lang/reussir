@@ -1,0 +1,33 @@
+import test::domain::u8_domain;
+import test::expect::expect;
+import test::expect::should_be;
+import test::fuzz::fuzz_init;
+import test::tree::TestTree;
+
+fn checksum(a: u64, b: u64) -> u64 {
+    a * 31 + b
+}
+
+fn small_label(byte: u8) -> u64 {
+    (byte as u64) + 1
+}
+
+fn large_label(byte: u8) -> u64 {
+    (byte as u64) * 2
+}
+
+fn label(byte: u8) -> u64 {
+    if byte < 128 {
+        small_label(byte)
+    } else {
+        large_label(byte)
+    }
+}
+
+pub fn fuzz_entry() {
+    fuzz_init(TestTree::group("source_coverage")
+        .with_case("checksum", || should_be(checksum(2, 3), 65))
+        .with_fuzz("label", u8_domain(), |byte: u8| expect(label(byte) > 0, "label is zero")));
+}
+
+extern "C" trampoline "reussir_fuzz_init" = fuzz_entry;

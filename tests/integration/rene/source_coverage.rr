@@ -1,0 +1,23 @@
+// `rene coverage` makes a coverage build of the fuzz suite and replays a seed
+// corpus one time. `llvm-cov show` gives the count of each line.
+// `llvm-cov report` gives the regions and the functions that do not run.
+//
+// UNSUPPORTED: windows
+// REQUIRES: profile-runtime
+// RUN: rm -rf %t.bdir %t.corpus && mkdir -p %t.corpus
+// Each seed selects case 1 (the `label` fuzz target) and gives it a byte less than 128.
+// RUN: %python -c "import struct; [open(r'%t.corpus/byte-%%d' %% b, 'wb').write(struct.pack('<QB', 1, b)) for b in (7, 42, 99)]"
+// RUN: env REUSSIR_LLVM_PROFDATA=%llvm-profdata REUSSIR_LLVM_COV=%llvm-cov %rene coverage --manifest-path %S/source_coverage/rene.ncl --build-dir %t.bdir --profile fuzz %rrc_linker --llvm-cov show suite %t.corpus | %FileCheck %s
+// RUN: env REUSSIR_LLVM_PROFDATA=%llvm-profdata REUSSIR_LLVM_COV=%llvm-cov %rene coverage --manifest-path %S/source_coverage/rene.ncl --build-dir %t.bdir --profile fuzz %rrc_linker suite %t.corpus | %FileCheck %s --check-prefix=REPORT
+//
+// The unit case runs one time. The fuzz target runs one time for each seed.
+// No seed has a large byte, thus `large_label` does not run.
+// CHECK: {{^ *[0-9]+\| *1\|}} a * 31 + b
+// CHECK: {{^ *[0-9]+\| *3\|}} (byte as u64) + 1
+// CHECK: {{^ *[0-9]+\| *0\|}} (byte as u64) * 2
+// CHECK: {{^ *[0-9]+\| *3\|}} small_label(byte)
+//
+// The summary has two regions that do not run: the body of `large_label` and
+// the `else` branch of `label`. It has one function that does not run.
+// REPORT: {{^}}Filename {{.*}} Missed Regions {{.*}} Missed Functions
+// REPORT: {{^.*}}suite.rr{{ +[0-9]+ +2 +[^ ]+ +[0-9]+ +1 }}
