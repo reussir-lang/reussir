@@ -209,9 +209,11 @@ fn run(cli: &Cli) -> Result<bool, String> {
         parsed_sancov
     };
     if !cli.sancov_include.is_empty() || !cli.sancov_exclude.is_empty() {
-        let options = sancov
-            .as_mut()
-            .ok_or("coverage scopes require --fuzzer or --sancov")?;
+        if sancov.is_none() && !cli.instrument_coverage {
+            return Err(
+                "coverage scopes require --fuzzer, --sancov, or --instrument-coverage".into(),
+            );
+        }
         if cli
             .sancov_include
             .iter()
@@ -220,8 +222,10 @@ fn run(cli: &Cli) -> Result<bool, String> {
         {
             return Err("coverage scope paths must be nonempty and contain no NUL".into());
         }
-        options.include.clone_from(&cli.sancov_include);
-        options.exclude.clone_from(&cli.sancov_exclude);
+        if let Some(options) = sancov.as_mut() {
+            options.include.clone_from(&cli.sancov_include);
+            options.exclude.clone_from(&cli.sancov_exclude);
+        }
     }
     // Only the text dumps stream to stdout; the file-emitting and linked
     // targets would write a file literally named `-`.
